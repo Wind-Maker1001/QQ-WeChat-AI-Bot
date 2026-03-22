@@ -1,0 +1,16 @@
+{
+  "name": "qq-group-ai-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QQ group AI bot with supervisor/worker runtime, control API, and desktop console",
+  "type": "module",
+  "scripts": {
+    "start": "node ./src/index.mjs",
+    "release:source": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "openai": "^6.32.0",
+    "ws": "^8.19.0"
+  }
+}

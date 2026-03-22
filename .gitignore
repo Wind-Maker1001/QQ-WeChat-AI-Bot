@@ -1,0 +1,30 @@
+# Secrets and local overrides
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime state
+data/
+dist/
+tmp-backend-out.log
+tmp-backend-err.log
+
+# Local NapCat bundle
+NapCat.Shell.Windows.Node/
+
+# Desktop build output
+desktop/QQAIBot.Desktop/bin/
+desktop/QQAIBot.Desktop/obj/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

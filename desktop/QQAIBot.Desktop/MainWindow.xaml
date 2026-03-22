@@ -1,0 +1,486 @@
+<Window x:Class="QQAIBot.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="QQ AI Bot Console"
+        Width="1480"
+        Height="920"
+        MinWidth="1260"
+        MinHeight="780"
+        WindowStartupLocation="CenterScreen">
+  <Grid Background="{StaticResource HeroGradientBrush}">
+    <Grid Margin="20">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="14" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="14" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+
+      <Border x:Name="HeroHeaderCard" Grid.Row="0" Style="{StaticResource HeroCardStyle}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="6" />
+            <ColumnDefinition Width="14" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+
+          <Border Grid.Column="0"
+                  CornerRadius="3"
+                  Background="{StaticResource AccentStripBrush}" />
+
+          <StackPanel Grid.Column="2">
+            <TextBlock FontFamily="Segoe UI Variable Display"
+                       FontSize="28"
+                       FontWeight="SemiBold"
+                       Text="QQ 群聊 AI 机器人控制台" />
+            <TextBlock Margin="0,6,0,0"
+                       Style="{StaticResource SectionSubtitleStyle}"
+                       Text="参考 AIWF 原生前端的工作台风格，采用浅灰渐变、红色强调和紧凑型半透明卡片。" />
+
+            <WrapPanel Margin="0,14,0,0">
+              <Border Padding="12,6"
+                      Margin="0,0,10,0"
+                      CornerRadius="999"
+                      Background="{StaticResource AccentSoftBrush}"
+                      BorderBrush="#66C62828"
+                      BorderThickness="1">
+                <TextBlock FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentDarkBrush}"
+                           Text="{Binding ProcessStateText}" />
+              </Border>
+
+              <Border Padding="12,6"
+                      Margin="0,0,10,0"
+                      CornerRadius="999"
+                      BorderThickness="1">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Setter Property="Background" Value="{StaticResource WarningFillBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HasUnsavedChanges}" Value="False">
+                        <Setter Property="Background" Value="{StaticResource SuccessFillBrush}" />
+                        <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+                <TextBlock FontWeight="SemiBold"
+                           Foreground="{StaticResource PrimaryTextBrush}"
+                           Text="{Binding ConfigStateText}" />
+              </Border>
+
+              <Border Padding="12,6"
+                      CornerRadius="999"
+                      Background="#33E5E7EB"
+                      BorderBrush="{StaticResource SubtleBorderBrush}"
+                      BorderThickness="1">
+                <TextBlock FontWeight="SemiBold"
+                           Foreground="{StaticResource SecondaryTextBrush}"
+                           Text="{Binding StatusText}" />
+              </Border>
+            </WrapPanel>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Border x:Name="ToolbarShellCard" Grid.Row="2" Style="{StaticResource ShellCardStyle}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+
+          <StackPanel Orientation="Horizontal">
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource PillButtonStyle}"
+                    Command="{Binding AutoDetectCommand}"
+                    Content="自动检测" />
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource PillButtonStyle}"
+                    Command="{Binding OpenBackendFolderCommand}"
+                    Content="打开目录" />
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource PillButtonStyle}"
+                    Command="{Binding ToggleAutoStartCommand}"
+                    Content="{Binding AutoStartButtonText}" />
+            <Border Padding="14,10"
+                    CornerRadius="9"
+                    Background="#00FFFFFF"
+                    BorderBrush="#00FFFFFF"
+                    BorderThickness="1">
+              <TextBlock Foreground="{StaticResource SecondaryTextBrush}"
+                         Text="{Binding BackendRootStateText}" />
+            </Border>
+          </StackPanel>
+
+          <StackPanel Grid.Column="1" Orientation="Horizontal">
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Command="{Binding ReloadCommand}"
+                    Content="重新加载" />
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Command="{Binding SaveCommand}"
+                    Content="保存配置" />
+            <Button Margin="0,0,8,0"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    Command="{Binding StartCommand}"
+                    Content="启动后端" />
+            <Button Style="{StaticResource SecondaryButtonStyle}"
+                    Command="{Binding StopCommand}"
+                    Content="停止后端" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="4">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="1.22*" />
+          <ColumnDefinition Width="14" />
+          <ColumnDefinition Width="0.98*" />
+        </Grid.ColumnDefinitions>
+
+        <ScrollViewer Grid.Column="0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+          <StackPanel>
+            <Border x:Name="OpenAiCard" Style="{StaticResource PanelCardStyle}">
+              <StackPanel>
+                <Grid Margin="0,0,0,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="OpenAI / 第三方 API" />
+                    <TextBlock Margin="0,4,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="默认模型走 DS，遇到图片或命中升级指令时自动切换到 5.4；这里维护共享 Key、Base URL 和路由规则。" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="0.8*" />
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_API_KEY (DS 官方)" />
+                    <TextBox Text="{Binding OpenAiDefaultApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_API_KEY (高级路由)" />
+                    <TextBox Text="{Binding OpenAiApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="4">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_MODEL" />
+                    <TextBox Text="{Binding OpenAiDefaultModel, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="0.8*" />
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_BASE_URL" />
+                    <TextBox Text="{Binding OpenAiDefaultBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_BASE_URL (高级路由)" />
+                    <TextBox Text="{Binding OpenAiBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+
+                  <StackPanel Grid.Column="4">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_ADVANCED_MODEL" />
+                    <TextBox Text="{Binding OpenAiModel, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+
+                <TextBlock Margin="0,16,0,8"
+                           Style="{StaticResource FieldLabelStyle}"
+                           Text="OPENAI_ADVANCED_TRIGGER_PREFIXES" />
+                <TextBox Text="{Binding OpenAiAdvancedTriggerPrefixes, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Margin="0,16,0,8"
+                           Style="{StaticResource FieldLabelStyle}"
+                           Text="节点预设" />
+                <WrapPanel>
+                  <Button Margin="0,0,8,8"
+                          Style="{StaticResource SecondaryButtonStyle}"
+                          Command="{Binding ApplyBaseUrlPresetCommand}"
+                          CommandParameter="__official__"
+                          Content="官方默认" />
+                  <Button Margin="0,0,8,8"
+                          Style="{StaticResource SecondaryButtonStyle}"
+                          Command="{Binding ApplyBaseUrlPresetCommand}"
+                          CommandParameter="https://gmncode.cn"
+                          Content="gmncode.cn" />
+                  <Button Margin="0,0,8,8"
+                          Style="{StaticResource SecondaryButtonStyle}"
+                          Command="{Binding ApplyBaseUrlPresetCommand}"
+                          CommandParameter="https://gmncode.com"
+                          Content="gmncode.com" />
+                  <Button Margin="0,0,8,8"
+                          Style="{StaticResource SecondaryButtonStyle}"
+                          Command="{Binding ApplyBaseUrlPresetCommand}"
+                          CommandParameter="https://cdn.gmncode.cn"
+                          Content="cdn.gmncode.cn" />
+                  <Button Margin="0,0,0,8"
+                          Style="{StaticResource SecondaryButtonStyle}"
+                          Command="{Binding ApplyBaseUrlPresetCommand}"
+                          CommandParameter="https://cdn.gmncode.com"
+                          Content="cdn.gmncode.com" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
+            <Border x:Name="NapCatCard" Margin="0,14,0,0" Style="{StaticResource PanelCardStyle}">
+              <StackPanel>
+                <Grid Margin="0,0,0,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="NapCat 与触发规则" />
+                    <TextBlock Margin="0,4,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="保持后端现有行为，只把 NapCat 连接参数和触发规则做成工作台表单。" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="NAPCAT_WS_URL" />
+                    <TextBox Text="{Binding NapCatWsUrl, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="NAPCAT_TOKEN" />
+                    <TextBox Text="{Binding NapCatToken, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="BOT_PREFIX" />
+                    <TextBox Text="{Binding BotPrefix, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="MAX_OUTPUT_CHARS" />
+                    <TextBox Text="{Binding MaxOutputChars, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="4">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="运行状态" />
+                    <Border Padding="12,10"
+                            CornerRadius="8"
+                            Background="{StaticResource PanelFillBrush}"
+                            BorderBrush="{StaticResource SubtleBorderBrush}"
+                            BorderThickness="1">
+                      <TextBlock Foreground="{StaticResource SecondaryTextBrush}"
+                                 Text="{Binding ProcessStateText}" />
+                    </Border>
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <Border Margin="0,14,0,0" Style="{StaticResource PanelCardStyle}">
+              <StackPanel>
+                <Grid Margin="0,0,0,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="人格设定" />
+                    <TextBlock Margin="0,4,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="这里直接控制机器人的说话方式、语气和回答习惯。保存后重启后端即可生效。" />
+                  </StackPanel>
+                </Grid>
+
+                <TextBlock Style="{StaticResource FieldLabelStyle}" Text="BOT_PERSONA" />
+                <TextBox Text="{Binding BotPersona, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         MinHeight="180" />
+              </StackPanel>
+            </Border>
+
+            <Border x:Name="AccessCard" Margin="0,14,0,0" Style="{StaticResource PanelCardStyle}">
+              <StackPanel>
+                <Grid Margin="0,0,0,16">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="4" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="访问控制与后端路径" />
+                    <TextBlock Margin="0,4,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="和 AIWF 一样强调紧凑信息层次，把路径、白名单和目录状态压到同一块工作台中。" />
+                  </StackPanel>
+                </Grid>
+
+                <TextBlock Style="{StaticResource FieldLabelStyle}" Text="后端根目录" />
+                <TextBox Text="{Binding BackendRootPath, UpdateSourceTrigger=PropertyChanged}" />
+
+                <Border Margin="0,12,0,16"
+                        Padding="12,10"
+                        CornerRadius="8"
+                        Background="{StaticResource PanelFillBrush}"
+                        BorderThickness="1">
+                  <Border.Style>
+                    <Style TargetType="Border">
+                      <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsBackendRootValid}" Value="True">
+                          <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Border.Style>
+                  <TextBlock Foreground="{StaticResource SecondaryTextBrush}"
+                             Text="{Binding BackendRootStateText}" />
+                </Border>
+
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="ALLOWED_GROUP_IDS" />
+                    <TextBox Text="{Binding AllowedGroupIds, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="ALLOWED_USER_IDS" />
+                    <TextBox Text="{Binding AllowedUserIds, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Column="2">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="14" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <Border x:Name="RuntimeInfoCard" Grid.Row="0" Style="{StaticResource PanelCardStyle}">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="4" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+
+              <StackPanel Grid.Column="2">
+                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行信息" />
+                <TextBlock Margin="0,14,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Env 文件路径" />
+                <TextBlock Text="{Binding EnvFilePath}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="最后加载" />
+                <TextBlock Text="{Binding LastLoadedAtText}" />
+              </StackPanel>
+
+              <StackPanel Grid.Column="4">
+                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="摘要" />
+                <TextBlock Margin="0,14,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="最后保存" />
+                <TextBlock Text="{Binding LastSavedAtText}" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="当前状态" />
+                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Startup" />
+                <TextBlock Text="{Binding AutoStartStateText}" TextWrapping="Wrap" />
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <Border x:Name="LogCard" Grid.Row="2" Style="{StaticResource PanelCardStyle}">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="*" />
+              </Grid.RowDefinitions>
+
+              <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="4" />
+                  <ColumnDefinition Width="10" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{StaticResource AccentBrush}" CornerRadius="2" />
+                <TextBlock Grid.Column="2"
+                           Style="{StaticResource SectionTitleStyle}"
+                           VerticalAlignment="Center"
+                           Text="实时日志" />
+                <Button Grid.Column="3"
+                        Style="{StaticResource SecondaryButtonStyle}"
+                        Command="{Binding ClearLogsCommand}"
+                        Content="清空日志" />
+              </Grid>
+
+              <TextBox x:Name="LogTextBox"
+                       Grid.Row="2"
+                       Text="{Binding LogText, Mode=OneWay}"
+                       IsReadOnly="True"
+                       FontFamily="Consolas"
+                       Background="{StaticResource InputFillBrush}"
+                       BorderBrush="{StaticResource InputBorderBrush}"
+                       TextWrapping="NoWrap"
+                       AcceptsReturn="True"
+                       VerticalScrollBarVisibility="Auto"
+                       HorizontalScrollBarVisibility="Auto"
+                       TextChanged="LogTextBox_OnTextChanged" />
+            </Grid>
+          </Border>
+        </Grid>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>

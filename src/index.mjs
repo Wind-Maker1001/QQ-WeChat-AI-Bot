@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { loadRuntimeConfig } from './adapters/config/load-runtime-config.mjs';
 import {
+  readRuntimeConfigFromEnvFile,
   readControlConfig,
   writeControlConfig
 } from './adapters/config/control-config-file.mjs';
@@ -24,14 +25,6 @@ function logInfo(message, ...args) {
 
 function logError(message, ...args) {
   console.error(new Date().toISOString(), message, ...args);
-}
-
-function createRuntimeConfigSnapshot(envValues = null) {
-  return loadRuntimeConfig({
-    cwd: process.cwd(),
-    env: envValues ? { ...process.env, ...envValues } : process.env,
-    loadDotenv: !envValues
-  });
 }
 
 async function main() {
@@ -242,7 +235,9 @@ async function main() {
     logger,
     getStatus: async () => buildStatusPayload(),
     getConfig: async () => {
-      const runtimeConfig = createRuntimeConfigSnapshot();
+      const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
+        cwd: process.cwd()
+      });
       const result = await readControlConfig({
         cwd: process.cwd(),
         runtimeConfig
@@ -255,7 +250,9 @@ async function main() {
       };
     },
     updateConfig: async (payload) => {
-      const runtimeConfig = createRuntimeConfigSnapshot();
+      const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
+        cwd: process.cwd()
+      });
       const result = await writeControlConfig({
         cwd: process.cwd(),
         runtimeConfig,

@@ -152,6 +152,20 @@ async function readEnvValues(cwd) {
   };
 }
 
+export async function readRuntimeConfigFromEnvFile({ cwd = process.cwd() }) {
+  const { envPath, values } = await readEnvValues(cwd);
+
+  return {
+    envPath,
+    envValues: values,
+    runtimeConfig: loadRuntimeConfig({
+      cwd,
+      env: values,
+      loadDotenv: false
+    })
+  };
+}
+
 export async function readControlConfig({ cwd = process.cwd(), runtimeConfig }) {
   const { envPath, values } = await readEnvValues(cwd);
 
@@ -204,10 +218,7 @@ export async function writeControlConfig({
 
   const nextRuntimeConfig = loadRuntimeConfig({
     cwd,
-    env: {
-      ...process.env,
-      ...nextValues
-    },
+    env: nextValues,
     loadDotenv: false
   });
   validateRuntimeConfig(nextRuntimeConfig);

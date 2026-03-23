@@ -233,10 +233,7 @@ async function main() {
     });
     const nextRuntimeConfig = loadRuntimeConfig({
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        ...result.envValues
-      },
+      env: result.envValues,
       loadDotenv: false
     });
 

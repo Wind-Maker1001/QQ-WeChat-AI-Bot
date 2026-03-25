@@ -15,6 +15,45 @@ function Get-PackageVersion {
     return [string]$package.version
 }
 
+function Get-DesktopVersionMetadata {
+    param([string]$SemanticVersion)
+
+    $normalizedVersion = if ([string]::IsNullOrWhiteSpace($SemanticVersion)) {
+        "1.0.0"
+    }
+    else {
+        $SemanticVersion.Trim()
+    }
+
+    $coreVersion = $normalizedVersion.Split('+')[0].Split('-')[0]
+    $parts = $coreVersion.Split('.')
+    $numericParts = @()
+
+    foreach ($part in $parts) {
+        if ($numericParts.Count -ge 4) {
+            break
+        }
+
+        $parsedValue = 0
+        if (-not [int]::TryParse($part, [ref]$parsedValue)) {
+            throw "Package version is not compatible with desktop assembly/file version metadata: $normalizedVersion"
+        }
+
+        $numericParts += [string]$parsedValue
+    }
+
+    while ($numericParts.Count -lt 4) {
+        $numericParts += "0"
+    }
+
+    return @{
+        Version = $normalizedVersion
+        InformationalVersion = $normalizedVersion
+        AssemblyVersion = ($numericParts[0..3] -join '.')
+        FileVersion = ($numericParts[0..3] -join '.')
+    }
+}
+
 function Remove-IfExists {
     param([string]$Path)
 
@@ -66,6 +105,8 @@ Set-Location $repoRoot
 if (-not $Version) {
     $Version = Get-PackageVersion -PackageJsonPath (Join-Path $repoRoot "package.json")
 }
+
+$desktopVersionMetadata = Get-DesktopVersionMetadata -SemanticVersion $Version
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $releaseName = if ($Installable) {
@@ -134,7 +175,11 @@ if ($Installable) {
         }
 
         Invoke-ExternalStep -Label "Publishing desktop application into release package." -Command {
-            dotnet publish ".\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj" -c $Configuration -nologo -o ".\desktop-publish"
+            dotnet publish ".\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj" -c $Configuration -nologo -o ".\desktop-publish" `
+                "-p:Version=$($desktopVersionMetadata.Version)" `
+                "-p:InformationalVersion=$($desktopVersionMetadata.InformationalVersion)" `
+                "-p:AssemblyVersion=$($desktopVersionMetadata.AssemblyVersion)" `
+                "-p:FileVersion=$($desktopVersionMetadata.FileVersion)"
         }
     }
     finally {

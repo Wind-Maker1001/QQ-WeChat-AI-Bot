@@ -42,6 +42,40 @@ function Assert-True {
     }
 }
 
+function Get-PackageVersion {
+    param([string]$PackageJsonPath)
+
+    $package = Get-Content $PackageJsonPath -Raw | ConvertFrom-Json
+    return [string]$package.version
+}
+
+function Get-ExpectedDesktopFileVersion {
+    param([string]$SemanticVersion)
+
+    $coreVersion = $SemanticVersion.Split('+')[0].Split('-')[0]
+    $parts = $coreVersion.Split('.')
+    $numericParts = @()
+
+    foreach ($part in $parts) {
+        if ($numericParts.Count -ge 4) {
+            break
+        }
+
+        $parsedValue = 0
+        if (-not [int]::TryParse($part, [ref]$parsedValue)) {
+            throw "Package version is not compatible with desktop assembly/file version metadata: $SemanticVersion"
+        }
+
+        $numericParts += [string]$parsedValue
+    }
+
+    while ($numericParts.Count -lt 4) {
+        $numericParts += "0"
+    }
+
+    return ($numericParts[0..3] -join '.')
+}
+
 function Invoke-PowershellFile {
     param(
         [string]$FilePath,
@@ -112,6 +146,8 @@ $envPath = Join-Path $installRootPath "app\.env"
 $dataPath = Join-Path $installRootPath "app\data"
 $sessionPath = Join-Path $dataPath "sessions.json"
 $appRootPath = Join-Path $installRootPath "app"
+$packageVersion = Get-PackageVersion -PackageJsonPath (Join-Path $packageRootPath "package.json")
+$expectedDesktopFileVersion = Get-ExpectedDesktopFileVersion -SemanticVersion $packageVersion
 
 try {
     Write-Step "Installing from bundled package assets"
@@ -129,7 +165,11 @@ try {
     $installInfo = Get-Content $installInfoPath -Raw | ConvertFrom-Json
     Assert-True ($installInfo.usedBundledNodeModules -eq $true) "Install did not record bundled node_modules usage."
     Assert-True ($installInfo.usedBundledDesktopPublish -eq $true) "Install did not record bundled desktop publish usage."
-    Assert-True (Test-Path (Join-Path $installRootPath "app\desktop-publish\QQAIBot.Desktop.exe")) "Desktop executable missing after install."
+    $desktopExePath = Join-Path $installRootPath "app\desktop-publish\QQAIBot.Desktop.exe"
+    Assert-True (Test-Path $desktopExePath) "Desktop executable missing after install."
+    $desktopVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($desktopExePath)
+    Assert-True ($desktopVersionInfo.FileVersion -eq $expectedDesktopFileVersion) "Desktop file version does not match package version. Expected: $expectedDesktopFileVersion; Actual: $($desktopVersionInfo.FileVersion)"
+    Assert-True ($desktopVersionInfo.ProductVersion.StartsWith($packageVersion, [System.StringComparison]::OrdinalIgnoreCase)) "Desktop product version does not start with package version. Expected prefix: $packageVersion; Actual: $($desktopVersionInfo.ProductVersion)"
 
     Write-Step "Creating simulated retained state"
     New-Item -ItemType Directory -Path $dataPath -Force | Out-Null

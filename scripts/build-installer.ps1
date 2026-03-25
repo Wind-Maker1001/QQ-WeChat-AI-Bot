@@ -117,6 +117,8 @@ elseif (-not $SkipPackageBuild) {
             "-File",
             $releaseScriptPath,
             "-Installable",
+            "-Version",
+            $Version,
             "-OutputRoot",
             $packageOutputRoot,
             "-Configuration",

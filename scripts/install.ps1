@@ -82,6 +82,45 @@ function Get-PackageVersion {
     return [string]$package.version
 }
 
+function Get-DesktopVersionMetadata {
+    param([string]$SemanticVersion)
+
+    $normalizedVersion = if ([string]::IsNullOrWhiteSpace($SemanticVersion)) {
+        "1.0.0"
+    }
+    else {
+        $SemanticVersion.Trim()
+    }
+
+    $coreVersion = $normalizedVersion.Split('+')[0].Split('-')[0]
+    $parts = $coreVersion.Split('.')
+    $numericParts = @()
+
+    foreach ($part in $parts) {
+        if ($numericParts.Count -ge 4) {
+            break
+        }
+
+        $parsedValue = 0
+        if (-not [int]::TryParse($part, [ref]$parsedValue)) {
+            throw "Package version is not compatible with desktop assembly/file version metadata: $normalizedVersion"
+        }
+
+        $numericParts += [string]$parsedValue
+    }
+
+    while ($numericParts.Count -lt 4) {
+        $numericParts += "0"
+    }
+
+    return @{
+        Version = $normalizedVersion
+        InformationalVersion = $normalizedVersion
+        AssemblyVersion = ($numericParts[0..3] -join '.')
+        FileVersion = ($numericParts[0..3] -join '.')
+    }
+}
+
 function Invoke-ExternalStep {
     param(
         [string]$Label,
@@ -132,6 +171,8 @@ $desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+Spec
 $startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
 $hasBundledNodeModules = Test-Path $bundledNodeModulesPath
 $hasBundledDesktopPublish = Test-Path $bundledDesktopExePath
+$packageVersion = Get-PackageVersion -PackageJsonPath (Join-Path $packageRootPath "package.json")
+$desktopVersionMetadata = Get-DesktopVersionMetadata -SemanticVersion $packageVersion
 
 Write-Step "Package root: $packageRootPath"
 Write-Step "Install root: $installRootPath"
@@ -172,6 +213,7 @@ $replacePaths = @(
     "README.md",
     "package.json",
     "package-lock.json",
+    "installer",
     "src",
     "desktop",
     "scripts",
@@ -189,6 +231,7 @@ $copyItems = @(
     "README.md",
     "package.json",
     "package-lock.json",
+    "installer",
     "src",
     "desktop",
     "scripts"
@@ -250,7 +293,11 @@ try {
     }
     elseif (-not $SkipDesktopPublish) {
         Invoke-ExternalStep -Label "Publishing desktop application" -Command {
-            dotnet publish $desktopProjectPath -c $Configuration -nologo -o $desktopPublishPath
+            dotnet publish $desktopProjectPath -c $Configuration -nologo -o $desktopPublishPath `
+                "-p:Version=$($desktopVersionMetadata.Version)" `
+                "-p:InformationalVersion=$($desktopVersionMetadata.InformationalVersion)" `
+                "-p:AssemblyVersion=$($desktopVersionMetadata.AssemblyVersion)" `
+                "-p:FileVersion=$($desktopVersionMetadata.FileVersion)"
         }
     }
 }

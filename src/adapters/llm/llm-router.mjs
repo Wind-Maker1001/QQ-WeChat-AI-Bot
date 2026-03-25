@@ -1,4 +1,5 @@
 import { resolveRouteDecision, DEFAULT_ADVANCED_TRIGGER_PREFIXES, normalizeTriggerPrefixes } from '../../domain/route-decision.mjs';
+import { resolveRouteRequestPolicy } from '../../domain/llm-request-policy.mjs';
 import {
   createOpenAIProvider,
   DEFAULT_ADVANCED_MODEL,
@@ -11,29 +12,51 @@ export function createLlmRouter({
   advancedTriggerPrefixes = DEFAULT_ADVANCED_TRIGGER_PREFIXES,
   botPersona = ''
 }) {
-  const defaultProvider = createOpenAIProvider({
+  const defaultRoutePolicy = resolveRouteRequestPolicy({
     routeName: 'default',
-    apiKey: defaultRoute?.apiKey,
     model: defaultRoute?.model || DEFAULT_DEFAULT_MODEL,
     baseURL: defaultRoute?.baseURL ?? null,
     apiStyle: defaultRoute?.apiStyle,
     reasoningEffort: defaultRoute?.reasoningEffort,
     textVerbosity: defaultRoute?.textVerbosity,
     enableWebSearch: defaultRoute?.enableWebSearch,
-    enableCodeInterpreter: defaultRoute?.enableCodeInterpreter,
+    enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
+  });
+  const advancedRoutePolicy = resolveRouteRequestPolicy({
+    routeName: 'advanced',
+    model: advancedRoute?.model || DEFAULT_ADVANCED_MODEL,
+    baseURL: advancedRoute?.baseURL ?? defaultRoute?.baseURL ?? null,
+    apiStyle: advancedRoute?.apiStyle,
+    reasoningEffort: advancedRoute?.reasoningEffort,
+    textVerbosity: advancedRoute?.textVerbosity,
+    enableWebSearch: advancedRoute?.enableWebSearch,
+    enableCodeInterpreter: advancedRoute?.enableCodeInterpreter,
+    fallback: {
+      model: DEFAULT_ADVANCED_MODEL,
+      baseURL: advancedRoute?.baseURL ?? defaultRoute?.baseURL ?? null,
+      apiStyle: 'responses',
+      reasoningEffort: defaultRoute?.reasoningEffort,
+      textVerbosity: defaultRoute?.textVerbosity,
+      enableWebSearch: defaultRoute?.enableWebSearch,
+      enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
+    }
+  });
+
+  const defaultProvider = createOpenAIProvider({
+    routeName: 'default',
+    apiKey: defaultRoute?.apiKey,
+    model: defaultRoutePolicy.model,
+    baseURL: defaultRoute?.baseURL ?? null,
+    routePolicy: defaultRoutePolicy,
     botPersona
   });
 
   const advancedProvider = createOpenAIProvider({
     routeName: 'advanced',
     apiKey: advancedRoute?.apiKey || defaultRoute?.apiKey,
-    model: advancedRoute?.model || DEFAULT_ADVANCED_MODEL,
+    model: advancedRoutePolicy.model,
     baseURL: advancedRoute?.baseURL ?? null,
-    apiStyle: advancedRoute?.apiStyle,
-    reasoningEffort: advancedRoute?.reasoningEffort,
-    textVerbosity: advancedRoute?.textVerbosity,
-    enableWebSearch: advancedRoute?.enableWebSearch,
-    enableCodeInterpreter: advancedRoute?.enableCodeInterpreter,
+    routePolicy: advancedRoutePolicy,
     fallback: {
       apiKey: defaultRoute?.apiKey,
       model: DEFAULT_ADVANCED_MODEL,
@@ -55,20 +78,22 @@ export function createLlmRouter({
       imageInputs,
       advancedTriggerPrefixes: normalizedAdvancedTriggerPrefixes,
       defaultRoute: {
-        model: defaultProvider.model,
-        apiStyle: defaultProvider.apiStyle,
-        reasoningEffort: defaultProvider.reasoningEffort,
-        textVerbosity: defaultProvider.textVerbosity,
-        enableWebSearch: defaultProvider.enableWebSearch,
-        enableCodeInterpreter: defaultProvider.enableCodeInterpreter
+        model: defaultRoutePolicy.model,
+        apiStyle: defaultRoutePolicy.apiStyle,
+        reasoningEffort: defaultRoutePolicy.reasoningEffort,
+        textVerbosity: defaultRoutePolicy.textVerbosity,
+        enableWebSearch: defaultRoutePolicy.enableWebSearch,
+        enableCodeInterpreter: defaultRoutePolicy.enableCodeInterpreter,
+        baseURL: defaultRoute?.baseURL ?? null
       },
       advancedRoute: {
-        model: advancedProvider.model,
-        apiStyle: advancedProvider.apiStyle,
-        reasoningEffort: advancedProvider.reasoningEffort,
-        textVerbosity: advancedProvider.textVerbosity,
-        enableWebSearch: advancedProvider.enableWebSearch,
-        enableCodeInterpreter: advancedProvider.enableCodeInterpreter
+        model: advancedRoutePolicy.model,
+        apiStyle: advancedRoutePolicy.apiStyle,
+        reasoningEffort: advancedRoutePolicy.reasoningEffort,
+        textVerbosity: advancedRoutePolicy.textVerbosity,
+        enableWebSearch: advancedRoutePolicy.enableWebSearch,
+        enableCodeInterpreter: advancedRoutePolicy.enableCodeInterpreter,
+        baseURL: advancedRoute?.baseURL ?? defaultRoute?.baseURL ?? null
       }
     });
   }

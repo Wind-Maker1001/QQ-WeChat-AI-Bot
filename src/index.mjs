@@ -31,6 +31,69 @@ const WORKER_RESTART_DELAY_MS = 1000;
 const BOOT_FAILURE_WINDOW_MS = 5000;
 const MAX_CONSECUTIVE_BOOT_FAILURES = 3;
 
+function normalizeDecisionSummary(summary) {
+  if (!summary || typeof summary !== 'object') {
+    return null;
+  }
+
+  const trigger = summary.trigger && typeof summary.trigger === 'object'
+    ? {
+        kind: typeof summary.trigger.kind === 'string' ? summary.trigger.kind : '',
+        matchedPrefix:
+          typeof summary.trigger.matchedPrefix === 'string' ? summary.trigger.matchedPrefix : ''
+      }
+    : null;
+  const reasonGroups = summary.reasonGroups && typeof summary.reasonGroups === 'object'
+    ? {
+        triggerReasons: Array.isArray(summary.reasonGroups.triggerReasons)
+          ? summary.reasonGroups.triggerReasons.filter((tag) => typeof tag === 'string')
+          : [],
+        capabilityReasons: Array.isArray(summary.reasonGroups.capabilityReasons)
+          ? summary.reasonGroups.capabilityReasons.filter((tag) => typeof tag === 'string')
+          : [],
+        upgradeReasons: Array.isArray(summary.reasonGroups.upgradeReasons)
+          ? summary.reasonGroups.upgradeReasons.filter((tag) => typeof tag === 'string')
+          : []
+      }
+    : null;
+  const requestedCapabilities =
+    summary.requestedCapabilities && typeof summary.requestedCapabilities === 'object'
+      ? {
+          reasoningEffort:
+            typeof summary.requestedCapabilities.reasoningEffort === 'string'
+              ? summary.requestedCapabilities.reasoningEffort
+              : '',
+          textVerbosity:
+            typeof summary.requestedCapabilities.textVerbosity === 'string'
+              ? summary.requestedCapabilities.textVerbosity
+              : '',
+          enableWebSearch:
+            typeof summary.requestedCapabilities.enableWebSearch === 'boolean'
+              ? summary.requestedCapabilities.enableWebSearch
+              : false,
+          enableCodeInterpreter:
+            typeof summary.requestedCapabilities.enableCodeInterpreter === 'boolean'
+              ? summary.requestedCapabilities.enableCodeInterpreter
+              : false,
+          needsResponsesCapabilities:
+            typeof summary.requestedCapabilities.needsResponsesCapabilities === 'boolean'
+              ? summary.requestedCapabilities.needsResponsesCapabilities
+              : false
+        }
+      : null;
+
+  return {
+    trigger,
+    reasonTags: Array.isArray(summary.reasonTags)
+      ? summary.reasonTags.filter((tag) => typeof tag === 'string')
+      : [],
+    reasonGroups,
+    requestedCapabilities,
+    routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : '',
+    matchedPrefix: typeof summary.matchedPrefix === 'string' ? summary.matchedPrefix : ''
+  };
+}
+
 function normalizeLlmRequestStatus(status) {
   if (!status || typeof status !== 'object') {
     return null;
@@ -62,6 +125,7 @@ function normalizeLlmRequestStatus(status) {
       ? status.effectiveTools.filter((tool) => typeof tool === 'string')
       : [],
     imageCount: typeof status.imageCount === 'number' ? status.imageCount : 0,
+    decisionSummary: normalizeDecisionSummary(status.decisionSummary),
     chatId: typeof status.chatId === 'string' ? status.chatId : '',
     userId: typeof status.userId === 'string' ? status.userId : '',
     responseId: typeof status.responseId === 'string' ? status.responseId : ''
@@ -79,6 +143,7 @@ function normalizeLlmFailureStatus(status) {
     route: typeof status.route === 'string' ? status.route : '',
     routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
     matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
+    decisionSummary: normalizeDecisionSummary(status.decisionSummary),
     chatId: typeof status.chatId === 'string' ? status.chatId : '',
     userId: typeof status.userId === 'string' ? status.userId : '',
     error: typeof status.error === 'string' ? status.error : ''

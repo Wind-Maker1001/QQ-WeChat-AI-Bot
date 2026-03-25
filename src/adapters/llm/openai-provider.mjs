@@ -2,14 +2,24 @@ import fs from 'node:fs/promises';
 
 import OpenAI from 'openai';
 
+import {
+  appendConversationMessages,
+  createLlmReplyOutcome
+} from '../../domain/llm-reply-outcome.mjs';
+import { normalizeConversationMessages } from '../../domain/conversation-state.mjs';
+import {
+  API_STYLE_CHAT_COMPLETIONS,
+  API_STYLE_RESPONSES,
+  buildEnabledToolKinds,
+  resolveEffectiveRequestPolicy,
+  resolveRouteRequestPolicy
+} from '../../domain/llm-request-policy.mjs';
 import { withTimeout } from '../../utils.mjs';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_DEFAULT_MODEL = 'gpt-5.4';
 export const DEFAULT_ADVANCED_MODEL = 'gpt-5.4';
 
-const API_STYLE_RESPONSES = 'responses';
-const API_STYLE_CHAT_COMPLETIONS = 'chat_completions';
 const MAX_SHARED_HISTORY_MESSAGES = 24;
 const MAX_SHARED_CONTEXT_MESSAGES = 10;
 const IMAGE_FETCH_TIMEOUT_MS = 15000;
@@ -54,110 +64,6 @@ function normalizeBaseUrl(baseURL) {
   }
 }
 
-function normalizeApiStyle(style, routeName, model, baseURL) {
-  const normalizedStyle = typeof style === 'string' ? style.trim().toLowerCase() : '';
-
-  if (normalizedStyle === 'responses' || normalizedStyle === 'response') {
-    return API_STYLE_RESPONSES;
-  }
-
-  if (
-    normalizedStyle === 'chat' ||
-    normalizedStyle === 'chat_completions' ||
-    normalizedStyle === 'chat-completions' ||
-    normalizedStyle === 'chatcompletions'
-  ) {
-    return API_STYLE_CHAT_COMPLETIONS;
-  }
-
-  const normalizedModel = typeof model === 'string' ? model.trim().toLowerCase() : '';
-  const normalizedBaseURL = typeof baseURL === 'string' ? baseURL.toLowerCase() : '';
-
-  if (
-    routeName === 'default' &&
-    (normalizedModel.startsWith('deepseek-') || normalizedBaseURL.includes('api.deepseek.com'))
-  ) {
-    return API_STYLE_CHAT_COMPLETIONS;
-  }
-
-  return API_STYLE_RESPONSES;
-}
-
-function inferDefaultReasoningEffort(routeName, model, apiStyle) {
-  if (apiStyle !== API_STYLE_RESPONSES) {
-    return '';
-  }
-
-  const normalizedModel = typeof model === 'string' ? model.trim().toLowerCase() : '';
-
-  if (!normalizedModel.startsWith('gpt-5')) {
-    return '';
-  }
-
-  return routeName === 'advanced' ? 'high' : 'medium';
-}
-
-function normalizeReasoningEffort(value, routeName, model, apiStyle) {
-  const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : '';
-
-  if (
-    normalizedValue === 'none' ||
-    normalizedValue === 'low' ||
-    normalizedValue === 'medium' ||
-    normalizedValue === 'high'
-  ) {
-    return normalizedValue;
-  }
-
-  return inferDefaultReasoningEffort(routeName, model, apiStyle);
-}
-
-function inferDefaultTextVerbosity(routeName, model, apiStyle) {
-  if (apiStyle !== API_STYLE_RESPONSES) {
-    return '';
-  }
-
-  const normalizedModel = typeof model === 'string' ? model.trim().toLowerCase() : '';
-
-  if (!normalizedModel.startsWith('gpt-5')) {
-    return '';
-  }
-
-  return routeName === 'advanced' ? 'high' : 'medium';
-}
-
-function normalizeTextVerbosity(value, routeName, model, apiStyle) {
-  const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : '';
-
-  if (normalizedValue === 'low' || normalizedValue === 'medium' || normalizedValue === 'high') {
-    return normalizedValue;
-  }
-
-  return inferDefaultTextVerbosity(routeName, model, apiStyle);
-}
-
-function normalizeBooleanFlag(value, fallback = false) {
-  if (value === true || value === false) {
-    return value;
-  }
-
-  if (typeof value !== 'string') {
-    return fallback;
-  }
-
-  const normalizedValue = value.trim().toLowerCase();
-
-  if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) {
-    return true;
-  }
-
-  if (['0', 'false', 'no', 'off'].includes(normalizedValue)) {
-    return false;
-  }
-
-  return fallback;
-}
-
 function buildResponsesTools({ enableWebSearch = false, enableCodeInterpreter = false } = {}) {
   const tools = [];
 
@@ -179,54 +85,6 @@ function buildResponsesTools({ enableWebSearch = false, enableCodeInterpreter = 
   return tools;
 }
 
-function buildEnabledToolKinds({ enableWebSearch = false, enableCodeInterpreter = false } = {}) {
-  const toolKinds = [];
-
-  if (enableWebSearch) {
-    toolKinds.push('web_search');
-  }
-
-  if (enableCodeInterpreter) {
-    toolKinds.push('code_interpreter');
-  }
-
-  return toolKinds;
-}
-
-function resolveEffectiveReasoningEffort(overrideValue, selectedClient) {
-  if (typeof overrideValue !== 'string' || !overrideValue.trim()) {
-    return selectedClient.reasoningEffort;
-  }
-
-  return (
-    normalizeReasoningEffort(
-      overrideValue.trim(),
-      selectedClient.routeName,
-      selectedClient.model,
-      selectedClient.apiStyle
-    ) || selectedClient.reasoningEffort
-  );
-}
-
-function resolveEffectiveTextVerbosity(overrideValue, selectedClient) {
-  if (typeof overrideValue !== 'string' || !overrideValue.trim()) {
-    return selectedClient.textVerbosity;
-  }
-
-  return (
-    normalizeTextVerbosity(
-      overrideValue.trim(),
-      selectedClient.routeName,
-      selectedClient.model,
-      selectedClient.apiStyle
-    ) || selectedClient.textVerbosity
-  );
-}
-
-function resolveEffectiveBooleanFlag(overrideValue, fallback) {
-  return typeof overrideValue === 'boolean' ? overrideValue : fallback;
-}
-
 function normalizeRouteConfig({
   routeName,
   apiKey,
@@ -237,43 +95,30 @@ function normalizeRouteConfig({
   textVerbosity,
   enableWebSearch,
   enableCodeInterpreter,
-  fallback
+  fallback,
+  routePolicy
 }) {
   const resolvedApiKey = apiKey || fallback?.apiKey || '';
-  const resolvedModel = model || fallback?.model || '';
   const resolvedBaseURL = normalizeBaseUrl(baseURL ?? fallback?.baseURL ?? null);
-  const resolvedApiStyle = normalizeApiStyle(
-    apiStyle ?? fallback?.apiStyle ?? '',
-    routeName,
-    resolvedModel,
-    resolvedBaseURL || ''
-  );
-  const resolvedReasoningEffort = normalizeReasoningEffort(
-    reasoningEffort ?? fallback?.reasoningEffort ?? '',
-    routeName,
-    resolvedModel,
-    resolvedApiStyle
-  );
-  const resolvedTextVerbosity = normalizeTextVerbosity(
-    textVerbosity ?? fallback?.textVerbosity ?? '',
-    routeName,
-    resolvedModel,
-    resolvedApiStyle
-  );
-  const resolvedEnableWebSearch = normalizeBooleanFlag(
-    enableWebSearch ?? fallback?.enableWebSearch ?? false,
-    false
-  );
-  const resolvedEnableCodeInterpreter = normalizeBooleanFlag(
-    enableCodeInterpreter ?? fallback?.enableCodeInterpreter ?? false,
-    false
-  );
+  const selectedRoutePolicy =
+    routePolicy ??
+    resolveRouteRequestPolicy({
+      routeName,
+      model,
+      baseURL: resolvedBaseURL || baseURL || fallback?.baseURL || '',
+      apiStyle,
+      reasoningEffort,
+      textVerbosity,
+      enableWebSearch,
+      enableCodeInterpreter,
+      fallback
+    });
 
   if (typeof resolvedApiKey !== 'string' || !resolvedApiKey) {
     throw new Error(`${routeName} route requires an API key.`);
   }
 
-  if (typeof resolvedModel !== 'string' || !resolvedModel) {
+  if (typeof selectedRoutePolicy.model !== 'string' || !selectedRoutePolicy.model) {
     throw new Error(`${routeName} route requires a model name.`);
   }
 
@@ -286,13 +131,7 @@ function normalizeRouteConfig({
   }
 
   return {
-    routeName,
-    model: resolvedModel,
-    apiStyle: resolvedApiStyle,
-    reasoningEffort: resolvedReasoningEffort,
-    textVerbosity: resolvedTextVerbosity,
-    enableWebSearch: resolvedEnableWebSearch,
-    enableCodeInterpreter: resolvedEnableCodeInterpreter,
+    ...selectedRoutePolicy,
     baseURL: resolvedBaseURL || DEFAULT_OPENAI_BASE_URL,
     client: new OpenAI(clientOptions)
   };
@@ -427,52 +266,8 @@ export async function prepareImageInputs(imageInputs = []) {
   return preparedInputs;
 }
 
-function normalizeSharedMessages(sharedMessages) {
-  if (!Array.isArray(sharedMessages)) {
-    return [];
-  }
-
-  return sharedMessages
-    .filter((message) => message && typeof message === 'object')
-    .map((message) => {
-      const role = message.role === 'assistant' ? 'assistant' : 'user';
-      const content = typeof message.content === 'string' ? message.content.trim() : '';
-
-      if (!content) {
-        return null;
-      }
-
-      return {
-        role,
-        content
-      };
-    })
-    .filter(Boolean)
-    .slice(-MAX_SHARED_HISTORY_MESSAGES);
-}
-
-function appendSharedMessages(sharedMessages, userText, assistantText) {
-  const nextMessages = [
-    ...normalizeSharedMessages(sharedMessages),
-    {
-      role: 'user',
-      content: userText
-    },
-    ...(assistantText
-      ? [
-          {
-            role: 'assistant',
-            content: assistantText
-          }
-        ]
-      : [])
-  ];
-
-  return normalizeSharedMessages(nextMessages).slice(-MAX_SHARED_HISTORY_MESSAGES);
-}
-
 function formatSharedContext(sharedMessages) {
-  const recentMessages = normalizeSharedMessages(sharedMessages).slice(-MAX_SHARED_CONTEXT_MESSAGES);
+  const recentMessages = normalizeConversationMessages(sharedMessages).slice(-MAX_SHARED_CONTEXT_MESSAGES);
 
   if (recentMessages.length === 0) {
     return '';
@@ -576,7 +371,9 @@ function buildChatCompletionMessages(
   allowImages = false,
   instructions = BOT_INSTRUCTIONS
 ) {
-  const normalizedSharedMessages = normalizeSharedMessages(sharedMessages);
+  const normalizedSharedMessages = normalizeConversationMessages(sharedMessages).slice(
+    -MAX_SHARED_HISTORY_MESSAGES
+  );
 
   return [
     {
@@ -629,6 +426,7 @@ export function createOpenAIProvider({
   enableWebSearch,
   enableCodeInterpreter,
   fallback,
+  routePolicy,
   botPersona = ''
 }) {
   const selectedClient = normalizeRouteConfig({
@@ -641,7 +439,8 @@ export function createOpenAIProvider({
     textVerbosity,
     enableWebSearch,
     enableCodeInterpreter,
-    fallback
+    fallback,
+    routePolicy
   });
   const instructions = buildBotInstructions(botPersona);
 
@@ -727,14 +526,14 @@ export function createOpenAIProvider({
     const text = typeof response.output_text === 'string' ? response.output_text.trim() : '';
     const responseId = typeof response.id === 'string' && response.id ? response.id : null;
 
-    return {
+    return createLlmReplyOutcome({
       text,
       responseId,
-      sessionUpdate: {
+      conversationDelta: {
         previousResponseId: responseId,
-        sharedMessages: appendSharedMessages(sharedMessages, userText, text)
+        sharedMessages: appendConversationMessages(sharedMessages, userText, text)
       }
-    };
+    });
   }
 
   async function generateChatReply({ userText, sharedMessages, imageInputs, allowImages = false }) {
@@ -756,14 +555,14 @@ export function createOpenAIProvider({
 
     const text = extractChatCompletionText(completion);
 
-    return {
+    return createLlmReplyOutcome({
       text,
       responseId: null,
-      sessionUpdate: {
+      conversationDelta: {
         previousResponseId: null,
-        sharedMessages: appendSharedMessages(sharedMessages, userText, text)
+        sharedMessages: appendConversationMessages(sharedMessages, userText, text)
       }
-    };
+    });
   }
 
   async function generateReply({
@@ -777,18 +576,13 @@ export function createOpenAIProvider({
     enableCodeInterpreterOverride,
     storeOverride
   }) {
-    const effectiveSettings = {
-      reasoningEffort: resolveEffectiveReasoningEffort(reasoningEffortOverride, selectedClient),
-      textVerbosity: resolveEffectiveTextVerbosity(textVerbosityOverride, selectedClient),
-      enableWebSearch: resolveEffectiveBooleanFlag(
-        enableWebSearchOverride,
-        selectedClient.enableWebSearch
-      ),
-      enableCodeInterpreter: resolveEffectiveBooleanFlag(
-        enableCodeInterpreterOverride,
-        selectedClient.enableCodeInterpreter
-      )
-    };
+    const effectiveSettings = resolveEffectiveRequestPolicy({
+      routePolicy: selectedClient,
+      reasoningEffortOverride,
+      textVerbosityOverride,
+      enableWebSearchOverride,
+      enableCodeInterpreterOverride
+    });
     const effectiveStore = typeof storeOverride === 'boolean' ? storeOverride : true;
     let reply;
 

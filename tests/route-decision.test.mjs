@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveRouteDecision } from '../src/domain/route-decision.mjs';
+import {
+  formatRouteDecisionReason,
+  getRouteDecisionReasonGroups,
+  getRouteDecisionRequestedCapabilities,
+  getRouteDecisionTrigger,
+  resolveRouteDecision
+} from '../src/domain/route-decision.mjs';
 
 function createDecision(userText, overrides = {}) {
   return resolveRouteDecision({
@@ -25,27 +31,42 @@ test('complex requests boost thinking without requiring a manual advanced prefix
   );
 
   assert.equal(decision.route, 'default');
-  assert.equal(decision.requestedReasoningEffort, 'high');
-  assert.equal(decision.requestedTextVerbosity, 'high');
-  assert.match(decision.reason, /complex/);
+  assert.equal(decision.trigger.kind, 'default');
+  assert.equal(decision.requestedCapabilities.reasoningEffort, 'high');
+  assert.equal(decision.requestedCapabilities.textVerbosity, 'high');
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
+    triggerReasons: [],
+    capabilityReasons: ['complex'],
+    upgradeReasons: []
+  });
+  assert.deepEqual(decision.decisionMetadata.reasonTags, ['complex']);
+  assert.equal(formatRouteDecisionReason(decision), 'complex');
 });
 
 test('time-sensitive requests ask for web search automatically', () => {
   const decision = createDecision('帮我查一下 OpenAI 最新官方文档里对 Responses API 的建议。');
 
   assert.equal(decision.route, 'default');
-  assert.equal(decision.requestedEnableWebSearch, true);
-  assert.equal(decision.requestedReasoningEffort, 'high');
-  assert.match(decision.reason, /web_search/);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableWebSearch, true);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
+    triggerReasons: [],
+    capabilityReasons: ['web_search'],
+    upgradeReasons: []
+  });
+  assert.deepEqual(decision.decisionMetadata.reasonTags, ['web_search']);
+  assert.equal(formatRouteDecisionReason(decision), 'web_search');
 });
 
 test('data-analysis requests ask for code interpreter automatically', () => {
   const decision = createDecision('我有一个 CSV 表格，帮我做统计分析并画图。');
 
   assert.equal(decision.route, 'default');
-  assert.equal(decision.requestedEnableCodeInterpreter, true);
-  assert.equal(decision.requestedReasoningEffort, 'high');
-  assert.match(decision.reason, /code_interpreter/);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableCodeInterpreter, true);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
+  assert.ok(getRouteDecisionReasonGroups(decision).capabilityReasons.includes('code_interpreter'));
+  assert.ok(decision.decisionMetadata.reasonTags.includes('code_interpreter'));
+  assert.match(formatRouteDecisionReason(decision), /code_interpreter/);
 });
 
 test('capability upgrade routes to advanced when default route cannot satisfy responses features', () => {
@@ -63,8 +84,49 @@ test('capability upgrade routes to advanced when default route cannot satisfy re
   });
 
   assert.equal(decision.route, 'advanced');
-  assert.equal(decision.requestedReasoningEffort, 'high');
-  assert.equal(decision.requestedEnableWebSearch, false);
-  assert.equal(decision.requestedEnableCodeInterpreter, false);
-  assert.match(decision.reason, /capability_upgrade/);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableWebSearch, false);
+  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableCodeInterpreter, false);
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
+    triggerReasons: [],
+    capabilityReasons: ['complex'],
+    upgradeReasons: ['capability_upgrade']
+  });
+  assert.deepEqual(decision.decisionMetadata.reasonTags, ['complex', 'capability_upgrade']);
+  assert.equal(formatRouteDecisionReason(decision), 'complex+capability_upgrade');
+});
+
+test('directive and image triggers are exposed as structured trigger metadata', () => {
+  const directiveDecision = createDecision('/vision analyze this');
+  const imageDecision = resolveRouteDecision({
+    userText: 'look at this',
+    imageInputs: [{ imageUrl: 'data:image/png;base64,abc' }],
+    defaultRoute: {
+      model: 'gpt-5.4',
+      apiStyle: 'responses'
+    },
+    advancedRoute: {
+      model: 'gpt-5.4',
+      apiStyle: 'responses'
+    }
+  });
+
+  assert.deepEqual(getRouteDecisionTrigger(directiveDecision), {
+    kind: 'directive',
+    matchedPrefix: '/vision'
+  });
+  assert.deepEqual(getRouteDecisionReasonGroups(directiveDecision), {
+    triggerReasons: ['directive:/vision'],
+    capabilityReasons: ['complex'],
+    upgradeReasons: []
+  });
+  assert.deepEqual(getRouteDecisionTrigger(imageDecision), {
+    kind: 'image',
+    matchedPrefix: ''
+  });
+  assert.deepEqual(getRouteDecisionReasonGroups(imageDecision), {
+    triggerReasons: ['image'],
+    capabilityReasons: [],
+    upgradeReasons: []
+  });
 });

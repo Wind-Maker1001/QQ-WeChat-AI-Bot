@@ -2,8 +2,19 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import {
+  buildMessageTurnSpec,
+  buildNextConversationState,
+  buildTurnFailureTelemetry,
+  buildTurnReplyTelemetry
+} from './message-turn-spec.mjs';
+import { runDeliberationPipeline } from './deliberation-executor.mjs';
 import { assertChannelPort } from '../domain/channel-port.mjs';
 import { buildConversationId } from '../domain/conversation-state.mjs';
+import {
+  formatRouteDecisionReason,
+  getRouteDecisionRequestedCapabilities
+} from '../domain/route-decision.mjs';
 import { formatError, splitText, summarizeText } from '../utils.mjs';
 
 const IMAGE_REFERENCE_KEYWORDS = [
@@ -32,7 +43,6 @@ const IMAGE_REFERENCE_KEYWORDS = [
 const EMPTY_REPLY_TEXT = '\u8fd9\u6b21\u6ca1\u6709\u751f\u6210\u53ef\u53d1\u9001\u7684\u6587\u672c\u3002';
 const FAILED_REPLY_TEXT = '\u5904\u7406\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002';
 const FAILED_IMAGE_TEXT = '\u672a\u80fd\u8bfb\u53d6\u53ef\u7528\u56fe\u7247\u5185\u5bb9\u3002';
-const MAX_SESSION_MESSAGES = 24;
 
 function inferImageExtensionFromDataUrl(dataUrl) {
   if (typeof dataUrl !== 'string') {
@@ -156,244 +166,18 @@ function formatToolList(toolKinds) {
 }
 
 function formatDecisionToolOverrides(routeInfo) {
+  const requestedCapabilities = getRouteDecisionRequestedCapabilities(routeInfo);
   const toolKinds = [];
 
-  if (routeInfo?.requestedEnableWebSearch === true) {
+  if (requestedCapabilities.enableWebSearch === true) {
     toolKinds.push('web_search');
   }
 
-  if (routeInfo?.requestedEnableCodeInterpreter === true) {
+  if (requestedCapabilities.enableCodeInterpreter === true) {
     toolKinds.push('code_interpreter');
   }
 
   return toolKinds.length > 0 ? toolKinds.join('+') : 'none';
-}
-
-function buildReplyTelemetry({
-  channelId,
-  chatId,
-  userId,
-  finalRouteInfo,
-  preparedImageInputs,
-  reply
-}) {
-  return {
-    capturedAt: new Date().toISOString(),
-    channelId,
-    route: reply.route,
-    routeReason: finalRouteInfo.reason,
-    matchedPrefix: finalRouteInfo.matchedPrefix || '',
-    model: reply.model,
-    configuredApiStyle: reply.configuredApiStyle || reply.apiStyle || '',
-    effectiveApiStyle: reply.effectiveApiStyle || reply.apiStyle || '',
-    configuredReasoningEffort: reply.configuredReasoningEffort || '',
-    effectiveReasoningEffort: reply.effectiveReasoningEffort || '',
-    configuredTextVerbosity: reply.configuredTextVerbosity || '',
-    effectiveTextVerbosity: reply.effectiveTextVerbosity || '',
-    configuredTools: Array.isArray(reply.configuredTools) ? reply.configuredTools : [],
-    effectiveTools: Array.isArray(reply.effectiveTools) ? reply.effectiveTools : [],
-    imageCount: Array.isArray(preparedImageInputs) ? preparedImageInputs.length : 0,
-    chatId: String(chatId),
-    userId: String(userId),
-    responseId: reply.responseId || ''
-  };
-}
-
-function buildFailureTelemetry({
-  channelId,
-  chatId,
-  userId,
-  effectiveRouteInfo,
-  finalRouteInfo,
-  error
-}) {
-  return {
-    capturedAt: new Date().toISOString(),
-    channelId,
-    route: finalRouteInfo?.route || effectiveRouteInfo?.route || '',
-    routeReason: finalRouteInfo?.reason || effectiveRouteInfo?.reason || '',
-    matchedPrefix: finalRouteInfo?.matchedPrefix || effectiveRouteInfo?.matchedPrefix || '',
-    chatId: chatId === null || chatId === undefined ? '' : String(chatId),
-    userId: userId === null || userId === undefined ? '' : String(userId),
-    error: formatError(error)
-  };
-}
-
-function resolveNextPreviousResponseId(routeState, sessionUpdate) {
-  if (sessionUpdate?.clearPreviousResponseId === true) {
-    return null;
-  }
-
-  if (
-    sessionUpdate &&
-    Object.prototype.hasOwnProperty.call(sessionUpdate, 'previousResponseId')
-  ) {
-    return sessionUpdate.previousResponseId ?? null;
-  }
-
-  return routeState?.previousResponseId ?? null;
-}
-
-function shouldUseDeliberationPipeline(routeInfo, preparedImageInputs) {
-  if (!routeInfo || (Array.isArray(preparedImageInputs) && preparedImageInputs.length > 0)) {
-    return false;
-  }
-
-  return (
-    routeInfo.requestedReasoningEffort === 'high' ||
-    routeInfo.requestedEnableWebSearch === true ||
-    routeInfo.requestedEnableCodeInterpreter === true
-  );
-}
-
-function appendSessionMessages(sharedMessages, userText, assistantText) {
-  const normalizedMessages = Array.isArray(sharedMessages)
-    ? sharedMessages
-        .filter((message) => message && typeof message === 'object')
-        .map((message) => ({
-          role: message.role === 'assistant' ? 'assistant' : 'user',
-          content: typeof message.content === 'string' ? message.content.trim() : ''
-        }))
-        .filter((message) => message.content)
-    : [];
-
-  return [
-    ...normalizedMessages,
-    {
-      role: 'user',
-      content: userText
-    },
-    ...(assistantText
-      ? [
-          {
-            role: 'assistant',
-            content: assistantText
-          }
-        ]
-      : [])
-  ].slice(-MAX_SESSION_MESSAGES);
-}
-
-function buildPlannerPrompt(userText) {
-  return [
-    '[INTERNAL_PLANNER]',
-    '你正在做内部规划，不直接回答用户。',
-    '请输出简短的内部思考提纲，包含：问题拆解、需要核实的点、回答结构。',
-    '不要写开场白，不要直接给用户最终答案。',
-    '',
-    `用户问题：${userText}`
-  ].join('\n');
-}
-
-function buildDraftPrompt(userText, planText) {
-  return [
-    '[INTERNAL_DRAFT]',
-    '你现在基于内部规划生成给用户的正式答复。',
-    '要求：直接回答、结构清晰、尽量准确，不要暴露“内部规划”这个过程。',
-    '',
-    `用户问题：${userText}`,
-    '',
-    `内部规划：${planText || '无'}`
-  ].join('\n');
-}
-
-function buildRewritePrompt(userText, planText, draftText) {
-  return [
-    '[INTERNAL_REWRITE]',
-    '你现在做最终质检和改写。',
-    '请检查草稿答案是否存在遗漏、模糊、废话、逻辑跳步或事实风险，然后直接输出改写后的最终答案。',
-    '不要解释修改过程，不要输出质检项。',
-    '',
-    `用户问题：${userText}`,
-    '',
-    `内部规划：${planText || '无'}`,
-    '',
-    `草稿答案：${draftText || '无'}`
-  ].join('\n');
-}
-
-async function runDeliberationPipeline({
-  llmRouter,
-  finalRouteInfo,
-  routeState,
-  userText,
-  preparedImageInputs,
-  logger
-}) {
-  let planText = '';
-
-  try {
-    const plannerReply = await llmRouter.generateReply({
-      route: finalRouteInfo.route,
-      userText: buildPlannerPrompt(userText),
-      previousResponseId: null,
-      sharedMessages: routeState.messages,
-      imageInputs: [],
-      reasoningEffortOverride: 'high',
-      textVerbosityOverride: 'low',
-      enableWebSearchOverride: false,
-      enableCodeInterpreterOverride: false,
-      storeOverride: false
-    });
-
-    planText = plannerReply.text || '';
-    logger.info(
-      `[openai] Planner generated: route=${plannerReply.route}, model=${plannerReply.model}, length=${planText.length}`
-    );
-  } catch (error) {
-    logger.error(`[openai] Planner failed, fallback to direct drafting: ${formatError(error)}`);
-  }
-
-  const draftReply = await llmRouter.generateReply({
-    route: finalRouteInfo.route,
-    userText: buildDraftPrompt(userText, planText),
-    previousResponseId: null,
-    sharedMessages: routeState.messages,
-    imageInputs: preparedImageInputs,
-    reasoningEffortOverride: finalRouteInfo.requestedReasoningEffort || 'high',
-    textVerbosityOverride: finalRouteInfo.requestedTextVerbosity,
-    enableWebSearchOverride: finalRouteInfo.requestedEnableWebSearch,
-    enableCodeInterpreterOverride: finalRouteInfo.requestedEnableCodeInterpreter,
-    storeOverride: false
-  });
-  const draftText = draftReply.text || '';
-
-  try {
-    const rewriteReply = await llmRouter.generateReply({
-      route: finalRouteInfo.route,
-      userText: buildRewritePrompt(userText, planText, draftText),
-      previousResponseId: null,
-      sharedMessages: routeState.messages,
-      imageInputs: [],
-      reasoningEffortOverride: 'high',
-      textVerbosityOverride: finalRouteInfo.requestedTextVerbosity || 'medium',
-      enableWebSearchOverride: finalRouteInfo.requestedEnableWebSearch,
-      enableCodeInterpreterOverride: finalRouteInfo.requestedEnableCodeInterpreter,
-      storeOverride: false
-    });
-    const rewrittenText = rewriteReply.text || draftText;
-
-    return {
-      ...rewriteReply,
-      text: rewrittenText,
-      sessionUpdate: {
-        clearPreviousResponseId: true,
-        previousResponseId: null,
-        sharedMessages: appendSessionMessages(routeState.messages, userText, rewrittenText)
-      }
-    };
-  } catch (error) {
-    logger.error(`[openai] Final rewrite failed, fallback to draft answer: ${formatError(error)}`);
-    return {
-      ...draftReply,
-      text: draftText,
-      sessionUpdate: {
-        clearPreviousResponseId: true,
-        previousResponseId: null,
-        sharedMessages: appendSessionMessages(routeState.messages, userText, draftText)
-      }
-    };
-  }
 }
 
 async function resolveImageInputs(imageRefs, channelPort) {
@@ -458,6 +242,7 @@ export async function orchestrateIncomingMessage({
   const userId = message?.userId;
   let effectiveRouteInfo = null;
   let finalRouteInfo = null;
+  let turnSpec = null;
 
   if (chatId === null || chatId === undefined || userId === null || userId === undefined) {
     return;
@@ -484,9 +269,10 @@ export async function orchestrateIncomingMessage({
       userId
     });
     const userText = effectiveRouteInfo.userText;
+    const requestedCapabilities = getRouteDecisionRequestedCapabilities(effectiveRouteInfo);
 
     logger.info(
-      `[message] Triggered: channel=${channelPort.channelId}, trigger=${message.trigger}, route=${effectiveRouteInfo.route}, api=${effectiveRouteInfo.apiStyle}, reason=${effectiveRouteInfo.reason}, requested_reasoning=${effectiveRouteInfo.requestedReasoningEffort || 'default'}, requested_verbosity=${effectiveRouteInfo.requestedTextVerbosity || 'default'}, requested_tools=${formatDecisionToolOverrides(effectiveRouteInfo)}, images=${effectiveRouteInfo.imageCount}, chat_id=${chatId}, user_id=${userId}, text="${summarizeText(userText, 80)}"`
+      `[message] Triggered: channel=${channelPort.channelId}, trigger=${message.trigger}, route=${effectiveRouteInfo.route}, api=${effectiveRouteInfo.apiStyle}, reason=${formatRouteDecisionReason(effectiveRouteInfo)}, requested_reasoning=${requestedCapabilities.reasoningEffort || 'default'}, requested_verbosity=${requestedCapabilities.textVerbosity || 'default'}, requested_tools=${formatDecisionToolOverrides(effectiveRouteInfo)}, images=${effectiveRouteInfo.imageCount}, chat_id=${chatId}, user_id=${userId}, text="${summarizeText(userText, 80)}"`
     );
 
     const conversationState = sessionStore.getConversation(conversationKey);
@@ -523,42 +309,28 @@ export async function orchestrateIncomingMessage({
     }
 
     const routeState = conversationState.routes[finalRouteInfo.route];
-    const reply = shouldUseDeliberationPipeline(finalRouteInfo, preparedImageInputs)
+    turnSpec = buildMessageTurnSpec({
+      channelId: channelPort.channelId,
+      chatId,
+      userId,
+      routeInfo: finalRouteInfo,
+      routeState,
+      preparedImageInputs
+    });
+    const reply = turnSpec.executionPlan.mode === 'deliberation'
       ? await runDeliberationPipeline({
           llmRouter,
-          finalRouteInfo,
-          routeState,
-          userText: finalRouteInfo.userText,
-          preparedImageInputs,
+          executionPlan: turnSpec.executionPlan,
           logger
         })
-      : await llmRouter.generateReply({
-          route: finalRouteInfo.route,
-          userText: finalRouteInfo.userText,
-          previousResponseId: routeState.previousResponseId,
-          sharedMessages: routeState.messages,
-          imageInputs: preparedImageInputs,
-          reasoningEffortOverride: finalRouteInfo.requestedReasoningEffort,
-          textVerbosityOverride: finalRouteInfo.requestedTextVerbosity,
-          enableWebSearchOverride: finalRouteInfo.requestedEnableWebSearch,
-          enableCodeInterpreterOverride: finalRouteInfo.requestedEnableCodeInterpreter
-        });
+      : await llmRouter.generateReply(turnSpec.executionPlan.directRequest);
 
     logger.info(
       `[openai] Reply generated: channel=${channelPort.channelId}, route=${reply.route}, configured_api=${reply.configuredApiStyle || reply.apiStyle}, effective_api=${reply.effectiveApiStyle || reply.apiStyle}, model=${reply.model}, configured_reasoning=${reply.configuredReasoningEffort || 'none'}, effective_reasoning=${reply.effectiveReasoningEffort || 'none'}, configured_verbosity=${reply.configuredTextVerbosity || 'none'}, effective_verbosity=${reply.effectiveTextVerbosity || 'none'}, configured_tools=${formatToolList(reply.configuredTools)}, effective_tools=${formatToolList(reply.effectiveTools)}, images=${preparedImageInputs.length}, chat_id=${chatId}, user_id=${userId}, response_id=${reply.responseId || 'none'}`
     );
 
     if (typeof onReplyTelemetry === 'function') {
-      onReplyTelemetry(
-        buildReplyTelemetry({
-          channelId: channelPort.channelId,
-          chatId,
-          userId,
-          finalRouteInfo,
-          preparedImageInputs,
-          reply
-        })
-      );
+      onReplyTelemetry(buildTurnReplyTelemetry({ turnSpec, reply }));
     }
 
     const cachedImageRefs =
@@ -566,20 +338,15 @@ export async function orchestrateIncomingMessage({
         ? await cachePreparedImageInputs(preparedImageInputs, imageCacheDir)
         : conversationState.shared.lastImageRefs;
 
-    await sessionStore.setConversation(conversationKey, {
-      ...conversationState,
-      routes: {
-        ...conversationState.routes,
-        [finalRouteInfo.route]: {
-          previousResponseId: resolveNextPreviousResponseId(routeState, reply.sessionUpdate),
-          messages: reply.sessionUpdate.sharedMessages ?? routeState.messages
-        }
-      },
-      shared: {
-        ...conversationState.shared,
-        lastImageRefs: cachedImageRefs
-      }
-    });
+    await sessionStore.setConversation(
+      conversationKey,
+      buildNextConversationState({
+        conversationState,
+        turnSpec,
+        reply,
+        cachedImageRefs
+      })
+    );
 
     const replyText = reply.text || EMPTY_REPLY_TEXT;
     await sendReplySegments({
@@ -592,12 +359,12 @@ export async function orchestrateIncomingMessage({
   } catch (error) {
     if (typeof onReplyFailureTelemetry === 'function') {
       onReplyFailureTelemetry(
-        buildFailureTelemetry({
+        buildTurnFailureTelemetry({
+          turnSpec,
+          routeInfo: finalRouteInfo ?? effectiveRouteInfo,
           channelId: channelPort.channelId,
           chatId,
           userId,
-          effectiveRouteInfo,
-          finalRouteInfo,
           error
         })
       );

@@ -460,9 +460,32 @@
                                Text="这里直接控制机器人的说话方式、语气和回答习惯。保存后重启后端即可生效。" />
                   </StackPanel>
                 </Grid>
-
-                <TextBlock Style="{StaticResource FieldLabelStyle}" Text="BOT_PERSONA" />
-                <TextBox Text="{Binding BotPersona, UpdateSourceTrigger=PropertyChanged}"
+                <TextBlock Margin="0,0,0,8"
+                           Style="{StaticResource FieldLabelStyle}"
+                           Text="默认系统提示词（只读）" />
+                <TextBox x:Name="DefaultBotInstructionsTextBox"
+                         Text="{Binding DefaultBotInstructionsText}"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         MinHeight="120" />
+                <TextBlock Margin="0,12,0,8"
+                           Style="{StaticResource SectionSubtitleStyle}"
+                           Text="BOT_PERSONA 会追加在默认系统提示词后面，不会覆盖默认提示词。" />
+                <TextBlock Style="{StaticResource FieldLabelStyle}" Text="BOT_PERSONA（附加人格）" />
+                <TextBox x:Name="BotPersonaTextBox"
+                         Text="{Binding BotPersona, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         MinHeight="180" />
+                <TextBlock Margin="0,16,0,8"
+                           Style="{StaticResource FieldLabelStyle}"
+                           Text="最终系统提示词预览（只读）" />
+                <TextBox x:Name="EffectiveBotInstructionsTextBox"
+                         Text="{Binding EffectiveBotInstructionsText}"
+                         IsReadOnly="True"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"

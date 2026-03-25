@@ -1157,11 +1157,20 @@ async Task TestMainWindowSmokeAutomationAsync()
                     () => (window.FindName("OpenAiAdvancedEnableWebSearchCheckBox") as CheckBox)?.IsChecked == true,
                     "openai advanced web search checkbox binding");
                 await WaitForAsync(
+                    () => ((window.FindName("DefaultBotInstructionsTextBox") as TextBox)?.Text ?? string.Empty).Contains("你是 QQ 群助手。", StringComparison.Ordinal),
+                    "default bot instructions textbox binding");
+                await WaitForAsync(
                     () => ((window.FindName("LatestQqLlmSummaryTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("default / gpt-5.4 / responses", StringComparison.Ordinal),
                     "latest qq llm summary binding");
 
                 var wechatPrefixTextBox = window.FindName("WechatBotPrefixTextBox") as TextBox
                     ?? throw new InvalidOperationException("WechatBotPrefixTextBox not found.");
+                var defaultBotInstructionsTextBox = window.FindName("DefaultBotInstructionsTextBox") as TextBox
+                    ?? throw new InvalidOperationException("DefaultBotInstructionsTextBox not found.");
+                var botPersonaTextBox = window.FindName("BotPersonaTextBox") as TextBox
+                    ?? throw new InvalidOperationException("BotPersonaTextBox not found.");
+                var effectiveBotInstructionsTextBox = window.FindName("EffectiveBotInstructionsTextBox") as TextBox
+                    ?? throw new InvalidOperationException("EffectiveBotInstructionsTextBox not found.");
                 var allowedChatIdsTextBox = window.FindName("AllowedChatIdsTextBox") as TextBox
                     ?? throw new InvalidOperationException("AllowedChatIdsTextBox not found.");
                 var defaultWebSearchCheckBox = window.FindName("OpenAiDefaultEnableWebSearchCheckBox") as CheckBox
@@ -1278,6 +1287,9 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("StopButton not found.");
 
                 AssertEqual("/ai", wechatPrefixTextBox.Text, "WechatBotPrefix textbox should reflect loaded config.");
+                AssertContains(defaultBotInstructionsTextBox.Text, "你是 QQ 群助手。", "Default bot instructions textbox should show the backend default system prompt.");
+                AssertContains(defaultBotInstructionsTextBox.Text, "默认使用简体中文。", "Default bot instructions textbox should show the backend language guidance.");
+                AssertEqual(defaultBotInstructionsTextBox.Text, effectiveBotInstructionsTextBox.Text, "Effective bot instructions should match the default prompt when BOT_PERSONA is empty.");
                 AssertEqual("chat-a,chat-b", allowedChatIdsTextBox.Text, "AllowedChatIds textbox should reflect loaded config.");
                 AssertEqual(false, defaultWebSearchCheckBox.IsChecked ?? false, "Default web search checkbox should reflect loaded config.");
                 AssertEqual(true, advancedWebSearchCheckBox.IsChecked ?? false, "Advanced web search checkbox should reflect loaded config.");
@@ -1395,16 +1407,22 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("Wechat channel ready", wechatRuntimeReadyText, "Wechat runtime ready text should reflect runtime status.");
 
                 wechatPrefixTextBox.Text = "/wx";
+                botPersonaTextBox.Text = "冷静、专业。";
                 allowedChatIdsTextBox.Text = "chat-x,chat-y";
                 defaultWebSearchCheckBox.IsChecked = true;
                 advancedWebSearchCheckBox.IsChecked = false;
                 defaultCodeInterpreterCheckBox.IsChecked = true;
                 advancedCodeInterpreterCheckBox.IsChecked = false;
+                await WaitForAsync(
+                    () => effectiveBotInstructionsTextBox.Text.Contains("附加人格设定:", StringComparison.Ordinal)
+                        && effectiveBotInstructionsTextBox.Text.Contains("冷静、专业。", StringComparison.Ordinal),
+                    "effective bot instructions preview update");
 
                 saveButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.SaveConfigCallCount == 1, "save command invocation");
                 AssertNotNull(fakeBackend.LastSavedConfig, "Saved config payload should be captured.");
                 AssertEqual("/wx", fakeBackend.LastSavedConfig!.WechatBotPrefix, "Save should use edited WechatBotPrefix.");
+                AssertEqual("冷静、专业。", fakeBackend.LastSavedConfig.BotPersona, "Save should use edited BOT_PERSONA.");
                 AssertEqual("chat-x,chat-y", fakeBackend.LastSavedConfig.AllowedChatIds, "Save should use edited AllowedChatIds.");
                 AssertEqual("true", fakeBackend.LastSavedConfig.OpenAiDefaultEnableWebSearch, "Save should use edited default web search toggle.");
                 AssertEqual("false", fakeBackend.LastSavedConfig.OpenAiAdvancedEnableWebSearch, "Save should use edited advanced web search toggle.");

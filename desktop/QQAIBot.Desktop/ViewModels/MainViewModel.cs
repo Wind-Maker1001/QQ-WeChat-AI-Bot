@@ -19,6 +19,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private const int ControlApiRecoveryAttemptThreshold = 2;
     private const int ControlApiOutageNotificationThreshold = 3;
     private const string ControlApiTokenEnvKey = "QQ_AI_BOT_CONTROL_API_TOKEN";
+    private static readonly string DefaultBotInstructionsTextValue = string.Join(
+        Environment.NewLine,
+        [
+            "你是 QQ 群助手。",
+            "默认使用简体中文。",
+            "回答直接、准确、简洁。",
+            "不要说教。",
+            "不要输出多余免责声明。",
+            "不确定时明确说不确定。"
+        ]);
 
     private readonly IAutoStartService _autoStartService;
     private readonly ILocalConfigFallbackReader _localConfigFallbackReader;
@@ -381,8 +391,23 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string BotPersona
     {
         get => _botPersona;
-        set => SetTrackedProperty(ref _botPersona, value);
+        set
+        {
+            if (SetProperty(ref _botPersona, value))
+            {
+                if (!_suspendDirtyTracking)
+                {
+                    HasUnsavedChanges = true;
+                }
+
+                OnPropertyChanged(nameof(EffectiveBotInstructionsText));
+            }
+        }
     }
+
+    public string DefaultBotInstructionsText => DefaultBotInstructionsTextValue;
+
+    public string EffectiveBotInstructionsText => BuildEffectiveBotInstructions(BotPersona);
 
     public string MaxOutputChars
     {
@@ -2119,6 +2144,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private static string DefaultIfBlank(string? value, string fallback)
     {
         return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static string BuildEffectiveBotInstructions(string? botPersona)
+    {
+        var normalizedPersona = string.IsNullOrWhiteSpace(botPersona) ? string.Empty : botPersona.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedPersona))
+        {
+            return DefaultBotInstructionsTextValue;
+        }
+
+        return $"{DefaultBotInstructionsTextValue}{Environment.NewLine}{Environment.NewLine}附加人格设定:{Environment.NewLine}{normalizedPersona}";
     }
 
     private static void TrackRecentActivity(

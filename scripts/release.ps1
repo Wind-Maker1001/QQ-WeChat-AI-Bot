@@ -23,6 +23,21 @@ function Remove-IfExists {
     }
 }
 
+function Resolve-OutputRootPath {
+    param(
+        [string]$RepoRoot,
+        [string]$OutputRootValue
+    )
+
+    $expanded = [Environment]::ExpandEnvironmentVariables($OutputRootValue)
+
+    if ([System.IO.Path]::IsPathRooted($expanded)) {
+        return [System.IO.Path]::GetFullPath($expanded)
+    }
+
+    return Join-Path $RepoRoot $expanded
+}
+
 function Assert-CommandExists {
     param([string]$Name)
 
@@ -59,7 +74,7 @@ $releaseName = if ($Installable) {
 else {
     "qq-ai-bot-$Version-$timestamp"
 }
-$outputRootPath = Join-Path $repoRoot $OutputRoot
+$outputRootPath = Resolve-OutputRootPath -RepoRoot $repoRoot -OutputRootValue $OutputRoot
 $releaseDir = Join-Path $outputRootPath $releaseName
 $zipPath = "$releaseDir.zip"
 

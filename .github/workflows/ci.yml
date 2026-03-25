@@ -39,5 +39,8 @@ jobs:
       - name: Run automated test suite
         run: npm run test
 
+      - name: Validate installable package and installer script
+        run: npm run release:installer:validate
+
       - name: Validate desktop acceptance prerequisites
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\desktop-acceptance.ps1 -ValidateOnly

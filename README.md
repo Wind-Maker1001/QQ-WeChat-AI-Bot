@@ -340,6 +340,18 @@ npm run release:source
 npm run release:installable
 ```
 
+如果你想进一步生成 Windows 安装器：
+
+```powershell
+npm run release:installer
+```
+
+只校验安装器脚本和预构建包结构，不真正编译：
+
+```powershell
+npm run release:installer:validate
+```
+
 输出位置：
 
 ```text
@@ -384,6 +396,10 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 
 - Node.js 18+
 - `.NET Desktop Runtime 8`
+
+安装器构建机额外需要：
+
+- Inno Setup 6
 
 ## Control API
 

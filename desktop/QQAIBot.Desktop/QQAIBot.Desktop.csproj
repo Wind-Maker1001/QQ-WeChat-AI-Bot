@@ -8,5 +8,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>QQAIBot.Desktop</AssemblyName>
     <RootNamespace>QQAIBot.Desktop</RootNamespace>
+    <ApplicationIcon>..\..\installer\assets\qq-ai-bot.ico</ApplicationIcon>
+    <AssemblyTitle>QQ AI Bot</AssemblyTitle>
+    <Product>QQ AI Bot</Product>
+    <Description>Desktop control console for the QQ and WeChat AI bot runtime.</Description>
+    <Company>Wind-Maker1001</Company>
+    <Authors>Wind-Maker1001</Authors>
+    <Copyright>Copyright (c) Wind-Maker1001</Copyright>
+    <RepositoryUrl>https://github.com/Wind-Maker1001/QQ-WeChat-AI-Bot</RepositoryUrl>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0</InformationalVersion>
   </PropertyGroup>
 </Project>

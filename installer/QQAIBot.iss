@@ -14,6 +14,14 @@
   #define OutputBaseFilename "qq-ai-bot-setup"
 #endif
 
+#ifndef SetupIconPath
+  #define SetupIconPath ""
+#endif
+
+#ifndef AppUrl
+  #define AppUrl "https://github.com/Wind-Maker1001/QQ-WeChat-AI-Bot"
+#endif
+
 #define AppName "QQ AI Bot"
 #define AppPublisher "Wind-Maker1001"
 #define AppId "{{A8CC8E14-9E8D-4A51-9C8B-9BE8E7A5D3A2}"
@@ -23,6 +31,9 @@ AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+AppPublisherURL={#AppUrl}
+AppSupportURL={#AppUrl}
+AppUpdatesURL={#AppUrl}
 DefaultDirName={localappdata}\QQAIBot
 DefaultGroupName={#AppName}
 OutputDir={#OutputDir}
@@ -35,6 +46,16 @@ DisableProgramGroupPage=yes
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\app\desktop-publish\QQAIBot.Desktop.exe
+UninstallDisplayName={#AppName}
+VersionInfoVersion={#AppVersion}
+VersionInfoCompany={#AppPublisher}
+VersionInfoDescription={#AppName} Installer
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
+
+#if SetupIconPath != ""
+SetupIconFile={#SetupIconPath}
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

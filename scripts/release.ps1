@@ -89,6 +89,7 @@ $copyItems = @(
     "README.md",
     "package.json",
     "package-lock.json",
+    "installer",
     "src",
     "desktop",
     "scripts"

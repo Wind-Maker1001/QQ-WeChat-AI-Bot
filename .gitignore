@@ -13,6 +13,7 @@ pnpm-debug.log*
 # Runtime state
 data/
 dist/
+dist-installer/
 tmp-backend-out.log
 tmp-backend-err.log
 .codex-run/

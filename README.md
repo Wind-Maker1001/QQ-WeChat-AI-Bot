@@ -367,6 +367,7 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 - `README.md`
 - `package.json`
 - `package-lock.json`
+- `installer`
 - `scripts`
 
 不会包含：

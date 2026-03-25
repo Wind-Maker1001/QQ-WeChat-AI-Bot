@@ -89,9 +89,14 @@ function Invoke-ExternalStep {
 $repoRoot = Resolve-RepoRoot
 $outputRootPath = Resolve-AbsolutePath $OutputRoot
 $installerScriptPath = Join-Path $repoRoot "installer\QQAIBot.iss"
+$setupIconPath = Join-Path $repoRoot "installer\assets\qq-ai-bot.ico"
 
 if (-not (Test-Path $installerScriptPath)) {
     throw "Installer script is missing: $installerScriptPath"
+}
+
+if (-not (Test-Path $setupIconPath)) {
+    throw "Installer icon is missing: $setupIconPath"
 }
 
 if (-not $Version) {
@@ -164,6 +169,7 @@ Invoke-ExternalStep -Label "Building Inno Setup installer" -Command {
         "/DAppVersion=$Version" `
         "/DOutputDir=$outputRootPath" `
         "/DOutputBaseFilename=$outputBaseFilename" `
+        "/DSetupIconPath=$setupIconPath" `
         $installerScriptPath
 }
 

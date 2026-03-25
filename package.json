@@ -18,6 +18,7 @@
     "wechat:bridge:sim": "node ./scripts/wechat-bridge-simulator.mjs",
     "release:source": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1",
     "release:installable": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1 -Installable",
+    "release:installable:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\installable-package-smoke.ps1",
     "release:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-installer.ps1",
     "release:installer:validate": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\build-installer.ps1 -ValidateOnly"
   },

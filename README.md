@@ -340,6 +340,12 @@ npm run release:source
 npm run release:installable
 ```
 
+如果你想顺手验证 installable 包的安装/卸载链路：
+
+```powershell
+npm run release:installable:smoke
+```
+
 如果你想进一步生成 Windows 安装器：
 
 ```powershell

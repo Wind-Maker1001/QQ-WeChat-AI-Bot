@@ -28,6 +28,8 @@ public sealed class BackendRuntimeStatus
 
     public BackendLlmRequestStatus? LastQqLlmRequest { get; set; }
 
+    public BackendLlmFailureStatus? LastQqLlmFailure { get; set; }
+
     public bool WechatConfigured { get; set; }
 
     public bool WechatRuntimeActive { get; set; }
@@ -41,4 +43,6 @@ public sealed class BackendRuntimeStatus
     public string WechatWorkerStartedAt { get; set; } = string.Empty;
 
     public BackendLlmRequestStatus? LastWechatLlmRequest { get; set; }
+
+    public BackendLlmFailureStatus? LastWechatLlmFailure { get; set; }
 }

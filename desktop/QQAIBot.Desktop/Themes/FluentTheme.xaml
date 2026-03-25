@@ -127,6 +127,43 @@
     <Setter Property="MinHeight" Value="40" />
   </Style>
 
+  <Style x:Key="FilterToggleButtonStyle" TargetType="ToggleButton">
+    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+    <Setter Property="Background" Value="{StaticResource InputFillBrush}" />
+    <Setter Property="BorderBrush" Value="#FFD1D5DB" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="12,4" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="MinHeight" Value="32" />
+    <Setter Property="MinWidth" Value="112" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="999">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+              <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+              <Setter Property="Foreground" Value="{StaticResource AccentDarkBrush}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.45" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
     <Setter Property="FontSize" Value="13" />
     <Setter Property="Foreground" Value="#FF374151" />

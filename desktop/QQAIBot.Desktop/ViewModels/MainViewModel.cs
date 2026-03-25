@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Data;
 using System.Windows.Threading;
 
 using QQAIBot.Desktop.Infrastructure;
@@ -20,6 +23,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly ILocalConfigFallbackReader _localConfigFallbackReader;
     private readonly IBackendControlApiService _backendControlApiService;
     private readonly IBotProcessService _botProcessService;
+    private readonly IActivityStateStore _activityStateStore;
+    private readonly DesktopActivityStatePolicy _activityStatePolicy;
     private readonly Dispatcher _uiDispatcher;
     private readonly Queue<string> _logLines = new();
     private readonly DispatcherTimer _logFlushTimer;
@@ -35,6 +40,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly RelayCommand _openBackendFolderCommand;
     private readonly RelayCommand _applyBaseUrlPresetCommand;
     private readonly RelayCommand _clearLogsCommand;
+    private readonly RelayCommand _clearQqActivityHistoryCommand;
+    private readonly RelayCommand _clearWechatActivityHistoryCommand;
 
     private EnvDocument _envDocument = new();
     private bool _suspendDirtyTracking;
@@ -85,9 +92,22 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private int _consecutiveControlApiFailures;
     private bool _controlApiOutageNotified;
     private bool _controlApiRecoveryInProgress;
+    private bool _restoringActivityState;
     private bool _disposed;
+    private bool _pinSelectedQqActivity;
+    private bool _pinSelectedWechatActivity;
+    private bool _showOnlyQqFailures;
+    private bool _showOnlyWechatFailures;
+    private string _lastQqRequestEventKey = string.Empty;
+    private string _lastQqFailureEventKey = string.Empty;
+    private BackendRecentActivityItem? _selectedQqRecentActivity;
     private BackendLlmRequestStatus? _lastQqLlmRequest;
+    private BackendLlmFailureStatus? _lastQqLlmFailure;
+    private string _lastWechatRequestEventKey = string.Empty;
+    private string _lastWechatFailureEventKey = string.Empty;
+    private BackendRecentActivityItem? _selectedWechatRecentActivity;
     private BackendLlmRequestStatus? _lastWechatLlmRequest;
+    private BackendLlmFailureStatus? _lastWechatLlmFailure;
 
     public event EventHandler<TrayNotification>? NotificationRequested;
 
@@ -95,12 +115,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         IAutoStartService? autoStartService = null,
         ILocalConfigFallbackReader? localConfigFallbackReader = null,
         IBackendControlApiService? backendControlApiService = null,
-        IBotProcessService? botProcessService = null)
+        IBotProcessService? botProcessService = null,
+        IActivityStateStore? activityStateStore = null)
     {
         _autoStartService = autoStartService ?? new AutoStartService();
         _localConfigFallbackReader = localConfigFallbackReader ?? new LocalEnvConfigFallbackReader();
         _backendControlApiService = backendControlApiService ?? new BackendControlApiService();
         _botProcessService = botProcessService ?? new BotProcessService();
+        _activityStateStore = activityStateStore ?? new LocalActivityStateStore();
+        _activityStatePolicy = DesktopActivityStatePolicy.Default;
         _uiDispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         _reloadCommand = new AsyncRelayCommand(LoadConfigAsync, CanLoadOrSave);
         _saveCommand = new AsyncRelayCommand(SaveConfigAsync, CanLoadOrSave);
@@ -114,6 +137,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         );
         _applyBaseUrlPresetCommand = new RelayCommand(ApplyBaseUrlPreset);
         _clearLogsCommand = new RelayCommand(_ => ClearLogs());
+        _clearQqActivityHistoryCommand = new RelayCommand(
+            _ => ClearActivityHistory(QqRecentActivities, () => SelectedQqRecentActivity = null, () => PinSelectedQqActivity = false),
+            _ => QqRecentActivities.Count > 0);
+        _clearWechatActivityHistoryCommand = new RelayCommand(
+            _ => ClearActivityHistory(WechatRecentActivities, () => SelectedWechatRecentActivity = null, () => PinSelectedWechatActivity = false),
+            _ => WechatRecentActivities.Count > 0);
+        QqRecentActivitiesView = CollectionViewSource.GetDefaultView(QqRecentActivities);
+        QqRecentActivitiesView.Filter = FilterQqRecentActivity;
+        WechatRecentActivitiesView = CollectionViewSource.GetDefaultView(WechatRecentActivities);
+        WechatRecentActivitiesView.Filter = FilterWechatRecentActivity;
 
         _botProcessService.LogReceived += OnProcessLogReceived;
         _botProcessService.ProcessExited += OnProcessExited;
@@ -146,6 +179,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public ICommand OpenBackendFolderCommand => _openBackendFolderCommand;
     public ICommand ApplyBaseUrlPresetCommand => _applyBaseUrlPresetCommand;
     public ICommand ClearLogsCommand => _clearLogsCommand;
+    public ICommand ClearQqActivityHistoryCommand => _clearQqActivityHistoryCommand;
+    public ICommand ClearWechatActivityHistoryCommand => _clearWechatActivityHistoryCommand;
+
+    public ObservableCollection<BackendRecentActivityItem> QqRecentActivities { get; } = [];
+
+    public ObservableCollection<BackendRecentActivityItem> WechatRecentActivities { get; } = [];
+
+    public ICollectionView QqRecentActivitiesView { get; }
+
+    public ICollectionView WechatRecentActivitiesView { get; }
 
     public string BackendRootPath
     {
@@ -157,6 +200,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(EnvFilePath));
                 OnPropertyChanged(nameof(IsBackendRootValid));
                 OnPropertyChanged(nameof(BackendRootStateText));
+                LoadActivityState();
                 UpdateCommandStates();
             }
         }
@@ -400,11 +444,219 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string LatestQqLlmDetailText =>
         FormatLlmRequestDetail(_lastQqLlmRequest);
 
+    public string LatestQqActivitySummaryText =>
+        FormatActivitySummary(_lastQqLlmRequest, _lastQqLlmFailure, "No QQ activity captured yet");
+
+    public string LatestQqRecentActivityText =>
+        FormatRecentActivity(QqRecentActivities, "No recent QQ activity yet");
+
+    public bool PinSelectedQqActivity
+    {
+        get => _pinSelectedQqActivity;
+        set
+        {
+            if (SetProperty(ref _pinSelectedQqActivity, value))
+            {
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public bool ShowOnlyQqFailures
+    {
+        get => _showOnlyQqFailures;
+        set
+        {
+            if (SetProperty(ref _showOnlyQqFailures, value))
+            {
+                QqRecentActivitiesView.Refresh();
+                EnsureSelectedActivityVisible(
+                    QqRecentActivitiesView,
+                    () => SelectedQqRecentActivity,
+                    (item) => SelectedQqRecentActivity = item);
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public BackendRecentActivityItem? SelectedQqRecentActivity
+    {
+        get => _selectedQqRecentActivity;
+        set
+        {
+            if (SetProperty(ref _selectedQqRecentActivity, value))
+            {
+                OnPropertyChanged(nameof(SelectedQqRecentActivitySummaryText));
+                OnPropertyChanged(nameof(SelectedQqRecentActivityMetaText));
+                OnPropertyChanged(nameof(SelectedQqRecentActivityDetailText));
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public string SelectedQqRecentActivitySummaryText =>
+        _selectedQqRecentActivity?.Summary ?? "Select a QQ activity event";
+
+    public string SelectedQqRecentActivityMetaText =>
+        _selectedQqRecentActivity?.Meta ?? "No event selected";
+
+    public string SelectedQqRecentActivityDetailText =>
+        _selectedQqRecentActivity?.Detail ?? "Select a QQ activity event";
+
+    public string LatestQqActivityStateText =>
+        FormatActivityState(_lastQqLlmRequest, _lastQqLlmFailure);
+
+    public string LatestQqLatestSuccessText =>
+        FormatLatestSuccess(_lastQqLlmRequest);
+
+    public string LatestQqLatestFailureText =>
+        FormatLatestFailure(_lastQqLlmFailure);
+
+    public string LatestQqRecoveryText =>
+        FormatRecoveryState(_lastQqLlmRequest, _lastQqLlmFailure);
+
+    public string LatestQqRequestTimelineText =>
+        FormatRequestTimeline(_lastQqLlmRequest);
+
+    public string LatestQqDecisionTriggerText =>
+        FormatLlmDecisionTrigger(_lastQqLlmRequest);
+
+    public string LatestQqDecisionCapabilityText =>
+        FormatLlmDecisionCapability(_lastQqLlmRequest);
+
+    public string LatestQqDecisionUpgradeText =>
+        FormatLlmDecisionUpgrade(_lastQqLlmRequest);
+
+    public string LatestQqRequestedCapabilitiesText =>
+        FormatLlmRequestedCapabilities(_lastQqLlmRequest);
+
     public string LatestWechatLlmSummaryText =>
         FormatLlmRequestSummary(_lastWechatLlmRequest, "No Wechat requests captured yet");
 
     public string LatestWechatLlmDetailText =>
         FormatLlmRequestDetail(_lastWechatLlmRequest);
+
+    public string LatestWechatActivitySummaryText =>
+        FormatActivitySummary(_lastWechatLlmRequest, _lastWechatLlmFailure, "No Wechat activity captured yet");
+
+    public string LatestWechatRecentActivityText =>
+        FormatRecentActivity(WechatRecentActivities, "No recent Wechat activity yet");
+
+    public bool PinSelectedWechatActivity
+    {
+        get => _pinSelectedWechatActivity;
+        set
+        {
+            if (SetProperty(ref _pinSelectedWechatActivity, value))
+            {
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public bool ShowOnlyWechatFailures
+    {
+        get => _showOnlyWechatFailures;
+        set
+        {
+            if (SetProperty(ref _showOnlyWechatFailures, value))
+            {
+                WechatRecentActivitiesView.Refresh();
+                EnsureSelectedActivityVisible(
+                    WechatRecentActivitiesView,
+                    () => SelectedWechatRecentActivity,
+                    (item) => SelectedWechatRecentActivity = item);
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public BackendRecentActivityItem? SelectedWechatRecentActivity
+    {
+        get => _selectedWechatRecentActivity;
+        set
+        {
+            if (SetProperty(ref _selectedWechatRecentActivity, value))
+            {
+                OnPropertyChanged(nameof(SelectedWechatRecentActivitySummaryText));
+                OnPropertyChanged(nameof(SelectedWechatRecentActivityMetaText));
+                OnPropertyChanged(nameof(SelectedWechatRecentActivityDetailText));
+                PersistActivityStateIfPossible();
+            }
+        }
+    }
+
+    public string SelectedWechatRecentActivitySummaryText =>
+        _selectedWechatRecentActivity?.Summary ?? "Select a Wechat activity event";
+
+    public string SelectedWechatRecentActivityMetaText =>
+        _selectedWechatRecentActivity?.Meta ?? "No event selected";
+
+    public string SelectedWechatRecentActivityDetailText =>
+        _selectedWechatRecentActivity?.Detail ?? "Select a Wechat activity event";
+
+    public string LatestWechatActivityStateText =>
+        FormatActivityState(_lastWechatLlmRequest, _lastWechatLlmFailure);
+
+    public string LatestWechatLatestSuccessText =>
+        FormatLatestSuccess(_lastWechatLlmRequest);
+
+    public string LatestWechatLatestFailureText =>
+        FormatLatestFailure(_lastWechatLlmFailure);
+
+    public string LatestWechatRecoveryText =>
+        FormatRecoveryState(_lastWechatLlmRequest, _lastWechatLlmFailure);
+
+    public string LatestWechatRequestTimelineText =>
+        FormatRequestTimeline(_lastWechatLlmRequest);
+
+    public string LatestWechatDecisionTriggerText =>
+        FormatLlmDecisionTrigger(_lastWechatLlmRequest);
+
+    public string LatestWechatDecisionCapabilityText =>
+        FormatLlmDecisionCapability(_lastWechatLlmRequest);
+
+    public string LatestWechatDecisionUpgradeText =>
+        FormatLlmDecisionUpgrade(_lastWechatLlmRequest);
+
+    public string LatestWechatRequestedCapabilitiesText =>
+        FormatLlmRequestedCapabilities(_lastWechatLlmRequest);
+
+    public string LatestQqFailureSummaryText =>
+        FormatLlmFailureSummary(_lastQqLlmFailure, "No QQ failures captured yet");
+
+    public string LatestQqFailureTimelineText =>
+        FormatFailureTimeline(_lastQqLlmFailure);
+
+    public string LatestQqFailureTriggerText =>
+        FormatLlmFailureTrigger(_lastQqLlmFailure);
+
+    public string LatestQqFailureCapabilityText =>
+        FormatLlmFailureCapability(_lastQqLlmFailure);
+
+    public string LatestQqFailureUpgradeText =>
+        FormatLlmFailureUpgrade(_lastQqLlmFailure);
+
+    public string LatestQqFailureErrorText =>
+        FormatLlmFailureError(_lastQqLlmFailure);
+
+    public string LatestWechatFailureSummaryText =>
+        FormatLlmFailureSummary(_lastWechatLlmFailure, "No Wechat failures captured yet");
+
+    public string LatestWechatFailureTimelineText =>
+        FormatFailureTimeline(_lastWechatLlmFailure);
+
+    public string LatestWechatFailureTriggerText =>
+        FormatLlmFailureTrigger(_lastWechatLlmFailure);
+
+    public string LatestWechatFailureCapabilityText =>
+        FormatLlmFailureCapability(_lastWechatLlmFailure);
+
+    public string LatestWechatFailureUpgradeText =>
+        FormatLlmFailureUpgrade(_lastWechatLlmFailure);
+
+    public string LatestWechatFailureErrorText =>
+        FormatLlmFailureError(_lastWechatLlmFailure);
 
     public bool IsControlApiReachable => _lastControlApiReachable == true;
 
@@ -1089,14 +1341,78 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(WechatRuntimeReadyText));
         OnPropertyChanged(nameof(WechatBridgeStateText));
         OnPropertyChanged(nameof(WechatWorkerProcessText));
+        OnPropertyChanged(nameof(ShowOnlyQqFailures));
+        OnPropertyChanged(nameof(ShowOnlyWechatFailures));
+        OnPropertyChanged(nameof(PinSelectedQqActivity));
+        OnPropertyChanged(nameof(PinSelectedWechatActivity));
+        OnPropertyChanged(nameof(LatestQqActivitySummaryText));
+        OnPropertyChanged(nameof(LatestQqRecentActivityText));
+        OnPropertyChanged(nameof(SelectedQqRecentActivity));
+        OnPropertyChanged(nameof(SelectedQqRecentActivitySummaryText));
+        OnPropertyChanged(nameof(SelectedQqRecentActivityMetaText));
+        OnPropertyChanged(nameof(SelectedQqRecentActivityDetailText));
+        OnPropertyChanged(nameof(LatestQqActivityStateText));
+        OnPropertyChanged(nameof(LatestQqLatestSuccessText));
+        OnPropertyChanged(nameof(LatestQqLatestFailureText));
+        OnPropertyChanged(nameof(LatestQqRecoveryText));
         OnPropertyChanged(nameof(LatestQqLlmSummaryText));
         OnPropertyChanged(nameof(LatestQqLlmDetailText));
+        OnPropertyChanged(nameof(LatestQqRequestTimelineText));
+        OnPropertyChanged(nameof(LatestQqDecisionTriggerText));
+        OnPropertyChanged(nameof(LatestQqDecisionCapabilityText));
+        OnPropertyChanged(nameof(LatestQqDecisionUpgradeText));
+        OnPropertyChanged(nameof(LatestQqRequestedCapabilitiesText));
+        OnPropertyChanged(nameof(LatestQqFailureSummaryText));
+        OnPropertyChanged(nameof(LatestQqFailureTimelineText));
+        OnPropertyChanged(nameof(LatestQqFailureTriggerText));
+        OnPropertyChanged(nameof(LatestQqFailureCapabilityText));
+        OnPropertyChanged(nameof(LatestQqFailureUpgradeText));
+        OnPropertyChanged(nameof(LatestQqFailureErrorText));
+        OnPropertyChanged(nameof(LatestWechatActivitySummaryText));
+        OnPropertyChanged(nameof(LatestWechatRecentActivityText));
+        OnPropertyChanged(nameof(SelectedWechatRecentActivity));
+        OnPropertyChanged(nameof(SelectedWechatRecentActivitySummaryText));
+        OnPropertyChanged(nameof(SelectedWechatRecentActivityMetaText));
+        OnPropertyChanged(nameof(SelectedWechatRecentActivityDetailText));
+        OnPropertyChanged(nameof(LatestWechatActivityStateText));
+        OnPropertyChanged(nameof(LatestWechatLatestSuccessText));
+        OnPropertyChanged(nameof(LatestWechatLatestFailureText));
+        OnPropertyChanged(nameof(LatestWechatRecoveryText));
         OnPropertyChanged(nameof(LatestWechatLlmSummaryText));
         OnPropertyChanged(nameof(LatestWechatLlmDetailText));
+        OnPropertyChanged(nameof(LatestWechatRequestTimelineText));
+        OnPropertyChanged(nameof(LatestWechatDecisionTriggerText));
+        OnPropertyChanged(nameof(LatestWechatDecisionCapabilityText));
+        OnPropertyChanged(nameof(LatestWechatDecisionUpgradeText));
+        OnPropertyChanged(nameof(LatestWechatRequestedCapabilitiesText));
+        OnPropertyChanged(nameof(LatestWechatFailureSummaryText));
+        OnPropertyChanged(nameof(LatestWechatFailureTimelineText));
+        OnPropertyChanged(nameof(LatestWechatFailureTriggerText));
+        OnPropertyChanged(nameof(LatestWechatFailureCapabilityText));
+        OnPropertyChanged(nameof(LatestWechatFailureUpgradeText));
+        OnPropertyChanged(nameof(LatestWechatFailureErrorText));
     }
 
     private void ApplyBackendRuntimeStatus(BackendRuntimeStatus? status, bool controlApiReachable)
     {
+        TrackRecentActivity(
+            status?.LastQqLlmRequest,
+            status?.LastQqLlmFailure,
+            QqRecentActivities,
+            ref _lastQqRequestEventKey,
+            ref _lastQqFailureEventKey,
+            () => PinSelectedQqActivity,
+            () => SelectedQqRecentActivity,
+            (item) => SelectedQqRecentActivity = item);
+        TrackRecentActivity(
+            status?.LastWechatLlmRequest,
+            status?.LastWechatLlmFailure,
+            WechatRecentActivities,
+            ref _lastWechatRequestEventKey,
+            ref _lastWechatFailureEventKey,
+            () => PinSelectedWechatActivity,
+            () => SelectedWechatRecentActivity,
+            (item) => SelectedWechatRecentActivity = item);
         IsProcessRunning = status?.RuntimeActive == true;
         _lastWorkerProcessId = status?.WorkerProcessId;
         _lastWechatWorkerProcessId = status?.WechatWorkerProcessId;
@@ -1107,10 +1423,111 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _lastWechatRuntimeReady = status?.WechatRuntimeReady;
         _lastWechatBridgeConnected = status?.WechatBridgeConnected;
         _lastQqLlmRequest = status?.LastQqLlmRequest;
+        _lastQqLlmFailure = status?.LastQqLlmFailure;
         _lastWechatLlmRequest = status?.LastWechatLlmRequest;
+        _lastWechatLlmFailure = status?.LastWechatLlmFailure;
         _lastControlApiReachable = controlApiReachable;
         OnPropertyChanged(nameof(IsControlApiReachable));
         NotifyRuntimeSnapshotChanged();
+        PersistActivityStateIfPossible();
+    }
+
+    private void LoadActivityState()
+    {
+        if (!IsBackendRootValid)
+        {
+            ApplyActivityState(_activityStatePolicy.CreateDefaultState());
+            return;
+        }
+
+        ApplyActivityState(_activityStateStore.Load(BackendRootPath));
+    }
+
+    private void PersistActivityStateIfPossible()
+    {
+        if (_restoringActivityState || !IsBackendRootValid)
+        {
+            return;
+        }
+
+        var state = _activityStatePolicy.CreateSnapshot(
+            QqRecentActivities,
+            WechatRecentActivities,
+            SelectedQqRecentActivity,
+            SelectedWechatRecentActivity,
+            PinSelectedQqActivity,
+            PinSelectedWechatActivity,
+            ShowOnlyQqFailures,
+            ShowOnlyWechatFailures);
+
+        try
+        {
+            _activityStateStore.Save(BackendRootPath, state);
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Failed to persist local activity state: {ex.Message}");
+        }
+    }
+
+    private void ApplyActivityState(DesktopActivityState? state)
+    {
+        var normalizedState = _activityStatePolicy.Normalize(state) ?? _activityStatePolicy.CreateDefaultState();
+
+        _restoringActivityState = true;
+        try
+        {
+            ReplaceRecentActivities(QqRecentActivities, normalizedState.QqRecentActivities);
+            ReplaceRecentActivities(WechatRecentActivities, normalizedState.WechatRecentActivities);
+            _pinSelectedQqActivity = normalizedState.PinSelectedQqActivity;
+            _pinSelectedWechatActivity = normalizedState.PinSelectedWechatActivity;
+            _showOnlyQqFailures = normalizedState.ShowOnlyQqFailures;
+            _showOnlyWechatFailures = normalizedState.ShowOnlyWechatFailures;
+            _selectedQqRecentActivity = _activityStatePolicy.ResolveSelectedItem(
+                QqRecentActivities,
+                normalizedState.SelectedQqEventKey);
+            _selectedWechatRecentActivity = _activityStatePolicy.ResolveSelectedItem(
+                WechatRecentActivities,
+                normalizedState.SelectedWechatEventKey);
+        }
+        finally
+        {
+            _restoringActivityState = false;
+        }
+
+        QqRecentActivitiesView.Refresh();
+        WechatRecentActivitiesView.Refresh();
+        EnsureSelectedActivityVisible(
+            QqRecentActivitiesView,
+            () => SelectedQqRecentActivity,
+            (item) => SelectedQqRecentActivity = item);
+        EnsureSelectedActivityVisible(
+            WechatRecentActivitiesView,
+            () => SelectedWechatRecentActivity,
+            (item) => SelectedWechatRecentActivity = item);
+        NotifyRuntimeSnapshotChanged();
+    }
+
+    private static void ReplaceRecentActivities(
+        ObservableCollection<BackendRecentActivityItem> target,
+        IEnumerable<BackendRecentActivityItem>? source)
+    {
+        target.Clear();
+
+        if (source is null)
+        {
+            return;
+        }
+
+        foreach (var item in source)
+        {
+            if (item is null || string.IsNullOrWhiteSpace(item.EventKey))
+            {
+                continue;
+            }
+
+            target.Add(item);
+        }
     }
 
     private void ResetControlApiFailureState()
@@ -1228,6 +1645,162 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return $"{request.Route} / {request.Model} / {apiStyle}";
     }
 
+    private static string FormatActivitySummary(
+        BackendLlmRequestStatus? request,
+        BackendLlmFailureStatus? failure,
+        string emptyText)
+    {
+        if (request is null && failure is null)
+        {
+            return emptyText;
+        }
+
+        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
+        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
+
+        if (failureCapturedAt is not null &&
+            (requestCapturedAt is null || failureCapturedAt >= requestCapturedAt))
+        {
+            return $"Latest event: failure at {FormatCapturedAt(failure!.CapturedAt)}";
+        }
+
+        if (requestCapturedAt is not null)
+        {
+            return $"Latest event: request at {FormatCapturedAt(request!.CapturedAt)}";
+        }
+
+        return emptyText;
+    }
+
+    private static string FormatRecentActivity(IEnumerable<BackendRecentActivityItem> items, string emptyText)
+    {
+        var visibleLines = items
+            .Where(static item => item is not null && !string.IsNullOrWhiteSpace(item.Summary))
+            .Select(static item => $"{item.EventType} | {item.Summary}")
+            .ToArray();
+        return visibleLines.Length > 0 ? string.Join(Environment.NewLine, visibleLines) : emptyText;
+    }
+
+    private bool FilterQqRecentActivity(object item)
+    {
+        return FilterRecentActivity(item, ShowOnlyQqFailures);
+    }
+
+    private bool FilterWechatRecentActivity(object item)
+    {
+        return FilterRecentActivity(item, ShowOnlyWechatFailures);
+    }
+
+    private static bool FilterRecentActivity(object item, bool failuresOnly)
+    {
+        if (item is not BackendRecentActivityItem activityItem)
+        {
+            return false;
+        }
+
+        return !failuresOnly || activityItem.IsFailure;
+    }
+
+    private static void EnsureSelectedActivityVisible(
+        ICollectionView activityView,
+        Func<BackendRecentActivityItem?> getSelectedItem,
+        Action<BackendRecentActivityItem?> setSelectedItem)
+    {
+        var selectedItem = getSelectedItem();
+
+        if (selectedItem is not null && activityView.Cast<object>().Contains(selectedItem))
+        {
+            return;
+        }
+
+        setSelectedItem(activityView.Cast<BackendRecentActivityItem>().FirstOrDefault());
+    }
+
+    private static string FormatActivityState(
+        BackendLlmRequestStatus? request,
+        BackendLlmFailureStatus? failure)
+    {
+        if (request is null && failure is null)
+        {
+            return "No activity";
+        }
+
+        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
+        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
+
+        if (requestCapturedAt is not null && failureCapturedAt is not null)
+        {
+            if (requestCapturedAt > failureCapturedAt)
+            {
+                return "Recovered after failure";
+            }
+
+            if (failureCapturedAt > requestCapturedAt)
+            {
+                return "Failure is latest event";
+            }
+
+            return "Request and failure captured";
+        }
+
+        if (requestCapturedAt is not null)
+        {
+            return "Latest event is successful request";
+        }
+
+        return "Latest event is failure";
+    }
+
+    private static string FormatLatestSuccess(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "Success | not captured";
+        }
+
+        return $"Success | {FormatCapturedAt(request.CapturedAt)}";
+    }
+
+    private static string FormatLatestFailure(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "Failure | not captured";
+        }
+
+        return $"Failure | {FormatCapturedAt(failure.CapturedAt)}";
+    }
+
+    private static string FormatRecoveryState(
+        BackendLlmRequestStatus? request,
+        BackendLlmFailureStatus? failure)
+    {
+        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
+        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
+
+        if (requestCapturedAt is null || failureCapturedAt is null)
+        {
+            return "Recovery | not observed";
+        }
+
+        if (requestCapturedAt > failureCapturedAt)
+        {
+            return $"Recovery | {FormatCapturedAt(request!.CapturedAt)}";
+        }
+
+        return "Recovery | pending";
+    }
+
+    private static string FormatRequestTimeline(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "Request | n/a | not captured";
+        }
+
+        return $"Request | {FormatCapturedAt(request.CapturedAt)} | completed";
+    }
+
     private static string FormatLlmRequestDetail(BackendLlmRequestStatus? request)
     {
         if (request is null || string.IsNullOrWhiteSpace(request.Route))
@@ -1236,14 +1809,329 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         var capturedAt = FormatCapturedAt(request.CapturedAt);
-        var routeReason = string.IsNullOrWhiteSpace(request.RouteReason) ? "default" : request.RouteReason;
         var reasoning = string.IsNullOrWhiteSpace(request.EffectiveReasoningEffort) ? "none" : request.EffectiveReasoningEffort;
         var verbosity = string.IsNullOrWhiteSpace(request.EffectiveTextVerbosity) ? "none" : request.EffectiveTextVerbosity;
         var tools = request.EffectiveTools is { Length: > 0 }
             ? string.Join("+", request.EffectiveTools)
             : "none";
+        var decisionSummary = FormatDecisionSummary(request);
 
-        return $"At {capturedAt} | reason={routeReason} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
+        return $"At {capturedAt} | {decisionSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
+    }
+
+    private static string FormatDecisionSummary(BackendLlmRequestStatus request)
+    {
+        var summary = request.DecisionSummary;
+
+        if (summary is null)
+        {
+            var routeReason = string.IsNullOrWhiteSpace(request.RouteReason) ? "default" : request.RouteReason;
+            return $"reason={routeReason}";
+        }
+
+        var trigger = FormatDecisionTrigger(summary);
+        var capabilityReasons = FormatDecisionReasonGroup(summary.ReasonGroups?.CapabilityReasons, "default");
+        var upgradeReasons = FormatDecisionReasonGroup(summary.ReasonGroups?.UpgradeReasons, "none");
+
+        return $"trigger={trigger} | capability={capabilityReasons} | upgrade={upgradeReasons}";
+    }
+
+    private static string FormatDecisionTrigger(BackendDecisionSummary summary)
+    {
+        var triggerKind = string.IsNullOrWhiteSpace(summary.Trigger?.Kind)
+            ? "default"
+            : summary.Trigger.Kind;
+        var matchedPrefix = string.IsNullOrWhiteSpace(summary.Trigger?.MatchedPrefix)
+            ? summary.MatchedPrefix
+            : summary.Trigger!.MatchedPrefix;
+
+        return triggerKind == "directive" && !string.IsNullOrWhiteSpace(matchedPrefix)
+            ? $"directive:{matchedPrefix}"
+            : triggerKind;
+    }
+
+    private static string FormatDecisionReasonGroup(string[]? reasons, string emptyValue)
+    {
+        return reasons is { Length: > 0 }
+            ? string.Join("+", reasons)
+            : emptyValue;
+    }
+
+    private static string FormatLlmFailureSummary(BackendLlmFailureStatus? failure, string emptyText)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return emptyText;
+        }
+
+        return $"{failure.Route} / {FormatCapturedAt(failure.CapturedAt)}";
+    }
+
+    private static string FormatFailureTimeline(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "Failure | n/a | not captured";
+        }
+
+        return $"Failure | {FormatCapturedAt(failure.CapturedAt)} | failed";
+    }
+
+    private static string FormatLlmFailureTrigger(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "n/a";
+        }
+
+        var summary = failure.DecisionSummary;
+
+        if (summary is not null)
+        {
+            return FormatDecisionTrigger(summary);
+        }
+
+        if (!string.IsNullOrWhiteSpace(failure.MatchedPrefix))
+        {
+            return $"directive:{failure.MatchedPrefix}";
+        }
+
+        return "default";
+    }
+
+    private static string FormatLlmFailureCapability(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "n/a";
+        }
+
+        return FormatDecisionReasonGroup(failure.DecisionSummary?.ReasonGroups?.CapabilityReasons, "default");
+    }
+
+    private static string FormatLlmFailureUpgrade(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "n/a";
+        }
+
+        return FormatDecisionReasonGroup(failure.DecisionSummary?.ReasonGroups?.UpgradeReasons, "none");
+    }
+
+    private static string FormatLlmFailureError(BackendLlmFailureStatus? failure)
+    {
+        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
+        {
+            return "n/a";
+        }
+
+        return string.IsNullOrWhiteSpace(failure.Error) ? "unknown" : failure.Error;
+    }
+
+    private static string FormatLlmDecisionTrigger(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "n/a";
+        }
+
+        var summary = request.DecisionSummary;
+
+        if (summary is not null)
+        {
+            return FormatDecisionTrigger(summary);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.MatchedPrefix))
+        {
+            return $"directive:{request.MatchedPrefix}";
+        }
+
+        return "default";
+    }
+
+    private static string FormatLlmDecisionCapability(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "n/a";
+        }
+
+        return FormatDecisionReasonGroup(request.DecisionSummary?.ReasonGroups?.CapabilityReasons, "default");
+    }
+
+    private static string FormatLlmDecisionUpgrade(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "n/a";
+        }
+
+        return FormatDecisionReasonGroup(request.DecisionSummary?.ReasonGroups?.UpgradeReasons, "none");
+    }
+
+    private static string FormatLlmRequestedCapabilities(BackendLlmRequestStatus? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Route))
+        {
+            return "n/a";
+        }
+
+        var requested = request.DecisionSummary?.RequestedCapabilities;
+
+        if (requested is not null)
+        {
+            return $"reasoning={DefaultIfBlank(requested.ReasoningEffort, "none")} | verbosity={DefaultIfBlank(requested.TextVerbosity, "none")} | web={(requested.EnableWebSearch ? "on" : "off")} | code={(requested.EnableCodeInterpreter ? "on" : "off")}";
+        }
+
+        return $"reasoning={DefaultIfBlank(request.EffectiveReasoningEffort, "none")} | verbosity={DefaultIfBlank(request.EffectiveTextVerbosity, "none")} | web={(request.EffectiveTools?.Contains("web_search") == true ? "on" : "off")} | code={(request.EffectiveTools?.Contains("code_interpreter") == true ? "on" : "off")}";
+    }
+
+    private static string DefaultIfBlank(string? value, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static void TrackRecentActivity(
+        BackendLlmRequestStatus? request,
+        BackendLlmFailureStatus? failure,
+        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
+        ref string lastRequestEventKey,
+        ref string lastFailureEventKey,
+        Func<bool> getIsPinned,
+        Func<BackendRecentActivityItem?> getSelectedItem,
+        Action<BackendRecentActivityItem?> setSelectedItem)
+    {
+        var entries = new List<(DateTimeOffset? CapturedAt, string Key, BackendRecentActivityItem Item, bool IsRequest)>();
+        var hadSelection = getSelectedItem() is not null;
+        BackendRecentActivityItem? newestInserted = null;
+
+        if (request is not null && !string.IsNullOrWhiteSpace(request.Route))
+        {
+            var key = BuildRequestEventKey(request);
+            if (!string.Equals(key, lastRequestEventKey, StringComparison.Ordinal))
+            {
+                entries.Add((ParseCapturedAt(request.CapturedAt), key, BuildRequestActivityItem(request), true));
+            }
+        }
+
+        if (failure is not null && !string.IsNullOrWhiteSpace(failure.Route))
+        {
+            var key = BuildFailureEventKey(failure);
+            if (!string.Equals(key, lastFailureEventKey, StringComparison.Ordinal))
+            {
+                entries.Add((ParseCapturedAt(failure.CapturedAt), key, BuildFailureActivityItem(failure), false));
+            }
+        }
+
+        foreach (var entry in entries.OrderBy(static entry => entry.CapturedAt ?? DateTimeOffset.MinValue))
+        {
+            InsertRecentActivity(recentActivityItems, entry.Item);
+            newestInserted = entry.Item;
+
+            if (entry.IsRequest)
+            {
+                lastRequestEventKey = entry.Key;
+            }
+            else
+            {
+                lastFailureEventKey = entry.Key;
+            }
+        }
+
+        if (!hadSelection && newestInserted is not null)
+        {
+            setSelectedItem(newestInserted);
+        }
+        else if (hadSelection && newestInserted is not null && !getIsPinned())
+        {
+            setSelectedItem(newestInserted);
+        }
+
+        var selectedItem = getSelectedItem();
+
+        if (selectedItem is not null && !recentActivityItems.Contains(selectedItem))
+        {
+            setSelectedItem(recentActivityItems.FirstOrDefault());
+        }
+    }
+
+    private static void InsertRecentActivity(
+        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
+        BackendRecentActivityItem item)
+    {
+        if (item is null || string.IsNullOrWhiteSpace(item.Summary))
+        {
+            return;
+        }
+
+        recentActivityItems.Insert(0, item);
+
+        while (recentActivityItems.Count > 6)
+        {
+            recentActivityItems.RemoveAt(recentActivityItems.Count - 1);
+        }
+    }
+
+    private void ClearActivityHistory(
+        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
+        Action clearSelection,
+        Action clearPinnedState)
+    {
+        recentActivityItems.Clear();
+        clearSelection();
+        clearPinnedState();
+        UpdateCommandStates();
+        NotifyRuntimeSnapshotChanged();
+    }
+
+    private static string BuildRequestEventKey(BackendLlmRequestStatus request)
+    {
+        return $"request|{request.CapturedAt}|{request.Route}|{request.ResponseId}|{request.Model}";
+    }
+
+    private static string BuildFailureEventKey(BackendLlmFailureStatus failure)
+    {
+        return $"failure|{failure.CapturedAt}|{failure.Route}|{failure.Error}";
+    }
+
+    private static BackendRecentActivityItem BuildRequestActivityItem(BackendLlmRequestStatus request)
+    {
+        return new BackendRecentActivityItem
+        {
+            EventKey = BuildRequestEventKey(request),
+            CapturedAt = request.CapturedAt,
+            EventType = "Request",
+            Summary = $"{request.Route} / {DefaultIfBlank(request.Model, "unknown-model")} / {DefaultIfBlank(request.EffectiveApiStyle, "unknown-api")}",
+            Meta = FormatCapturedAt(request.CapturedAt),
+            Detail = FormatLlmRequestDetail(request),
+            IsFailure = false
+        };
+    }
+
+    private static BackendRecentActivityItem BuildFailureActivityItem(BackendLlmFailureStatus failure)
+    {
+        return new BackendRecentActivityItem
+        {
+            EventKey = BuildFailureEventKey(failure),
+            CapturedAt = failure.CapturedAt,
+            EventType = "Failure",
+            Summary = $"{failure.Route} / {DefaultIfBlank(failure.Error, "unknown")}",
+            Meta = FormatCapturedAt(failure.CapturedAt),
+            Detail = $"At {FormatCapturedAt(failure.CapturedAt)} | trigger={FormatLlmFailureTrigger(failure)} | capability={FormatLlmFailureCapability(failure)} | upgrade={FormatLlmFailureUpgrade(failure)} | error={FormatLlmFailureError(failure)}",
+            IsFailure = true
+        };
+    }
+
+    private static DateTimeOffset? ParseCapturedAt(string? capturedAt)
+    {
+        if (DateTimeOffset.TryParse(capturedAt, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
     }
 
     private static string FormatCapturedAt(string capturedAt)
@@ -1321,6 +2209,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _openBackendFolderCommand.RaiseCanExecuteChanged();
         _applyBaseUrlPresetCommand.RaiseCanExecuteChanged();
         _clearLogsCommand.RaiseCanExecuteChanged();
+        _clearQqActivityHistoryCommand.RaiseCanExecuteChanged();
+        _clearWechatActivityHistoryCommand.RaiseCanExecuteChanged();
     }
 
     private void RunOnUiDispatcher(Action action, DispatcherPriority priority = DispatcherPriority.Normal)

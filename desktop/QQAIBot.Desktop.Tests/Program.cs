@@ -28,6 +28,10 @@ await RunTestAsync("LocalEnvConfigFallbackReader load does not create env files 
 await RunTestAsync("TestEnvConfigSnapshotWriter saves ALLOWED_CHAT_IDS only", TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter + fallback reader round-trip OpenAI reasoning, verbosity, and tool flags", TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync);
 await RunTestAsync("PathDiscoveryService identifies backend root", TestPathDiscoveryServiceBackendRootAsync);
+await RunTestAsync("DesktopActivityStatePolicy normalizes selection and retention semantics", TestDesktopActivityStatePolicySemanticsAsync);
+await RunTestAsync("LocalActivityStateStore round-trips and normalizes persisted activity state", TestLocalActivityStateStoreRoundTripAsync);
+await RunTestAsync("LocalActivityStateStore prunes activity older than the retention window", TestLocalActivityStateStoreRetentionAsync);
+await RunTestAsync("LocalActivityStateStore drops incompatible versions and deletes default state files", TestLocalActivityStateStoreVersionCleanupAsync);
 await RunTestAsync("BackendControlApiService uses camelCase control API contract", TestBackendControlApiServiceCamelCaseContractAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
@@ -51,6 +55,7 @@ await RunTestAsync("MainViewModel rejects unknown control API config failures be
 await RunTestAsync("MainViewModel loads through recovered control API before file fallback", TestMainViewModelLoadsThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel surfaces rejected control API saves without env fallback or recovery", TestMainViewModelSurfacesRejectedControlApiSaveAsync);
+await RunTestAsync("MainViewModel restores local activity state for recent events and pin/filter preferences", TestMainViewModelRestoresLocalActivityStateAsync);
 await RunTestAsync("MainWindow auto-starts backend when control API is unreachable on load", TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync);
 await RunTestAsync("MainWindow external activation restores minimized window and triggers ensure-runtime", TestMainWindowExternalActivationAsync);
 await RunTestAsync("MainWindow hides to tray when minimized and shows tray balloon", TestMainWindowTrayMinimizeBehaviorAsync);
@@ -206,6 +211,214 @@ Task TestPathDiscoveryServiceBackendRootAsync()
     return Task.CompletedTask;
 }
 
+Task TestLocalActivityStateStoreRoundTripAsync()
+{
+    var storeRootPath = Path.Combine(Path.GetTempPath(), $"desktop-activity-store-{Guid.NewGuid():N}");
+    var backendRootPath = Path.Combine(Path.GetTempPath(), $"desktop-backend-{Guid.NewGuid():N}");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(storeRootPath);
+    var store = new LocalActivityStateStore(
+        storeRootPath,
+        new DesktopActivityStatePolicy
+        {
+            Version = 1,
+            MaxRecentActivitiesPerChannel = 4,
+            RetentionWindow = TimeSpan.FromDays(30)
+        },
+        storagePolicy);
+
+    store.Save(
+        backendRootPath,
+        new DesktopActivityState
+        {
+            Version = 1,
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-1",
+                    CapturedAt = DateTimeOffset.UtcNow.ToString("O"),
+                    EventType = "Request",
+                    Summary = "request summary",
+                    Meta = "meta",
+                    Detail = "detail"
+                },
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-1",
+                    CapturedAt = DateTimeOffset.UtcNow.ToString("O"),
+                    EventType = "Request",
+                    Summary = "duplicate should drop",
+                    Meta = "meta",
+                    Detail = "detail"
+                }
+            ],
+            WechatRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "fail-1",
+                    CapturedAt = DateTimeOffset.UtcNow.ToString("O"),
+                    EventType = "Failure",
+                    Summary = "failure summary",
+                    Meta = "meta",
+                    Detail = "detail",
+                    IsFailure = true
+                }
+            ],
+            SelectedQqEventKey = "req-1",
+            SelectedWechatEventKey = "fail-1",
+            PinSelectedQqActivity = true,
+            ShowOnlyWechatFailures = true
+        });
+
+    var restored = store.Load(backendRootPath);
+
+    AssertEqual(1, restored.Version, "LocalActivityStateStore should normalize to the current version.");
+    AssertEqual(1, restored.QqRecentActivities.Count, "LocalActivityStateStore should deduplicate recent activity items.");
+    AssertEqual("req-1", restored.SelectedQqEventKey, "LocalActivityStateStore should retain valid selected QQ event keys.");
+    AssertEqual("fail-1", restored.SelectedWechatEventKey, "LocalActivityStateStore should retain valid selected Wechat event keys.");
+    AssertTrue(restored.PinSelectedQqActivity, "LocalActivityStateStore should preserve pin state.");
+    AssertTrue(restored.ShowOnlyWechatFailures, "LocalActivityStateStore should preserve filter state.");
+    return Task.CompletedTask;
+}
+
+Task TestDesktopActivityStatePolicySemanticsAsync()
+{
+    var policy = new DesktopActivityStatePolicy
+    {
+        Version = 3,
+        MaxRecentActivitiesPerChannel = 2,
+        RetentionWindow = TimeSpan.FromDays(7)
+    };
+    var now = DateTimeOffset.UtcNow;
+    var normalized = policy.Normalize(
+        new DesktopActivityState
+        {
+            Version = 3,
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-old",
+                    CapturedAt = now.AddDays(-30).ToString("O"),
+                    EventType = "Request",
+                    Summary = "old"
+                },
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-new",
+                    CapturedAt = now.ToString("O"),
+                    EventType = "Request",
+                    Summary = "new"
+                }
+            ],
+            SelectedQqEventKey = "missing"
+        });
+
+    AssertNotNull(normalized, "DesktopActivityStatePolicy should normalize compatible states.");
+    AssertEqual(3, normalized!.Version, "DesktopActivityStatePolicy should preserve configured version.");
+    AssertEqual(1, normalized.QqRecentActivities.Count, "DesktopActivityStatePolicy should prune activities outside the retention window.");
+    AssertEqual(string.Empty, normalized.SelectedQqEventKey, "DesktopActivityStatePolicy should clear invalid selected event keys.");
+    AssertEqual(string.Empty, policy.ResolveSelectedEventKey(normalized.QqRecentActivities, "missing"), "DesktopActivityStatePolicy should reject unknown selection keys.");
+    AssertEqual("req-new", policy.ResolveSelectedEventKey(normalized.QqRecentActivities, "req-new"), "DesktopActivityStatePolicy should accept valid selection keys.");
+    var snapshot = policy.CreateSnapshot(
+        normalized.QqRecentActivities,
+        normalized.WechatRecentActivities,
+        normalized.QqRecentActivities.First(),
+        null,
+        pinSelectedQqActivity: true,
+        pinSelectedWechatActivity: false,
+        showOnlyQqFailures: false,
+        showOnlyWechatFailures: true);
+    AssertEqual(3, snapshot.Version, "DesktopActivityStatePolicy should stamp snapshots with the configured version.");
+    AssertEqual("req-new", snapshot.SelectedQqEventKey, "DesktopActivityStatePolicy should persist selected event keys through snapshot creation.");
+    AssertEqual(null, policy.ResolveSelectedItem(normalized.QqRecentActivities, "missing"), "DesktopActivityStatePolicy should resolve missing selected items to null.");
+    AssertEqual("req-new", policy.ResolveSelectedItem(normalized.QqRecentActivities, "req-new")?.EventKey ?? string.Empty, "DesktopActivityStatePolicy should resolve selected items by key.");
+    return Task.CompletedTask;
+}
+
+Task TestLocalActivityStateStoreRetentionAsync()
+{
+    var storeRootPath = Path.Combine(Path.GetTempPath(), $"desktop-activity-store-{Guid.NewGuid():N}");
+    var backendRootPath = Path.Combine(Path.GetTempPath(), $"desktop-backend-{Guid.NewGuid():N}");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(storeRootPath);
+    var store = new LocalActivityStateStore(
+        storeRootPath,
+        new DesktopActivityStatePolicy
+        {
+            Version = 1,
+            MaxRecentActivitiesPerChannel = 6,
+            RetentionWindow = TimeSpan.FromDays(7)
+        },
+        storagePolicy);
+    var now = DateTimeOffset.UtcNow;
+
+    store.Save(
+        backendRootPath,
+        new DesktopActivityState
+        {
+            Version = 1,
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-old",
+                    CapturedAt = now.AddDays(-30).ToString("O"),
+                    EventType = "Request",
+                    Summary = "old request",
+                    Meta = "old",
+                    Detail = "old detail"
+                },
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-new",
+                    CapturedAt = now.ToString("O"),
+                    EventType = "Request",
+                    Summary = "new request",
+                    Meta = "new",
+                    Detail = "new detail"
+                }
+            ]
+        });
+
+    var restored = store.Load(backendRootPath);
+
+    AssertEqual(1, restored.QqRecentActivities.Count, "LocalActivityStateStore should prune activity older than the retention window.");
+    AssertEqual("req-new", restored.QqRecentActivities[0].EventKey, "LocalActivityStateStore should retain recent activity inside the retention window.");
+    return Task.CompletedTask;
+}
+
+Task TestLocalActivityStateStoreVersionCleanupAsync()
+{
+    var storeRootPath = Path.Combine(Path.GetTempPath(), $"desktop-activity-store-{Guid.NewGuid():N}");
+    var backendRootPath = Path.Combine(Path.GetTempPath(), $"desktop-backend-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(storeRootPath);
+    var storagePolicy = new DesktopActivityStateStoragePolicy(storeRootPath);
+    var store = new LocalActivityStateStore(
+        storeRootPath,
+        new DesktopActivityStatePolicy
+        {
+            Version = 2,
+            MaxRecentActivitiesPerChannel = 6,
+            RetentionWindow = TimeSpan.FromDays(14)
+        },
+        storagePolicy);
+    var filePath = storagePolicy.ResolveStateFilePath(backendRootPath);
+
+    File.WriteAllText(
+        filePath,
+        "{\"version\":999,\"qqRecentActivities\":[{\"eventKey\":\"req-1\"}]}",
+        Encoding.UTF8);
+
+    var restored = store.Load(backendRootPath);
+    AssertEqual(0, restored.QqRecentActivities.Count, "Incompatible activity-state versions should be dropped.");
+    AssertFalse(File.Exists(filePath), "Loading incompatible activity-state versions should clean up the persisted file.");
+
+    store.Save(backendRootPath, new DesktopActivityState());
+    AssertFalse(File.Exists(filePath), "Saving an empty/default activity state should delete the persisted file.");
+    return Task.CompletedTask;
+}
+
 async Task TestBackendControlApiServiceCamelCaseContractAsync()
 {
     var port = GetFreeTcpPort();
@@ -255,11 +468,38 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                                 lastQqLlmRequest = new
                                 {
                                     route = "default",
+                                    routeReason = "directive:/ai+web_search",
+                                    matchedPrefix = "/ai",
                                     model = "gpt-5.4",
                                     effectiveApiStyle = "responses",
                                     effectiveReasoningEffort = "medium",
                                     effectiveTextVerbosity = "medium",
                                     effectiveTools = new[] { "web_search" },
+                                    decisionSummary = new
+                                    {
+                                        trigger = new
+                                        {
+                                            kind = "directive",
+                                            matchedPrefix = "/ai"
+                                        },
+                                        reasonTags = new[] { "directive:/ai", "web_search" },
+                                        reasonGroups = new
+                                        {
+                                            triggerReasons = new[] { "directive:/ai" },
+                                            capabilityReasons = new[] { "web_search" },
+                                            upgradeReasons = Array.Empty<string>()
+                                        },
+                                        requestedCapabilities = new
+                                        {
+                                            reasoningEffort = "medium",
+                                            textVerbosity = "medium",
+                                            enableWebSearch = true,
+                                            enableCodeInterpreter = false,
+                                            needsResponsesCapabilities = true
+                                        },
+                                        routeReason = "directive:/ai+web_search",
+                                        matchedPrefix = "/ai"
+                                    },
                                     imageCount = 0
                                 }
                             });
@@ -308,6 +548,9 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     AssertTrue(status.WechatRuntimeReady, "WechatRuntimeReady should deserialize from camelCase.");
     AssertEqual("default", status.LastQqLlmRequest?.Route ?? string.Empty, "LastQqLlmRequest route should deserialize from camelCase.");
     AssertEqual("responses", status.LastQqLlmRequest?.EffectiveApiStyle ?? string.Empty, "LastQqLlmRequest api style should deserialize from camelCase.");
+    AssertEqual("directive", status.LastQqLlmRequest?.DecisionSummary?.Trigger?.Kind ?? string.Empty, "DecisionSummary trigger kind should deserialize from camelCase.");
+    AssertEqual("/ai", status.LastQqLlmRequest?.DecisionSummary?.MatchedPrefix ?? string.Empty, "DecisionSummary matchedPrefix should deserialize from camelCase.");
+    AssertTrue(status.LastQqLlmRequest?.DecisionSummary?.ReasonGroups?.CapabilityReasons?.Contains("web_search") == true, "DecisionSummary capability reasons should deserialize from camelCase.");
 
     var saveResult = await service.TrySaveConfigAsync(
         new BotConfig
@@ -838,6 +1081,7 @@ async Task TestMainWindowSmokeAutomationAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
 
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -851,7 +1095,8 @@ async Task TestMainWindowSmokeAutomationAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -886,8 +1131,100 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("OpenAiAdvancedEnableCodeInterpreterCheckBox not found.");
                 var latestQqLlmSummaryTextBlock = window.FindName("LatestQqLlmSummaryTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("LatestQqLlmSummaryTextBlock not found.");
+                var latestQqActivitySummaryTextBlock = window.FindName("LatestQqActivitySummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqActivitySummaryTextBlock not found.");
+                var qqFailuresOnlyToggleButton = window.FindName("QqFailuresOnlyToggleButton") as System.Windows.Controls.Primitives.ToggleButton
+                    ?? throw new InvalidOperationException("QqFailuresOnlyToggleButton not found.");
+                var qqPinSelectionToggleButton = window.FindName("QqPinSelectionToggleButton") as System.Windows.Controls.Primitives.ToggleButton
+                    ?? throw new InvalidOperationException("QqPinSelectionToggleButton not found.");
+                var clearQqActivityHistoryButton = window.FindName("ClearQqActivityHistoryButton") as Button
+                    ?? throw new InvalidOperationException("ClearQqActivityHistoryButton not found.");
+                var latestQqRecentActivityListBox = window.FindName("LatestQqRecentActivityListBox") as ListBox
+                    ?? throw new InvalidOperationException("LatestQqRecentActivityListBox not found.");
+                var selectedQqRecentActivitySummaryTextBlock = window.FindName("SelectedQqRecentActivitySummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedQqRecentActivitySummaryTextBlock not found.");
+                var selectedQqRecentActivityMetaTextBlock = window.FindName("SelectedQqRecentActivityMetaTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedQqRecentActivityMetaTextBlock not found.");
+                var selectedQqRecentActivityDetailTextBlock = window.FindName("SelectedQqRecentActivityDetailTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedQqRecentActivityDetailTextBlock not found.");
+                var latestQqActivityStateTextBlock = window.FindName("LatestQqActivityStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqActivityStateTextBlock not found.");
+                var latestQqLatestSuccessTextBlock = window.FindName("LatestQqLatestSuccessTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqLatestSuccessTextBlock not found.");
+                var latestQqLatestFailureTextBlock = window.FindName("LatestQqLatestFailureTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqLatestFailureTextBlock not found.");
+                var latestQqRecoveryTextBlock = window.FindName("LatestQqRecoveryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqRecoveryTextBlock not found.");
+                var latestQqRequestTimelineTextBlock = window.FindName("LatestQqRequestTimelineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqRequestTimelineTextBlock not found.");
+                var latestQqDecisionTriggerTextBlock = window.FindName("LatestQqDecisionTriggerTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqDecisionTriggerTextBlock not found.");
+                var latestQqDecisionCapabilityTextBlock = window.FindName("LatestQqDecisionCapabilityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqDecisionCapabilityTextBlock not found.");
+                var latestQqDecisionUpgradeTextBlock = window.FindName("LatestQqDecisionUpgradeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqDecisionUpgradeTextBlock not found.");
+                var latestQqRequestedCapabilitiesTextBlock = window.FindName("LatestQqRequestedCapabilitiesTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqRequestedCapabilitiesTextBlock not found.");
                 var latestWechatLlmSummaryTextBlock = window.FindName("LatestWechatLlmSummaryTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("LatestWechatLlmSummaryTextBlock not found.");
+                var latestWechatActivitySummaryTextBlock = window.FindName("LatestWechatActivitySummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatActivitySummaryTextBlock not found.");
+                var wechatFailuresOnlyToggleButton = window.FindName("WechatFailuresOnlyToggleButton") as System.Windows.Controls.Primitives.ToggleButton
+                    ?? throw new InvalidOperationException("WechatFailuresOnlyToggleButton not found.");
+                var wechatPinSelectionToggleButton = window.FindName("WechatPinSelectionToggleButton") as System.Windows.Controls.Primitives.ToggleButton
+                    ?? throw new InvalidOperationException("WechatPinSelectionToggleButton not found.");
+                var clearWechatActivityHistoryButton = window.FindName("ClearWechatActivityHistoryButton") as Button
+                    ?? throw new InvalidOperationException("ClearWechatActivityHistoryButton not found.");
+                var latestWechatRecentActivityListBox = window.FindName("LatestWechatRecentActivityListBox") as ListBox
+                    ?? throw new InvalidOperationException("LatestWechatRecentActivityListBox not found.");
+                var selectedWechatRecentActivitySummaryTextBlock = window.FindName("SelectedWechatRecentActivitySummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedWechatRecentActivitySummaryTextBlock not found.");
+                var selectedWechatRecentActivityMetaTextBlock = window.FindName("SelectedWechatRecentActivityMetaTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedWechatRecentActivityMetaTextBlock not found.");
+                var selectedWechatRecentActivityDetailTextBlock = window.FindName("SelectedWechatRecentActivityDetailTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedWechatRecentActivityDetailTextBlock not found.");
+                var latestWechatActivityStateTextBlock = window.FindName("LatestWechatActivityStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatActivityStateTextBlock not found.");
+                var latestWechatLatestSuccessTextBlock = window.FindName("LatestWechatLatestSuccessTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatLatestSuccessTextBlock not found.");
+                var latestWechatLatestFailureTextBlock = window.FindName("LatestWechatLatestFailureTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatLatestFailureTextBlock not found.");
+                var latestWechatRecoveryTextBlock = window.FindName("LatestWechatRecoveryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatRecoveryTextBlock not found.");
+                var latestWechatRequestTimelineTextBlock = window.FindName("LatestWechatRequestTimelineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatRequestTimelineTextBlock not found.");
+                var latestWechatDecisionTriggerTextBlock = window.FindName("LatestWechatDecisionTriggerTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatDecisionTriggerTextBlock not found.");
+                var latestWechatDecisionCapabilityTextBlock = window.FindName("LatestWechatDecisionCapabilityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatDecisionCapabilityTextBlock not found.");
+                var latestWechatDecisionUpgradeTextBlock = window.FindName("LatestWechatDecisionUpgradeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatDecisionUpgradeTextBlock not found.");
+                var latestWechatRequestedCapabilitiesTextBlock = window.FindName("LatestWechatRequestedCapabilitiesTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatRequestedCapabilitiesTextBlock not found.");
+                var latestQqFailureSummaryTextBlock = window.FindName("LatestQqFailureSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureSummaryTextBlock not found.");
+                var latestQqFailureTimelineTextBlock = window.FindName("LatestQqFailureTimelineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureTimelineTextBlock not found.");
+                var latestQqFailureTriggerTextBlock = window.FindName("LatestQqFailureTriggerTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureTriggerTextBlock not found.");
+                var latestQqFailureCapabilityTextBlock = window.FindName("LatestQqFailureCapabilityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureCapabilityTextBlock not found.");
+                var latestQqFailureUpgradeTextBlock = window.FindName("LatestQqFailureUpgradeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureUpgradeTextBlock not found.");
+                var latestQqFailureErrorTextBlock = window.FindName("LatestQqFailureErrorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestQqFailureErrorTextBlock not found.");
+                var latestWechatFailureSummaryTextBlock = window.FindName("LatestWechatFailureSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureSummaryTextBlock not found.");
+                var latestWechatFailureTimelineTextBlock = window.FindName("LatestWechatFailureTimelineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureTimelineTextBlock not found.");
+                var latestWechatFailureTriggerTextBlock = window.FindName("LatestWechatFailureTriggerTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureTriggerTextBlock not found.");
+                var latestWechatFailureCapabilityTextBlock = window.FindName("LatestWechatFailureCapabilityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureCapabilityTextBlock not found.");
+                var latestWechatFailureUpgradeTextBlock = window.FindName("LatestWechatFailureUpgradeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureUpgradeTextBlock not found.");
+                var latestWechatFailureErrorTextBlock = window.FindName("LatestWechatFailureErrorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestWechatFailureErrorTextBlock not found.");
                 var runtimeReadyText = viewModel.RuntimeReadyText;
                 var wechatRuntimeReadyText = viewModel.WechatRuntimeReadyText;
                 var saveButton = window.FindName("SaveButton") as Button
@@ -905,6 +1242,112 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual(true, advancedCodeInterpreterCheckBox.IsChecked ?? false, "Advanced code interpreter checkbox should reflect loaded config.");
                 AssertEqual("default / gpt-5.4 / responses", latestQqLlmSummaryTextBlock.Text, "Latest QQ LLM summary should reflect runtime status.");
                 AssertEqual("advanced / gpt-5.4 / responses", latestWechatLlmSummaryTextBlock.Text, "Latest Wechat LLM summary should reflect runtime status.");
+                AssertContains(latestQqActivitySummaryTextBlock.Text, "Latest event: request", "Latest QQ activity summary should reflect recovery when request is newer than failure.");
+                AssertEqual(2, latestQqRecentActivityListBox.Items.Count, "Latest QQ recent activity list should include two events.");
+                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / gpt-5.4 / responses", "Selected QQ recent activity summary should show the latest request event.");
+                AssertContains(selectedQqRecentActivityMetaTextBlock.Text, "2026-03-24", "Selected QQ recent activity meta should show the captured time.");
+                AssertContains(selectedQqRecentActivityDetailTextBlock.Text, "trigger=default", "Selected QQ recent activity detail should show the request detail.");
+                AssertEqual("Recovered after failure", latestQqActivityStateTextBlock.Text, "Latest QQ activity state should reflect recovery.");
+                AssertContains(latestQqLatestSuccessTextBlock.Text, "Success |", "Latest QQ latest success should render activity checkpoint.");
+                AssertContains(latestQqLatestFailureTextBlock.Text, "Failure |", "Latest QQ latest failure should render activity checkpoint.");
+                AssertContains(latestQqRecoveryTextBlock.Text, "Recovery |", "Latest QQ recovery text should render recovery checkpoint.");
+                AssertContains(latestQqRequestTimelineTextBlock.Text, "Request |", "Latest QQ request timeline should render the request header.");
+                AssertEqual("default", latestQqDecisionTriggerTextBlock.Text, "Latest QQ decision trigger should reflect structured inspection binding.");
+                AssertEqual("default", latestQqDecisionCapabilityTextBlock.Text, "Latest QQ decision capability should reflect structured inspection binding.");
+                AssertEqual("none", latestQqDecisionUpgradeTextBlock.Text, "Latest QQ decision upgrade should reflect structured inspection binding.");
+                AssertContains(latestQqRequestedCapabilitiesTextBlock.Text, "reasoning=medium", "Latest QQ requested capabilities should reflect structured inspection binding.");
+                AssertContains(latestWechatActivitySummaryTextBlock.Text, "Latest event: failure", "Latest Wechat activity summary should reflect failure when failure is newer than request.");
+                AssertEqual(2, latestWechatRecentActivityListBox.Items.Count, "Latest Wechat recent activity list should include two events.");
+                AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "advanced / provider rejected request", "Selected Wechat recent activity summary should show the latest failure event.");
+                AssertContains(selectedWechatRecentActivityMetaTextBlock.Text, "2026-03-24", "Selected Wechat recent activity meta should show the captured time.");
+                AssertContains(selectedWechatRecentActivityDetailTextBlock.Text, "error=provider rejected request", "Selected Wechat recent activity detail should show the failure detail.");
+                AssertEqual("Failure is latest event", latestWechatActivityStateTextBlock.Text, "Latest Wechat activity state should reflect failure-latest state.");
+                AssertContains(latestWechatLatestSuccessTextBlock.Text, "Success |", "Latest Wechat latest success should render activity checkpoint.");
+                AssertContains(latestWechatLatestFailureTextBlock.Text, "Failure |", "Latest Wechat latest failure should render activity checkpoint.");
+                AssertEqual("Recovery | pending", latestWechatRecoveryTextBlock.Text, "Latest Wechat recovery text should reflect pending recovery.");
+                AssertContains(latestWechatRequestTimelineTextBlock.Text, "Request |", "Latest Wechat request timeline should render the request header.");
+                AssertEqual("directive:/gpt", latestWechatDecisionTriggerTextBlock.Text, "Latest Wechat decision trigger should reflect structured inspection binding.");
+                AssertEqual("default", latestWechatDecisionCapabilityTextBlock.Text, "Latest Wechat decision capability should reflect structured inspection binding.");
+                AssertEqual("none", latestWechatDecisionUpgradeTextBlock.Text, "Latest Wechat decision upgrade should reflect structured inspection binding.");
+                AssertContains(latestWechatRequestedCapabilitiesTextBlock.Text, "code=on", "Latest Wechat requested capabilities should reflect structured inspection binding.");
+                AssertContains(latestQqFailureSummaryTextBlock.Text, "default /", "Latest QQ failure summary should reflect structured failure binding.");
+                AssertContains(latestQqFailureTimelineTextBlock.Text, "Failure |", "Latest QQ failure timeline should render the failure header.");
+                AssertEqual("default", latestQqFailureTriggerTextBlock.Text, "Latest QQ failure trigger should reflect structured failure binding.");
+                AssertEqual("web_search", latestQqFailureCapabilityTextBlock.Text, "Latest QQ failure capability should reflect structured failure binding.");
+                AssertEqual("none", latestQqFailureUpgradeTextBlock.Text, "Latest QQ failure upgrade should reflect structured failure binding.");
+                AssertEqual("search timed out", latestQqFailureErrorTextBlock.Text, "Latest QQ failure error should reflect structured failure binding.");
+                AssertContains(latestWechatFailureSummaryTextBlock.Text, "advanced /", "Latest Wechat failure summary should reflect structured failure binding.");
+                AssertContains(latestWechatFailureTimelineTextBlock.Text, "Failure |", "Latest Wechat failure timeline should render the failure header.");
+                AssertEqual("directive:/gpt", latestWechatFailureTriggerTextBlock.Text, "Latest Wechat failure trigger should reflect structured failure binding.");
+                AssertEqual("default", latestWechatFailureCapabilityTextBlock.Text, "Latest Wechat failure capability should reflect structured failure binding.");
+                AssertEqual("capability_upgrade", latestWechatFailureUpgradeTextBlock.Text, "Latest Wechat failure upgrade should reflect structured failure binding.");
+                AssertEqual("provider rejected request", latestWechatFailureErrorTextBlock.Text, "Latest Wechat failure error should reflect structured failure binding.");
+                AssertContains(viewModel.LatestQqLlmDetailText, "trigger=default", "Latest QQ LLM detail should prefer structured decision trigger.");
+                AssertContains(viewModel.LatestQqLlmDetailText, "capability=default", "Latest QQ LLM detail should show structured capability reasons.");
+                AssertContains(viewModel.LatestQqLlmDetailText, "upgrade=none", "Latest QQ LLM detail should show structured upgrade reasons.");
+                AssertContains(viewModel.LatestWechatLlmDetailText, "trigger=directive:/gpt", "Latest Wechat LLM detail should prefer structured directive trigger.");
+                AssertContains(viewModel.LatestWechatLlmDetailText, "capability=default", "Latest Wechat LLM detail should show structured capability reasons when none are present.");
+                AssertContains(viewModel.LatestWechatLlmDetailText, "upgrade=none", "Latest Wechat LLM detail should show structured upgrade reasons when none are present.");
+                AssertFalse(qqPinSelectionToggleButton.IsChecked ?? true, "QQ pin toggle should be off by default.");
+                AssertFalse(wechatPinSelectionToggleButton.IsChecked ?? true, "Wechat pin toggle should be off by default.");
+
+                qqPinSelectionToggleButton.IsChecked = true;
+                var applyStatusMethod = typeof(MainViewModel).GetMethod(
+                    "ApplyBackendRuntimeStatus",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("ApplyBackendRuntimeStatus not found.");
+                fakeBackend.Status!.LastQqLlmRequest = new BackendLlmRequestStatus
+                {
+                    Route = "advanced",
+                    Model = "gpt-5.4-mini",
+                    EffectiveApiStyle = "responses",
+                    EffectiveReasoningEffort = "high",
+                    EffectiveTextVerbosity = "high",
+                    EffectiveTools = ["web_search"],
+                    DecisionSummary = new BackendDecisionSummary
+                    {
+                        Trigger = new BackendDecisionTrigger
+                        {
+                            Kind = "directive",
+                            MatchedPrefix = "/vision"
+                        },
+                        ReasonTags = ["directive:/vision"],
+                        ReasonGroups = new BackendDecisionReasonGroups
+                        {
+                            TriggerReasons = ["directive:/vision"],
+                            CapabilityReasons = [],
+                            UpgradeReasons = []
+                        },
+                        RequestedCapabilities = new BackendRequestedCapabilities
+                        {
+                            ReasoningEffort = "high",
+                            TextVerbosity = "high",
+                            EnableWebSearch = true,
+                            EnableCodeInterpreter = false,
+                            NeedsResponsesCapabilities = true
+                        },
+                        RouteReason = "directive:/vision",
+                        MatchedPrefix = "/vision"
+                    },
+                    ImageCount = 1,
+                    CapturedAt = "2026-03-24T00:00:05.000Z",
+                    ResponseId = "resp-new-1"
+                };
+                applyStatusMethod.Invoke(viewModel, [fakeBackend.Status, true]);
+                await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 3, "QQ recent activity grows after pinned update");
+                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / gpt-5.4 / responses", "Pinned QQ selection should remain on the prior event after a newer request arrives.");
+
+                qqFailuresOnlyToggleButton.IsChecked = true;
+                wechatFailuresOnlyToggleButton.IsChecked = true;
+                await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 1, "QQ failures-only filter");
+                await WaitForAsync(() => latestWechatRecentActivityListBox.Items.Count == 1, "Wechat failures-only filter");
+                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / search timed out", "QQ failures-only filter should select the failure event.");
+                AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "advanced / provider rejected request", "Wechat failures-only filter should keep the failure event selected.");
+                clearQqActivityHistoryButton.Command.Execute(null);
+                await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 0, "QQ clear activity history");
+                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "Select a QQ activity event", "Clearing QQ activity history should clear the selected detail.");
+                AssertFalse(qqPinSelectionToggleButton.IsChecked ?? true, "Clearing QQ activity history should reset the pin toggle.");
+                AssertTrue(clearWechatActivityHistoryButton.Command.CanExecute(null), "Wechat clear activity history button should be enabled while events exist.");
                 AssertEqual("QQ channel ready", runtimeReadyText, "Runtime ready text should reflect runtime status.");
                 AssertEqual("Wechat channel ready", wechatRuntimeReadyText, "Wechat runtime ready text should reflect runtime status.");
 
@@ -952,6 +1395,7 @@ async Task TestMainViewModelDisposeDoesNotStopBackendProcessAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     try
@@ -964,7 +1408,8 @@ async Task TestMainViewModelDisposeDoesNotStopBackendProcessAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
 
             fakeBotProcess.Start(rootPath);
             await viewModel.DisposeAsync();
@@ -987,6 +1432,7 @@ async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var notifications = new List<TrayNotification>();
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -1002,7 +1448,8 @@ async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             viewModel.NotificationRequested += (_, notification) => notifications.Add(notification);
 
             try
@@ -1041,6 +1488,7 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Config = null;
@@ -1057,7 +1505,8 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
 
             try
             {
@@ -1096,6 +1545,7 @@ async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -1112,7 +1562,8 @@ async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
 
             try
             {
@@ -1145,6 +1596,7 @@ async Task TestMainViewModelSavesThroughRecoveredControlApiAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -1160,7 +1612,8 @@ async Task TestMainViewModelSavesThroughRecoveredControlApiAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
 
             try
             {
@@ -1195,6 +1648,7 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.SaveFailureKind = BackendControlApiFailureKind.Rejected;
@@ -1210,7 +1664,8 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
 
             try
             {
@@ -1248,6 +1703,92 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
     }
 }
 
+async Task TestMainViewModelRestoresLocalActivityStateAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-activity-restore-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeActivityStateStore.Seed(
+        rootPath,
+        new DesktopActivityState
+        {
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "request-1",
+                    EventType = "Request",
+                    Summary = "default / gpt-5.4 / responses",
+                    Meta = "2026-03-24 08:00:00",
+                    Detail = "request detail",
+                    IsFailure = false
+                }
+            ],
+            WechatRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "failure-1",
+                    EventType = "Failure",
+                    Summary = "advanced / provider rejected request",
+                    Meta = "2026-03-24 08:00:01",
+                    Detail = "failure detail",
+                    IsFailure = true
+                }
+            ],
+            SelectedQqEventKey = "request-1",
+            SelectedWechatEventKey = "failure-1",
+            PinSelectedQqActivity = true,
+            PinSelectedWechatActivity = false,
+            ShowOnlyQqFailures = false,
+            ShowOnlyWechatFailures = true
+        });
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                viewModel.BackendRootPath = Path.Combine(rootPath, "missing");
+                viewModel.BackendRootPath = rootPath;
+                AssertEqual(1, viewModel.QqRecentActivities.Count, "QQ recent activities should restore from local store.");
+                AssertEqual(1, viewModel.WechatRecentActivities.Count, "Wechat recent activities should restore from local store.");
+                AssertEqual("default / gpt-5.4 / responses", viewModel.SelectedQqRecentActivitySummaryText, "QQ selected activity should restore from local store.");
+                AssertEqual("advanced / provider rejected request", viewModel.SelectedWechatRecentActivitySummaryText, "Wechat selected activity should restore from local store.");
+                AssertTrue(viewModel.PinSelectedQqActivity, "QQ pin selection should restore from local store.");
+                AssertFalse(viewModel.PinSelectedWechatActivity, "Wechat pin selection should restore from local store.");
+                AssertFalse(viewModel.ShowOnlyQqFailures, "QQ filter should restore from local store.");
+                AssertTrue(viewModel.ShowOnlyWechatFailures, "Wechat filter should restore from local store.");
+                AssertTrue(fakeActivityStateStore.LoadCallCount >= 1, "MainViewModel should load local activity state during initialization or explicit backend-root assignment.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
 async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-ui-auto-start-");
@@ -1256,6 +1797,7 @@ async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -1270,7 +1812,8 @@ async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -1304,6 +1847,7 @@ async Task TestMainWindowExternalActivationAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     try
@@ -1316,7 +1860,8 @@ async Task TestMainWindowExternalActivationAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: true,
                 ensureRuntimeOnStartup: false,
@@ -1363,6 +1908,7 @@ async Task TestMainWindowTrayMinimizeBehaviorAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var fakeNotifyIcon = new FakeNotifyIconHost();
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -1376,7 +1922,8 @@ async Task TestMainWindowTrayMinimizeBehaviorAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -1419,6 +1966,7 @@ async Task TestMainWindowTrayCloseBehaviorAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var fakeNotifyIcon = new FakeNotifyIconHost();
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -1432,7 +1980,8 @@ async Task TestMainWindowTrayCloseBehaviorAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -1474,6 +2023,7 @@ async Task TestMainWindowTrayMenuActionsAsync()
     var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
     var fakeNotifyIcon = new FakeNotifyIconHost();
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -1487,7 +2037,8 @@ async Task TestMainWindowTrayMenuActionsAsync()
                 fakeAutoStart,
                 fakeLocalFallbackReader,
                 fakeBackend,
-                fakeBotProcess);
+                fakeBotProcess,
+                fakeActivityStateStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -1564,8 +2115,65 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 EffectiveTextVerbosity = "medium",
                 EffectiveTools = [],
                 RouteReason = "default",
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "default",
+                        MatchedPrefix = string.Empty
+                    },
+                    ReasonTags = ["default"],
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        TriggerReasons = [],
+                        CapabilityReasons = [],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        ReasoningEffort = "medium",
+                        TextVerbosity = "medium",
+                        EnableWebSearch = false,
+                        EnableCodeInterpreter = false,
+                        NeedsResponsesCapabilities = true
+                    },
+                    RouteReason = "default",
+                    MatchedPrefix = string.Empty
+                },
                 ImageCount = 0,
-                CapturedAt = "2026-03-24T00:00:00.000Z"
+                CapturedAt = "2026-03-24T00:00:04.000Z"
+            },
+            LastQqLlmFailure = new BackendLlmFailureStatus
+            {
+                Route = "default",
+                RouteReason = "web_search",
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "default",
+                        MatchedPrefix = string.Empty
+                    },
+                    ReasonTags = ["web_search"],
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        TriggerReasons = [],
+                        CapabilityReasons = ["web_search"],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        ReasoningEffort = "high",
+                        TextVerbosity = "high",
+                        EnableWebSearch = true,
+                        EnableCodeInterpreter = false,
+                        NeedsResponsesCapabilities = true
+                    },
+                    RouteReason = "web_search",
+                    MatchedPrefix = string.Empty
+                },
+                Error = "search timed out",
+                CapturedAt = "2026-03-24T00:00:02.000Z"
             },
             LastWechatLlmRequest = new BackendLlmRequestStatus
             {
@@ -1576,8 +2184,65 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 EffectiveTextVerbosity = "high",
                 EffectiveTools = ["web_search", "code_interpreter"],
                 RouteReason = "directive:/gpt",
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "directive",
+                        MatchedPrefix = "/gpt"
+                    },
+                    ReasonTags = ["directive:/gpt"],
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        TriggerReasons = ["directive:/gpt"],
+                        CapabilityReasons = [],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        ReasoningEffort = "high",
+                        TextVerbosity = "high",
+                        EnableWebSearch = true,
+                        EnableCodeInterpreter = true,
+                        NeedsResponsesCapabilities = true
+                    },
+                    RouteReason = "directive:/gpt",
+                    MatchedPrefix = "/gpt"
+                },
                 ImageCount = 1,
                 CapturedAt = "2026-03-24T00:00:01.000Z"
+            },
+            LastWechatLlmFailure = new BackendLlmFailureStatus
+            {
+                Route = "advanced",
+                RouteReason = "directive:/gpt+capability_upgrade",
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "directive",
+                        MatchedPrefix = "/gpt"
+                    },
+                    ReasonTags = ["directive:/gpt", "capability_upgrade"],
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        TriggerReasons = ["directive:/gpt"],
+                        CapabilityReasons = [],
+                        UpgradeReasons = ["capability_upgrade"]
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        ReasoningEffort = "high",
+                        TextVerbosity = "high",
+                        EnableWebSearch = false,
+                        EnableCodeInterpreter = false,
+                        NeedsResponsesCapabilities = true
+                    },
+                    RouteReason = "directive:/gpt+capability_upgrade",
+                    MatchedPrefix = "/gpt"
+                },
+                Error = "provider rejected request",
+                CapturedAt = "2026-03-24T00:00:03.000Z"
             }
         },
         Config = new BackendControlConfigResponse
@@ -1621,13 +2286,15 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 AllowedUserIds = "user-a"
             }
         });
+    var fakeActivityStateStore = new FakeActivityStateStore();
 
     return new DesktopUiTestContext(
         rootPath,
         fakeBackend,
         fakeLocalFallbackReader,
         new FakeAutoStartService(),
-        new FakeBotProcessService());
+        new FakeBotProcessService(),
+        fakeActivityStateStore);
 }
 
 static async Task WaitForAsync(Func<bool> predicate, string label, int timeoutMs = 5000, int intervalMs = 50)
@@ -2220,6 +2887,64 @@ sealed class FakeBotProcessService : IBotProcessService
     }
 }
 
+sealed class FakeActivityStateStore : IActivityStateStore
+{
+    private readonly Dictionary<string, DesktopActivityState> _states = new(StringComparer.OrdinalIgnoreCase);
+
+    public int LoadCallCount { get; private set; }
+
+    public int SaveCallCount { get; private set; }
+
+    public DesktopActivityState Load(string backendRootPath)
+    {
+        LoadCallCount += 1;
+        return _states.TryGetValue(backendRootPath, out var state)
+            ? Clone(state)
+            : new DesktopActivityState();
+    }
+
+    public void Save(string backendRootPath, DesktopActivityState state)
+    {
+        SaveCallCount += 1;
+        _states[backendRootPath] = Clone(state);
+    }
+
+    public void Seed(string backendRootPath, DesktopActivityState state)
+    {
+        _states[backendRootPath] = Clone(state);
+    }
+
+    private static DesktopActivityState Clone(DesktopActivityState state)
+    {
+        return new DesktopActivityState
+        {
+            Version = state.Version,
+            QqRecentActivities = state.QqRecentActivities.Select(CloneItem).ToList(),
+            WechatRecentActivities = state.WechatRecentActivities.Select(CloneItem).ToList(),
+            SelectedQqEventKey = state.SelectedQqEventKey,
+            SelectedWechatEventKey = state.SelectedWechatEventKey,
+            PinSelectedQqActivity = state.PinSelectedQqActivity,
+            PinSelectedWechatActivity = state.PinSelectedWechatActivity,
+            ShowOnlyQqFailures = state.ShowOnlyQqFailures,
+            ShowOnlyWechatFailures = state.ShowOnlyWechatFailures
+        };
+    }
+
+    private static BackendRecentActivityItem CloneItem(BackendRecentActivityItem item)
+    {
+        return new BackendRecentActivityItem
+        {
+            EventKey = item.EventKey,
+            CapturedAt = item.CapturedAt,
+            EventType = item.EventType,
+            Summary = item.Summary,
+            Meta = item.Meta,
+            Detail = item.Detail,
+            IsFailure = item.IsFailure
+        };
+    }
+}
+
 sealed class FakeNotifyIconHost : INotifyIconHost
 {
     public event EventHandler? DoubleClick;
@@ -2256,4 +2981,5 @@ sealed record DesktopUiTestContext(
     FakeBackendControlApiService FakeBackend,
     FakeLocalConfigFallbackReader FakeLocalFallbackReader,
     FakeAutoStartService FakeAutoStart,
-    FakeBotProcessService FakeBotProcess);
+    FakeBotProcessService FakeBotProcess,
+    FakeActivityStateStore FakeActivityStateStore);

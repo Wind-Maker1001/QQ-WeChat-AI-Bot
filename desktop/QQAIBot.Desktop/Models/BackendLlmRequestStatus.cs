@@ -32,6 +32,8 @@ public sealed class BackendLlmRequestStatus
 
     public int ImageCount { get; set; }
 
+    public BackendDecisionSummary? DecisionSummary { get; set; }
+
     public string ChatId { get; set; } = string.Empty;
 
     public string UserId { get; set; } = string.Empty;

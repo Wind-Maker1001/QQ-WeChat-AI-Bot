@@ -9,6 +9,8 @@
     "test": "npm run test:node && npm run test:desktop",
     "test:node": "node --test",
     "test:desktop": "dotnet build ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj -nologo && dotnet run --no-build --project ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj",
+    "setup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install.ps1",
+    "setup:validate": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install.ps1 -ValidateOnly",
     "desktop:acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\desktop-acceptance.ps1",
     "desktop:acceptance:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\desktop-acceptance.ps1 -AutomatedOnly",
     "wechat:bridge:sim": "node ./scripts/wechat-bridge-simulator.mjs",

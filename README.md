@@ -89,6 +89,46 @@ Copy-Item .env.example .env
 
 然后填写 `.env`。
 
+## 安装到本机
+
+如果你想把当前源码仓库或 `npm run release:source` 生成的源码包安装到当前 Windows 用户目录，可以直接运行：
+
+```powershell
+npm run setup:install
+```
+
+默认安装目录：
+
+```text
+%LOCALAPPDATA%\QQAIBot
+```
+
+安装脚本会：
+
+- 复制后端源码、桌面端源码和脚本到安装目录下的 `app/`
+- 如果 `.env` 不存在，就用 `.env.example` 初始化
+- 执行 `npm ci --omit=dev`
+- 执行桌面端 `dotnet publish`
+- 创建桌面和开始菜单快捷方式
+
+只做环境和路径校验，不真正安装：
+
+```powershell
+npm run setup:validate
+```
+
+安装完成后，桌面程序会发布到：
+
+```text
+%LOCALAPPDATA%\QQAIBot\app\desktop-publish\QQAIBot.Desktop.exe
+```
+
+升级方式：
+
+- 解压新的源码发布包或切到新的源码版本
+- 再次运行 `npm run setup:install`
+- 安装脚本会复用现有安装目录，并保留已有 `.env` 和 `data/`
+
 ## 关键配置
 
 ```env
@@ -294,6 +334,12 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 - `NapCat.Shell.Windows.Node`
 - 桌面端 `bin/obj`
 - 临时日志
+
+从发布包安装：
+
+1. 解压 `dist/qq-ai-bot-<version>-<timestamp>.zip`
+2. 进入解压目录
+3. 运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1`
 
 ## Control API
 

@@ -129,6 +129,32 @@ npm run setup:validate
 - 再次运行 `npm run setup:install`
 - 安装脚本会复用现有安装目录，并保留已有 `.env` 和 `data/`
 
+## 卸载
+
+完全卸载当前用户目录下的安装：
+
+```powershell
+npm run setup:uninstall
+```
+
+只卸载程序文件，但保留 `.env` 和 `data/` 以便后续重装：
+
+```powershell
+npm run setup:uninstall:keep-state
+```
+
+如果桌面程序还在运行，可以先手动关闭，或者直接执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1 -ForceStop
+```
+
+说明：
+
+- 卸载脚本会同时清理桌面快捷方式、开始菜单快捷方式和当前用户的开机启动项
+- `-KeepState` 模式会保留安装目录下 `app\.env` 和 `app\data`
+- 之后重新执行 `npm run setup:install` 会继续复用这些状态文件
+
 ## 关键配置
 
 ```env

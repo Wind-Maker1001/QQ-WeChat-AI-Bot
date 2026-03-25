@@ -15,6 +15,7 @@ data/
 dist/
 tmp-backend-out.log
 tmp-backend-err.log
+.codex-run/
 
 # Local NapCat bundle
 NapCat.Shell.Windows.Node/
@@ -22,6 +23,8 @@ NapCat.Shell.Windows.Node/
 # Desktop build output
 desktop/QQAIBot.Desktop/bin/
 desktop/QQAIBot.Desktop/obj/
+desktop/QQAIBot.Desktop.Tests/bin/
+desktop/QQAIBot.Desktop.Tests/obj/
 
 # Editors and OS
 .vscode/

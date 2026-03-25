@@ -6,6 +6,7 @@ export const DEFAULT_CONTROL_API_HOST = '127.0.0.1';
 export const DEFAULT_CONTROL_API_PORT = 3199;
 export const DEFAULT_CONTROL_API_HOST_ENV_KEY = 'QQ_AI_BOT_CONTROL_API_HOST';
 export const DEFAULT_CONTROL_API_PORT_ENV_KEY = 'QQ_AI_BOT_CONTROL_API_PORT';
+export const DEFAULT_CONTROL_API_TOKEN_ENV_KEY = 'QQ_AI_BOT_CONTROL_API_TOKEN';
 
 class ControlApiRequestError extends Error {
   constructor(message, statusCode = 400) {
@@ -26,13 +27,38 @@ export function resolveDefaultControlApiPort() {
   return Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : DEFAULT_CONTROL_API_PORT;
 }
 
-function createJsonResponse(res, statusCode, payload) {
+export function resolveDefaultControlApiToken() {
+  const token = process.env[DEFAULT_CONTROL_API_TOKEN_ENV_KEY];
+  return typeof token === 'string' && token.trim() ? token.trim() : '';
+}
+
+function createJsonResponse(res, statusCode, payload, headers = {}) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
+    ...headers,
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body)
   });
   res.end(body);
+}
+
+function resolveAccessTokenValue(accessToken) {
+  if (typeof accessToken === 'function') {
+    return resolveAccessTokenValue(accessToken());
+  }
+
+  return typeof accessToken === 'string' && accessToken.trim() ? accessToken.trim() : '';
+}
+
+function isAuthorizedRequest(req, accessToken) {
+  const expectedAccessToken = resolveAccessTokenValue(accessToken);
+
+  if (!expectedAccessToken) {
+    return true;
+  }
+
+  const authorization = req.headers.authorization;
+  return typeof authorization === 'string' && authorization.trim() === `Bearer ${expectedAccessToken}`;
 }
 
 async function readJsonBody(req) {
@@ -74,6 +100,7 @@ function resolveErrorStatusCode(error) {
 export function createControlApiServer({
   host = resolveDefaultControlApiHost(),
   port = resolveDefaultControlApiPort(),
+  accessToken = resolveDefaultControlApiToken(),
   logger,
   getStatus,
   getConfig,
@@ -83,6 +110,20 @@ export function createControlApiServer({
 }) {
   const server = http.createServer(async (req, res) => {
     try {
+      if (!isAuthorizedRequest(req, accessToken)) {
+        createJsonResponse(
+          res,
+          401,
+          {
+            error: 'Control API authentication failed.'
+          },
+          {
+            'WWW-Authenticate': 'Bearer realm="qq-ai-bot-control-api"'
+          }
+        );
+        return;
+      }
+
       const method = req.method ?? 'GET';
       const url = new URL(req.url ?? '/', `http://${host}:${port}`);
 

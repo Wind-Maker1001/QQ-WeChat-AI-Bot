@@ -242,3 +242,59 @@ test('control API returns 400 for invalid JSON request bodies', async () => {
     await server.stop();
   }
 });
+
+test('control API rejects unauthorized requests when bearer auth is configured', async () => {
+  let getStatusCalls = 0;
+
+  const server = createControlApiServer({
+    host: '127.0.0.1',
+    port: 0,
+    accessToken: 'control-secret',
+    logger: {
+      error() {}
+    },
+    getStatus: async () => {
+      getStatusCalls += 1;
+      return {
+        runtimeActive: false
+      };
+    },
+    getConfig: async () => ({}),
+    updateConfig: async () => ({}),
+    startRuntime: async () => ({}),
+    stopRuntime: async () => ({})
+  });
+
+  await server.start();
+
+  try {
+    const address = server.getAddress();
+    assert.ok(address);
+
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const unauthorizedResponse = await fetch(`${baseUrl}/status`);
+    assert.equal(unauthorizedResponse.status, 401);
+    assert.equal((await unauthorizedResponse.json()).error, 'Control API authentication failed.');
+    assert.equal(getStatusCalls, 0);
+
+    const wrongTokenResponse = await fetch(`${baseUrl}/status`, {
+      headers: {
+        Authorization: 'Bearer wrong-secret'
+      }
+    });
+    assert.equal(wrongTokenResponse.status, 401);
+    assert.equal(getStatusCalls, 0);
+
+    const authorizedResponse = await fetch(`${baseUrl}/status`, {
+      headers: {
+        Authorization: 'Bearer control-secret'
+      }
+    });
+    assert.equal(authorizedResponse.status, 200);
+    assert.equal((await authorizedResponse.json()).runtimeActive, false);
+    assert.equal(getStatusCalls, 1);
+  } finally {
+    await server.stop();
+  }
+});

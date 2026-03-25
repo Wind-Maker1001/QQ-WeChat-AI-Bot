@@ -18,6 +18,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 {
     private const int ControlApiRecoveryAttemptThreshold = 2;
     private const int ControlApiOutageNotificationThreshold = 3;
+    private const string ControlApiTokenEnvKey = "QQ_AI_BOT_CONTROL_API_TOKEN";
 
     private readonly IAutoStartService _autoStartService;
     private readonly ILocalConfigFallbackReader _localConfigFallbackReader;
@@ -91,6 +92,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private bool? _lastControlApiReachable;
     private int _consecutiveControlApiFailures;
     private bool _controlApiOutageNotified;
+    private bool _controlApiUnauthorizedNotified;
     private bool _controlApiRecoveryInProgress;
     private bool _restoringActivityState;
     private bool _disposed;
@@ -781,6 +783,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             _suspendDirtyTracking = true;
             StatusText = "Loading config...";
+            var localEnvDocument = await LoadLocalEnvDocumentAsync();
             var loadResult = await LoadConfigFromAuthoritativeSourceAsync();
             var apiConfig = loadResult.ApiConfig;
             var apiStatus = loadResult.ApiStatus;
@@ -791,10 +794,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 {
                     Config = BuildConfigCopy(apiConfig)
                 };
+                CopyControlApiToken(localEnvDocument, _envDocument);
             }
             else
             {
-                _envDocument = await _localConfigFallbackReader.LoadAsync(BackendRootPath);
+                _envDocument = localEnvDocument;
             }
 
             ApplyConfigToView(_envDocument.Config);
@@ -833,8 +837,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             return (apiConfig, apiStatus);
         }
 
-        if (configFailure.Kind == BackendControlApiFailureKind.Rejected ||
-            configFailure.Kind == BackendControlApiFailureKind.Unknown)
+        if (IsImmediateControlApiFailure(configFailure))
         {
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(configFailure.Message)
@@ -912,6 +915,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
             StatusText = "Starting backend...";
+            await LoadLocalEnvDocumentAsync(suppressErrors: true);
 
             var existingStatus = await _backendControlApiService.TryGetStatusAsync();
             if (existingStatus is not null)
@@ -925,11 +929,23 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
+            var existingStatusFailure = _backendControlApiService.LastFailure;
+            if (IsImmediateControlApiFailure(existingStatusFailure))
+            {
+                throw new InvalidOperationException(existingStatusFailure.Message);
+            }
+
             _botProcessService.Start(BackendRootPath);
 
             var status = await WaitForBackendControlStatusAsync();
             if (status is null)
             {
+                var waitFailure = _backendControlApiService.LastFailure;
+                if (IsImmediateControlApiFailure(waitFailure))
+                {
+                    throw new InvalidOperationException(waitFailure.Message);
+                }
+
                 StatusText = "Backend started, waiting for control API";
                 return;
             }
@@ -962,6 +978,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             StatusText = "Stopping backend...";
+            await LoadLocalEnvDocumentAsync(suppressErrors: true);
             var stoppedStatus = await _backendControlApiService.TryStopAsync();
 
             if (stoppedStatus is not null)
@@ -983,6 +1000,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                     }
                 );
                 return;
+            }
+
+            var stopFailure = _backendControlApiService.LastFailure;
+            if (IsImmediateControlApiFailure(stopFailure))
+            {
+                throw new InvalidOperationException(stopFailure.Message);
             }
 
             if (_botProcessService.IsRunning)
@@ -1209,6 +1232,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return status;
             }
 
+            if (_backendControlApiService.LastFailure.Kind != BackendControlApiFailureKind.Unreachable)
+            {
+                return null;
+            }
+
             await Task.Delay(300);
         }
 
@@ -1233,10 +1261,28 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async void OnStatusPollTimerTick(object? sender, EventArgs e)
     {
+        await LoadLocalEnvDocumentAsync(suppressErrors: true);
         var status = await _backendControlApiService.TryGetStatusAsync();
+        var statusFailure = _backendControlApiService.LastFailure;
 
         if (status is null)
         {
+            if (statusFailure.Kind != BackendControlApiFailureKind.Unreachable)
+            {
+                _lastControlApiReachable = true;
+                OnPropertyChanged(nameof(IsControlApiReachable));
+
+                if (statusFailure.Kind == BackendControlApiFailureKind.Unauthorized &&
+                    !_controlApiUnauthorizedNotified)
+                {
+                    AddLog("Control API authentication failed. Update QQ_AI_BOT_CONTROL_API_TOKEN in the local .env.");
+                    _controlApiUnauthorizedNotified = true;
+                }
+
+                return;
+            }
+
+            _controlApiUnauthorizedNotified = false;
             _consecutiveControlApiFailures += 1;
             _lastControlApiReachable = false;
             OnPropertyChanged(nameof(IsControlApiReachable));
@@ -1267,6 +1313,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        _controlApiUnauthorizedNotified = false;
         if (_lastControlApiReachable == false && _controlApiOutageNotified)
         {
             AddLog("Control API became reachable again.");
@@ -1534,6 +1581,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _consecutiveControlApiFailures = 0;
         _controlApiOutageNotified = false;
+        _controlApiUnauthorizedNotified = false;
         _controlApiRecoveryInProgress = false;
     }
 
@@ -1548,6 +1596,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
+            await LoadLocalEnvDocumentAsync(suppressErrors: true);
             AddLog($"Control API unreachable; attempting backend recovery ({reason}).");
 
             var existingStatus = await _backendControlApiService.TryGetStatusAsync();
@@ -1556,6 +1605,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 ApplyBackendRuntimeStatus(existingStatus, true);
                 ResetControlApiFailureState();
                 AddLog("Control API recovered before local restart was needed.");
+                return;
+            }
+
+            var existingStatusFailure = _backendControlApiService.LastFailure;
+            if (IsImmediateControlApiFailure(existingStatusFailure))
+            {
+                AddLog($"Control API recovery aborted: {existingStatusFailure.Message}");
                 return;
             }
 
@@ -1572,6 +1628,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 _botProcessService.Detach();
                 ResetControlApiFailureState();
                 AddLog($"Control API recovery succeeded: {startStatus.ControlApiUrl}");
+                return;
+            }
+
+            var startFailure = _backendControlApiService.LastFailure;
+            if (IsImmediateControlApiFailure(startFailure))
+            {
+                AddLog($"Control API recovery aborted: {startFailure.Message}");
                 return;
             }
 
@@ -1599,6 +1662,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<BackendControlConfigResponse> SaveConfigThroughControlApiAsync(BotConfig config)
     {
+        await LoadLocalEnvDocumentAsync(suppressErrors: true);
         var apiResult = await _backendControlApiService.TrySaveConfigAsync(config);
 
         if (apiResult is not null)
@@ -1608,7 +1672,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         var initialFailure = _backendControlApiService.LastFailure;
 
-        if (initialFailure.Kind == BackendControlApiFailureKind.Rejected)
+        if (IsImmediateControlApiFailure(initialFailure))
         {
             throw new InvalidOperationException(initialFailure.Message);
         }
@@ -1617,6 +1681,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         if (currentStatus is null)
         {
+            var currentStatusFailure = _backendControlApiService.LastFailure;
+            if (IsImmediateControlApiFailure(currentStatusFailure))
+            {
+                throw new InvalidOperationException(currentStatusFailure.Message);
+            }
+
             await TryRecoverControlApiAsync("save-config");
             apiResult = await _backendControlApiService.TrySaveConfigAsync(config);
 
@@ -1632,6 +1702,64 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             : finalFailure.Message;
 
         throw new InvalidOperationException(failureMessage);
+    }
+
+    private async Task<EnvDocument> LoadLocalEnvDocumentAsync(bool suppressErrors = false)
+    {
+        if (!IsBackendRootValid)
+        {
+            _backendControlApiService.SetAccessToken(null);
+            return new EnvDocument();
+        }
+
+        try
+        {
+            var document = await _localConfigFallbackReader.LoadAsync(BackendRootPath);
+            ApplyControlApiAccessToken(document);
+            return document;
+        }
+        catch
+        {
+            _backendControlApiService.SetAccessToken(null);
+
+            if (suppressErrors)
+            {
+                return new EnvDocument();
+            }
+
+            throw;
+        }
+    }
+
+    private void ApplyControlApiAccessToken(EnvDocument? document)
+    {
+        if (document?.ExtraValues.TryGetValue(ControlApiTokenEnvKey, out var accessToken) == true &&
+            !string.IsNullOrWhiteSpace(accessToken))
+        {
+            _backendControlApiService.SetAccessToken(accessToken);
+            return;
+        }
+
+        _backendControlApiService.SetAccessToken(null);
+    }
+
+    private static void CopyControlApiToken(EnvDocument? source, EnvDocument target)
+    {
+        if (source?.ExtraValues.TryGetValue(ControlApiTokenEnvKey, out var accessToken) == true)
+        {
+            target.ExtraValues[ControlApiTokenEnvKey] = accessToken;
+            return;
+        }
+
+        target.ExtraValues.Remove(ControlApiTokenEnvKey);
+    }
+
+    private static bool IsImmediateControlApiFailure(BackendControlApiFailure failure)
+    {
+        return failure.Kind is
+            BackendControlApiFailureKind.Rejected or
+            BackendControlApiFailureKind.Unauthorized or
+            BackendControlApiFailureKind.Unknown;
     }
 
     private static string FormatLlmRequestSummary(BackendLlmRequestStatus? request, string emptyText)

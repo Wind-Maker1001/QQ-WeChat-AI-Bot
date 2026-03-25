@@ -6,6 +6,8 @@ public interface IBackendControlApiService : IDisposable
 {
     BackendControlApiFailure LastFailure { get; }
 
+    void SetAccessToken(string? accessToken);
+
     Task<BackendRuntimeStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default);
 
     Task<BackendControlConfigResponse?> TryGetConfigAsync(CancellationToken cancellationToken = default);

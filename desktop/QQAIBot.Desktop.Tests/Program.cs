@@ -33,6 +33,7 @@ await RunTestAsync("LocalActivityStateStore round-trips and normalizes persisted
 await RunTestAsync("LocalActivityStateStore prunes activity older than the retention window", TestLocalActivityStateStoreRetentionAsync);
 await RunTestAsync("LocalActivityStateStore drops incompatible versions and deletes default state files", TestLocalActivityStateStoreVersionCleanupAsync);
 await RunTestAsync("BackendControlApiService uses camelCase control API contract", TestBackendControlApiServiceCamelCaseContractAsync);
+await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
 await RunTestAsync("BackendControlApiService treats empty successful save responses as unknown failures", TestBackendControlApiServiceEmptySaveResponseAsync);
@@ -52,6 +53,7 @@ await RunTestAsync("MainWindow smoke automation binds controls and routes save/s
 await RunTestAsync("MainViewModel dispose does not stop backend launcher ownership after attach", TestMainViewModelDisposeDoesNotStopBackendProcessAsync);
 await RunTestAsync("MainViewModel auto-recovers control API before showing outage warning", TestMainViewModelAutoRecoversControlApiBeforeWarningAsync);
 await RunTestAsync("MainViewModel rejects unknown control API config failures before file fallback", TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync);
+await RunTestAsync("MainViewModel rejects unauthorized control API config failures before file fallback", TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
 await RunTestAsync("MainViewModel loads through recovered control API before file fallback", TestMainViewModelLoadsThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel surfaces rejected control API saves without env fallback or recovery", TestMainViewModelSurfacesRejectedControlApiSaveAsync);
@@ -428,6 +430,7 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     listener.Start();
 
     var seenPutBody = string.Empty;
+    var seenAuthorizationHeaders = new List<string>();
     var serverTask = Task.Run(async () =>
     {
         for (var index = 0; index < 3; index++)
@@ -435,6 +438,7 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
             var context = await listener.GetContextAsync();
             var request = context.Request;
             var response = context.Response;
+            seenAuthorizationHeaders.Add(request.Headers["Authorization"] ?? string.Empty);
 
             try
             {
@@ -536,6 +540,7 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     });
 
     using var service = new BackendControlApiService(new Uri(prefix), TimeSpan.FromSeconds(2));
+    service.SetAccessToken("desktop-secret");
 
     var config = await service.TryGetConfigAsync() ?? throw new InvalidOperationException("Expected config response.");
     AssertEqual("chat-a,chat-b", config.AllowedChatIds, "Config should deserialize allowedChatIds.");
@@ -562,6 +567,44 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     AssertEqual("chat-x,chat-y", saveResult.AllowedChatIds, "Save response should deserialize allowedChatIds.");
     AssertContains(seenPutBody, "\"allowedChatIds\":\"chat-x,chat-y\"", "PUT body should use camelCase allowedChatIds.");
     AssertDoesNotContain(seenPutBody, "allowedGroupIds", "PUT body should not contain legacy field.");
+    AssertTrue(seenAuthorizationHeaders.All(static header => header == "Bearer desktop-secret"), "Control API service should send the configured bearer token on every request.");
+
+    listener.Stop();
+    await serverTask;
+}
+
+async Task TestBackendControlApiServiceUnauthorizedAsync()
+{
+    var port = GetFreeTcpPort();
+    var prefix = $"http://127.0.0.1:{port}/";
+    using var listener = new HttpListener();
+    listener.Prefixes.Add(prefix);
+    listener.Start();
+
+    var serverTask = Task.Run(async () =>
+    {
+        var context = await listener.GetContextAsync();
+        var response = context.Response;
+
+        try
+        {
+            response.StatusCode = 401;
+            await response.OutputStream.WriteAsync(
+                Encoding.UTF8.GetBytes("{\"error\":\"Control API authentication failed.\"}"));
+        }
+        finally
+        {
+            response.Close();
+        }
+    });
+
+    using var service = new BackendControlApiService(new Uri(prefix), TimeSpan.FromSeconds(2));
+    service.SetAccessToken("wrong-token");
+    var config = await service.TryGetConfigAsync();
+
+    AssertEqual(null, config, "Unauthorized config request should return null.");
+    AssertEqual(BackendControlApiFailureKind.Unauthorized, service.LastFailure.Kind, "401 responses should be classified as unauthorized.");
+    AssertContains(service.LastFailure.Message, "authentication failed", "Unauthorized failures should preserve the backend error text.");
 
     listener.Stop();
     await serverTask;
@@ -1537,6 +1580,63 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
     }
 }
 
+async Task TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-unauthorized-config-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Config = null;
+    fakeBackend.ConfigFailureKind = BackendControlApiFailureKind.Unauthorized;
+    fakeBackend.ConfigFailureMessage = "Control API authentication failed.";
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                var loadMethod = typeof(MainViewModel).GetMethod(
+                    "LoadConfigFromAuthoritativeSourceAsync",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync not found.");
+
+                var loadTask = loadMethod.Invoke(viewModel, []) as Task
+                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync did not return a Task.");
+
+                await AssertThrowsAsync<InvalidOperationException>(
+                    () => loadTask,
+                    "Unauthorized config failures should throw before local fallback is considered.");
+
+                AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Unauthorized config failures should not touch the local fallback reader.");
+                AssertEqual(0, fakeBotProcess.StartCallCount, "Unauthorized config failures should not trigger control API recovery.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
 async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-control-api-");
@@ -1573,7 +1673,7 @@ async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
                 await WaitForAsync(() => fakeBackend.StartCallCount == 1, "load recovery control api start");
                 await WaitForAsync(() => viewModel.IsControlApiReachable, "load recovery reachable");
 
-                AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Load should not fall back to env file when control API recovery succeeds.");
+                AssertTrue(fakeLocalFallbackReader.LoadCallCount >= 1, "Load may read the local env file for control API authentication preflight.");
                 AssertEqual("/ai", viewModel.WechatBotPrefix, "Recovered control API load should use backend config instead of file snapshot.");
             }
             finally
@@ -2695,6 +2795,8 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
 
     public BackendControlApiFailure LastFailure { get; private set; } = new();
 
+    public string AccessToken { get; private set; } = string.Empty;
+
     public int GetStatusCallCount { get; private set; }
 
     public int GetConfigCallCount { get; private set; }
@@ -2717,6 +2819,11 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
     public BackendControlApiFailureKind SaveFailureKind { get; set; } = BackendControlApiFailureKind.None;
 
     public string SaveFailureMessage { get; set; } = string.Empty;
+
+    public void SetAccessToken(string? accessToken)
+    {
+        AccessToken = string.IsNullOrWhiteSpace(accessToken) ? string.Empty : accessToken.Trim();
+    }
 
     public Task<BackendRuntimeStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
     {

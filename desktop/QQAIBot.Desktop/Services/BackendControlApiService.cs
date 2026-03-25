@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -45,6 +46,14 @@ public sealed class BackendControlApiService : IBackendControlApiService
         _ownsHttpClient = true;
     }
 
+    public void SetAccessToken(string? accessToken)
+    {
+        var normalizedToken = string.IsNullOrWhiteSpace(accessToken) ? null : accessToken.Trim();
+        _httpClient.DefaultRequestHeaders.Authorization = normalizedToken is null
+            ? null
+            : new AuthenticationHeaderValue("Bearer", normalizedToken);
+    }
+
     public async Task<BackendRuntimeStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -54,7 +63,7 @@ public sealed class BackendControlApiService : IBackendControlApiService
             if (!response.IsSuccessStatusCode)
             {
                 SetFailure(
-                    BackendControlApiFailureKind.Rejected,
+                    ClassifyFailureKind(response),
                     await ReadApiErrorMessageAsync(response, cancellationToken));
                 return null;
             }
@@ -88,7 +97,7 @@ public sealed class BackendControlApiService : IBackendControlApiService
             if (!response.IsSuccessStatusCode)
             {
                 SetFailure(
-                    BackendControlApiFailureKind.Rejected,
+                    ClassifyFailureKind(response),
                     await ReadApiErrorMessageAsync(response, cancellationToken));
                 return null;
             }
@@ -124,7 +133,7 @@ public sealed class BackendControlApiService : IBackendControlApiService
             if (!response.IsSuccessStatusCode)
             {
                 SetFailure(
-                    BackendControlApiFailureKind.Rejected,
+                    ClassifyFailureKind(response),
                     await ReadApiErrorMessageAsync(response, cancellationToken));
                 return null;
             }
@@ -168,7 +177,7 @@ public sealed class BackendControlApiService : IBackendControlApiService
             if (!response.IsSuccessStatusCode)
             {
                 SetFailure(
-                    BackendControlApiFailureKind.Rejected,
+                    ClassifyFailureKind(response),
                     await ReadApiErrorMessageAsync(response, cancellationToken));
                 return null;
             }
@@ -212,7 +221,7 @@ public sealed class BackendControlApiService : IBackendControlApiService
             if (!response.IsSuccessStatusCode)
             {
                 SetFailure(
-                    BackendControlApiFailureKind.Rejected,
+                    ClassifyFailureKind(response),
                     await ReadApiErrorMessageAsync(response, cancellationToken));
                 return null;
             }
@@ -267,6 +276,13 @@ public sealed class BackendControlApiService : IBackendControlApiService
             Kind = kind,
             Message = string.IsNullOrWhiteSpace(message) ? "Unknown control API failure." : message
         };
+    }
+
+    private static BackendControlApiFailureKind ClassifyFailureKind(HttpResponseMessage response)
+    {
+        return response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+            ? BackendControlApiFailureKind.Unauthorized
+            : BackendControlApiFailureKind.Rejected;
     }
 
     private static async Task<string> ReadApiErrorMessageAsync(

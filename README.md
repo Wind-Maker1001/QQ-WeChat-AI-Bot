@@ -115,6 +115,7 @@ BOT_PERSONA=
 MAX_OUTPUT_CHARS=800
 ALLOWED_CHAT_IDS=
 ALLOWED_USER_IDS=
+QQ_AI_BOT_CONTROL_API_TOKEN=
 ```
 
 - `OPENAI_DEFAULT_API_KEY` / `OPENAI_DEFAULT_BASE_URL` can be left blank to inherit the shared route.
@@ -131,6 +132,8 @@ ALLOWED_USER_IDS=
   支持多行，保存时会自动转义为 `\n`
 - `ALLOWED_CHAT_IDS` / `ALLOWED_USER_IDS`
   留空表示不过滤
+- `QQ_AI_BOT_CONTROL_API_TOKEN`
+  留空表示不启用本地 control API Bearer 鉴权；设置后客户端需要发送 `Authorization: Bearer <token>`
 
 ## 启动方式
 
@@ -303,6 +306,16 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 - `workerProcessId`
 - `activeLockCount`
 - `controlApiUrl`
+
+如果设置了 `QQ_AI_BOT_CONTROL_API_TOKEN`，所有 control API 请求都必须携带：
+
+```text
+Authorization: Bearer <token>
+```
+
+说明：
+- 桌面端会从本地 `.env` 读取这个 token 并自动附带
+- 修改这个 token 后需要重启 supervisor 才会生效
 
 ### `GET /config`
 

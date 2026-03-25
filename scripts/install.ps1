@@ -121,12 +121,17 @@ function New-Shortcut {
 $packageRootPath = Resolve-PackageRootPath -RequestedPackageRoot $PackageRoot
 $installRootPath = Resolve-InstallRootPath -RequestedInstallRoot $InstallRoot
 $appRootPath = Join-Path $installRootPath "app"
+$bundledNodeModulesPath = Join-Path $packageRootPath "node_modules"
+$bundledDesktopPublishPath = Join-Path $packageRootPath "desktop-publish"
+$bundledDesktopExePath = Join-Path $bundledDesktopPublishPath "QQAIBot.Desktop.exe"
 $desktopPublishPath = Join-Path $appRootPath "desktop-publish"
 $desktopProjectPath = Join-Path $appRootPath "desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj"
 $desktopExePath = Join-Path $desktopPublishPath "QQAIBot.Desktop.exe"
 $installInfoPath = Join-Path $installRootPath "install-info.json"
 $desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "QQ AI Bot.lnk"
 $startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
+$hasBundledNodeModules = Test-Path $bundledNodeModulesPath
+$hasBundledDesktopPublish = Test-Path $bundledDesktopExePath
 
 Write-Step "Package root: $packageRootPath"
 Write-Step "Install root: $installRootPath"
@@ -136,8 +141,22 @@ if (-not (Test-BackendPackageRoot -RootPath $packageRootPath)) {
 }
 
 Assert-CommandExists -Name "node"
-Assert-CommandExists -Name "npm"
-Assert-CommandExists -Name "dotnet"
+
+if ($SkipNodeInstall -and -not $hasBundledNodeModules) {
+    throw "SkipNodeInstall was requested, but the package does not include node_modules."
+}
+
+if ($SkipDesktopPublish -and -not $hasBundledDesktopPublish) {
+    throw "SkipDesktopPublish was requested, but the package does not include desktop-publish\QQAIBot.Desktop.exe."
+}
+
+if (-not $SkipNodeInstall -and -not $hasBundledNodeModules) {
+    Assert-CommandExists -Name "npm"
+}
+
+if (-not $SkipDesktopPublish -and -not $hasBundledDesktopPublish) {
+    Assert-CommandExists -Name "dotnet"
+}
 
 if ($ValidateOnly) {
     Write-Step "Validation succeeded."
@@ -175,6 +194,14 @@ $copyItems = @(
     "scripts"
 )
 
+if ($hasBundledNodeModules) {
+    $copyItems += "node_modules"
+}
+
+if ($hasBundledDesktopPublish) {
+    $copyItems += "desktop-publish"
+}
+
 foreach ($item in $copyItems) {
     $sourcePath = Join-Path $packageRootPath $item
 
@@ -187,6 +214,7 @@ foreach ($item in $copyItems) {
 }
 
 $cleanupPaths = @(
+    "desktop\.testbin",
     "desktop\QQAIBot.Desktop\bin",
     "desktop\QQAIBot.Desktop\obj",
     "desktop\QQAIBot.Desktop.Tests\bin",
@@ -210,11 +238,17 @@ if (-not (Test-Path $envPath)) {
 Push-Location $appRootPath
 
 try {
-    if (-not $SkipNodeInstall) {
+    if ($hasBundledNodeModules) {
+        Write-Step "Using bundled Node dependencies"
+    }
+    elseif (-not $SkipNodeInstall) {
         Invoke-ExternalStep -Label "Installing Node dependencies" -Command { npm ci --omit=dev }
     }
 
-    if (-not $SkipDesktopPublish) {
+    if ($hasBundledDesktopPublish) {
+        Write-Step "Using bundled desktop application publish output"
+    }
+    elseif (-not $SkipDesktopPublish) {
         Invoke-ExternalStep -Label "Publishing desktop application" -Command {
             dotnet publish $desktopProjectPath -c $Configuration -nologo -o $desktopPublishPath
         }
@@ -251,6 +285,8 @@ $installInfo = @{
     installRoot = $installRootPath
     appRoot = $appRootPath
     desktopExePath = $desktopExePath
+    usedBundledNodeModules = $hasBundledNodeModules
+    usedBundledDesktopPublish = $hasBundledDesktopPublish
 } | ConvertTo-Json
 
 Set-Content -Path $installInfoPath -Value $installInfo -Encoding UTF8

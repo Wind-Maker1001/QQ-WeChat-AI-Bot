@@ -334,6 +334,12 @@ WECHAT_BRIDGE_SIM_ACTION_LOG=D:\path\to\wechat-actions.json
 npm run release:source
 ```
 
+如果你想生成一份已经带好 `node_modules` 和 `desktop-publish` 的预构建安装包：
+
+```powershell
+npm run release:installable
+```
+
 输出位置：
 
 ```text
@@ -366,6 +372,18 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 1. 解压 `dist/qq-ai-bot-<version>-<timestamp>.zip`
 2. 进入解压目录
 3. 运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1`
+
+`release:installable` 生成的包会额外包含：
+
+- `node_modules`
+- `desktop-publish`
+
+这样目标机器安装时可以直接复用这些预构建资产，不再需要 `npm` 或 `.NET SDK`。
+
+目标机器仍然需要：
+
+- Node.js 18+
+- `.NET Desktop Runtime 8`
 
 ## Control API
 

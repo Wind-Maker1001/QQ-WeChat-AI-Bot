@@ -1,6 +1,8 @@
 param(
     [string]$OutputRoot = "dist",
     [string]$Version = "",
+    [string]$Configuration = "Release",
+    [switch]$Installable,
     [switch]$SkipZip
 )
 
@@ -21,6 +23,28 @@ function Remove-IfExists {
     }
 }
 
+function Assert-CommandExists {
+    param([string]$Name)
+
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "Required command not found: $Name"
+    }
+}
+
+function Invoke-ExternalStep {
+    param(
+        [string]$Label,
+        [scriptblock]$Command
+    )
+
+    Write-Host $Label
+    & $Command
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed with exit code $LASTEXITCODE."
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
@@ -29,7 +53,12 @@ if (-not $Version) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$releaseName = "qq-ai-bot-$Version-$timestamp"
+$releaseName = if ($Installable) {
+    "qq-ai-bot-installable-$Version-$timestamp"
+}
+else {
+    "qq-ai-bot-$Version-$timestamp"
+}
 $outputRootPath = Join-Path $repoRoot $OutputRoot
 $releaseDir = Join-Path $outputRootPath $releaseName
 $zipPath = "$releaseDir.zip"
@@ -61,6 +90,7 @@ foreach ($item in $copyItems) {
 }
 
 $cleanupPaths = @(
+    "desktop\.testbin",
     "desktop\QQAIBot.Desktop\bin",
     "desktop\QQAIBot.Desktop\obj",
     "node_modules",
@@ -74,6 +104,37 @@ $cleanupPaths = @(
 
 foreach ($relativePath in $cleanupPaths) {
     Remove-IfExists -Path (Join-Path $releaseDir $relativePath)
+}
+
+if ($Installable) {
+    Assert-CommandExists -Name "npm"
+    Assert-CommandExists -Name "dotnet"
+
+    Push-Location $releaseDir
+
+    try {
+        Invoke-ExternalStep -Label "Installing production Node dependencies into release package." -Command {
+            npm ci --omit=dev
+        }
+
+        Invoke-ExternalStep -Label "Publishing desktop application into release package." -Command {
+            dotnet publish ".\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj" -c $Configuration -nologo -o ".\desktop-publish"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $postPublishCleanupPaths = @(
+        "desktop\QQAIBot.Desktop\bin",
+        "desktop\QQAIBot.Desktop\obj",
+        "desktop\QQAIBot.Desktop.Tests\bin",
+        "desktop\QQAIBot.Desktop.Tests\obj"
+    )
+
+    foreach ($relativePath in $postPublishCleanupPaths) {
+        Remove-IfExists -Path (Join-Path $releaseDir $relativePath)
+    }
 }
 
 if (-not $SkipZip) {

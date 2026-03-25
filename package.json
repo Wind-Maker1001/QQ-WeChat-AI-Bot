@@ -16,7 +16,8 @@
     "desktop:acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\desktop-acceptance.ps1",
     "desktop:acceptance:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\desktop-acceptance.ps1 -AutomatedOnly",
     "wechat:bridge:sim": "node ./scripts/wechat-bridge-simulator.mjs",
-    "release:source": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1"
+    "release:source": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1",
+    "release:installable": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\release.ps1 -Installable"
   },
   "dependencies": {
     "dotenv": "^17.3.1",

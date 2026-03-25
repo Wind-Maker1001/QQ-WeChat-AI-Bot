@@ -21,6 +21,7 @@ tmp-backend-err.log
 NapCat.Shell.Windows.Node/
 
 # Desktop build output
+desktop/.testbin/
 desktop/QQAIBot.Desktop/bin/
 desktop/QQAIBot.Desktop/obj/
 desktop/QQAIBot.Desktop.Tests/bin/

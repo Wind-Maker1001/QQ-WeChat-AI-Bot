@@ -8,12 +8,13 @@ import {
 } from '../llm/openai-provider.mjs';
 import { DEFAULT_ADVANCED_TRIGGER_PREFIXES } from '../../domain/route-decision.mjs';
 import { createRuntimeConfig } from '../../domain/runtime-config.mjs';
-import { parseCsvList, parsePositiveInt } from '../../utils.mjs';
+import { parseBoolean, parseCsvList, parsePositiveInt } from '../../utils.mjs';
 
 const DEFAULT_NAPCAT_WS_URL = 'ws://127.0.0.1:3001';
 const DEFAULT_BOT_PREFIX = '/ai';
 const DEFAULT_MAX_OUTPUT_CHARS = 800;
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
+const DEFAULT_WECHAT_BOT_PREFIX = '/ai';
 
 export function loadRuntimeConfig({
   cwd = process.cwd(),
@@ -32,10 +33,24 @@ export function loadRuntimeConfig({
   const defaultOpenAiModel = env.OPENAI_DEFAULT_MODEL || DEFAULT_DEFAULT_MODEL;
   const defaultOpenAiBaseUrl = env.OPENAI_DEFAULT_BASE_URL || sharedOpenAiBaseUrl;
   const defaultOpenAiApiStyle = env.OPENAI_DEFAULT_API_STYLE || '';
+  const defaultOpenAiReasoningEffort = env.OPENAI_DEFAULT_REASONING_EFFORT || '';
+  const defaultOpenAiTextVerbosity = env.OPENAI_DEFAULT_TEXT_VERBOSITY || '';
+  const defaultOpenAiEnableWebSearch = parseBoolean(env.OPENAI_DEFAULT_ENABLE_WEB_SEARCH, false);
+  const defaultOpenAiEnableCodeInterpreter = parseBoolean(
+    env.OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER,
+    false
+  );
   const advancedOpenAiApiKey = env.OPENAI_ADVANCED_API_KEY || sharedOpenAiApiKey;
   const advancedOpenAiModel = env.OPENAI_ADVANCED_MODEL || sharedOpenAiModel || DEFAULT_ADVANCED_MODEL;
   const advancedOpenAiBaseUrl = env.OPENAI_ADVANCED_BASE_URL || sharedOpenAiBaseUrl;
   const advancedOpenAiApiStyle = env.OPENAI_ADVANCED_API_STYLE || '';
+  const advancedOpenAiReasoningEffort = env.OPENAI_ADVANCED_REASONING_EFFORT || '';
+  const advancedOpenAiTextVerbosity = env.OPENAI_ADVANCED_TEXT_VERBOSITY || '';
+  const advancedOpenAiEnableWebSearch = parseBoolean(env.OPENAI_ADVANCED_ENABLE_WEB_SEARCH, false);
+  const advancedOpenAiEnableCodeInterpreter = parseBoolean(
+    env.OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER,
+    false
+  );
   const advancedTriggerPrefixes = parseCsvList(
     env.OPENAI_ADVANCED_TRIGGER_PREFIXES || DEFAULT_ADVANCED_TRIGGER_PREFIXES.join(',')
   );
@@ -46,13 +61,21 @@ export function loadRuntimeConfig({
         apiKey: defaultOpenAiApiKey,
         model: defaultOpenAiModel,
         baseURL: defaultOpenAiBaseUrl,
-        apiStyle: defaultOpenAiApiStyle
+        apiStyle: defaultOpenAiApiStyle,
+        reasoningEffort: defaultOpenAiReasoningEffort,
+        textVerbosity: defaultOpenAiTextVerbosity,
+        enableWebSearch: defaultOpenAiEnableWebSearch,
+        enableCodeInterpreter: defaultOpenAiEnableCodeInterpreter
       },
       advancedRoute: {
         apiKey: advancedOpenAiApiKey,
         model: advancedOpenAiModel,
         baseURL: advancedOpenAiBaseUrl,
-        apiStyle: advancedOpenAiApiStyle
+        apiStyle: advancedOpenAiApiStyle,
+        reasoningEffort: advancedOpenAiReasoningEffort,
+        textVerbosity: advancedOpenAiTextVerbosity,
+        enableWebSearch: advancedOpenAiEnableWebSearch,
+        enableCodeInterpreter: advancedOpenAiEnableCodeInterpreter
       },
       advancedTriggerPrefixes
     },
@@ -60,13 +83,18 @@ export function loadRuntimeConfig({
       wsUrl: env.NAPCAT_WS_URL || DEFAULT_NAPCAT_WS_URL,
       token: env.NAPCAT_TOKEN ?? ''
     },
+    wechat: {
+      bridgeUrl: env.WECHAT_BRIDGE_URL ?? '',
+      token: env.WECHAT_BRIDGE_TOKEN ?? '',
+      botPrefix: env.WECHAT_BOT_PREFIX || DEFAULT_WECHAT_BOT_PREFIX
+    },
     bot: {
       prefix: env.BOT_PREFIX || DEFAULT_BOT_PREFIX,
       persona: env.BOT_PERSONA ?? '',
       maxOutputChars: parsePositiveInt(env.MAX_OUTPUT_CHARS, DEFAULT_MAX_OUTPUT_CHARS)
     },
     access: {
-      allowedGroupIds: parseCsvList(env.ALLOWED_GROUP_IDS),
+      allowedChatIds: parseCsvList(env.ALLOWED_CHAT_IDS),
       allowedUserIds: parseCsvList(env.ALLOWED_USER_IDS)
     },
     runtime: {

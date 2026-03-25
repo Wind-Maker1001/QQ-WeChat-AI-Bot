@@ -1,9 +1,20 @@
+export class RuntimeConfigValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RuntimeConfigValidationError';
+  }
+}
+
 function cloneRouteConfig(route = {}) {
   return Object.freeze({
     apiKey: typeof route.apiKey === 'string' ? route.apiKey : '',
     model: typeof route.model === 'string' ? route.model : '',
     baseURL: typeof route.baseURL === 'string' ? route.baseURL : '',
-    apiStyle: typeof route.apiStyle === 'string' ? route.apiStyle : ''
+    apiStyle: typeof route.apiStyle === 'string' ? route.apiStyle : '',
+    reasoningEffort: typeof route.reasoningEffort === 'string' ? route.reasoningEffort : '',
+    textVerbosity: typeof route.textVerbosity === 'string' ? route.textVerbosity : '',
+    enableWebSearch: route.enableWebSearch === true,
+    enableCodeInterpreter: route.enableCodeInterpreter === true
   });
 }
 
@@ -17,9 +28,34 @@ function cloneStringList(values) {
   );
 }
 
+function validateWebSocketUrl(label, value, { allowEmpty = false } = {}) {
+  const normalizedValue = typeof value === 'string' ? value.trim() : '';
+
+  if (!normalizedValue) {
+    if (allowEmpty) {
+      return;
+    }
+
+    throw new RuntimeConfigValidationError(`${label} is required.`);
+  }
+
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(normalizedValue);
+  } catch {
+    throw new RuntimeConfigValidationError(`${label} must be a valid ws:// or wss:// URL.`);
+  }
+
+  if (parsedUrl.protocol !== 'ws:' && parsedUrl.protocol !== 'wss:') {
+    throw new RuntimeConfigValidationError(`${label} must use ws:// or wss://.`);
+  }
+}
+
 export function createRuntimeConfig({
   openai = {},
   napcat = {},
+  wechat = {},
   bot = {},
   access = {},
   runtime = {},
@@ -35,13 +71,18 @@ export function createRuntimeConfig({
       wsUrl: typeof napcat.wsUrl === 'string' ? napcat.wsUrl : '',
       token: typeof napcat.token === 'string' ? napcat.token : ''
     }),
+    wechat: Object.freeze({
+      bridgeUrl: typeof wechat.bridgeUrl === 'string' ? wechat.bridgeUrl : '',
+      token: typeof wechat.token === 'string' ? wechat.token : '',
+      botPrefix: typeof wechat.botPrefix === 'string' ? wechat.botPrefix : ''
+    }),
     bot: Object.freeze({
       prefix: typeof bot.prefix === 'string' ? bot.prefix : '',
       persona: typeof bot.persona === 'string' ? bot.persona : '',
       maxOutputChars: Number.isInteger(bot.maxOutputChars) ? bot.maxOutputChars : 800
     }),
     access: Object.freeze({
-      allowedGroupIds: cloneStringList(access.allowedGroupIds),
+      allowedChatIds: cloneStringList(access.allowedChatIds),
       allowedUserIds: cloneStringList(access.allowedUserIds)
     }),
     runtime: Object.freeze({
@@ -70,10 +111,18 @@ export function listMissingRequiredRuntimeConfig(config) {
   return missing;
 }
 
-export function validateRuntimeConfig(config) {
+export function validateRuntimeConfig(config, { validateWechatBridge = false } = {}) {
   const missing = listMissingRequiredRuntimeConfig(config);
 
   if (missing.length > 0) {
-    throw new Error(`缺少环境变量: ${missing.join(', ')}`);
+    throw new RuntimeConfigValidationError(`Missing runtime config: ${missing.join(', ')}`);
+  }
+
+  validateWebSocketUrl('NAPCAT_WS_URL', config?.napcat?.wsUrl);
+
+  if (validateWechatBridge) {
+    validateWebSocketUrl('WECHAT_BRIDGE_URL', config?.wechat?.bridgeUrl, {
+      allowEmpty: true
+    });
   }
 }

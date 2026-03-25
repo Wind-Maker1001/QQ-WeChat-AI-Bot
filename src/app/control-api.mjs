@@ -1,7 +1,30 @@
 import http from 'node:http';
 
+import { RuntimeConfigValidationError } from '../domain/runtime-config.mjs';
+
 export const DEFAULT_CONTROL_API_HOST = '127.0.0.1';
 export const DEFAULT_CONTROL_API_PORT = 3199;
+export const DEFAULT_CONTROL_API_HOST_ENV_KEY = 'QQ_AI_BOT_CONTROL_API_HOST';
+export const DEFAULT_CONTROL_API_PORT_ENV_KEY = 'QQ_AI_BOT_CONTROL_API_PORT';
+
+class ControlApiRequestError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.name = 'ControlApiRequestError';
+    this.statusCode = statusCode;
+  }
+}
+
+export function resolveDefaultControlApiHost() {
+  const host = process.env[DEFAULT_CONTROL_API_HOST_ENV_KEY];
+  return typeof host === 'string' && host.trim() ? host.trim() : DEFAULT_CONTROL_API_HOST;
+}
+
+export function resolveDefaultControlApiPort() {
+  const rawPort = process.env[DEFAULT_CONTROL_API_PORT_ENV_KEY];
+  const parsedPort = Number.parseInt(rawPort || '', 10);
+  return Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : DEFAULT_CONTROL_API_PORT;
+}
 
 function createJsonResponse(res, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -25,12 +48,32 @@ async function readJsonBody(req) {
     return {};
   }
 
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new ControlApiRequestError('Request body must be valid JSON.', 400);
+  }
+}
+
+function resolveErrorStatusCode(error) {
+  if (Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 600) {
+    return error.statusCode;
+  }
+
+  if (error instanceof ControlApiRequestError) {
+    return error.statusCode;
+  }
+
+  if (error instanceof RuntimeConfigValidationError) {
+    return 400;
+  }
+
+  return 500;
 }
 
 export function createControlApiServer({
-  host = DEFAULT_CONTROL_API_HOST,
-  port = DEFAULT_CONTROL_API_PORT,
+  host = resolveDefaultControlApiHost(),
+  port = resolveDefaultControlApiPort(),
   logger,
   getStatus,
   getConfig,
@@ -74,7 +117,7 @@ export function createControlApiServer({
       });
     } catch (error) {
       logger.error?.(`[control] Request failed: ${error instanceof Error ? error.message : String(error)}`);
-      createJsonResponse(res, 500, {
+      createJsonResponse(res, resolveErrorStatusCode(error), {
         error: error instanceof Error ? error.message : String(error)
       });
     }
@@ -103,10 +146,25 @@ export function createControlApiServer({
     });
   }
 
+  function getAddress() {
+    const address = server.address();
+
+    if (!address || typeof address === 'string') {
+      return null;
+    }
+
+    return {
+      address: address.address,
+      family: address.family,
+      port: address.port
+    };
+  }
+
   return {
     host,
     port,
     start,
-    stop
+    stop,
+    getAddress
   };
 }

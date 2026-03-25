@@ -94,6 +94,7 @@
 
           <StackPanel Orientation="Horizontal">
             <Button Margin="0,0,8,0"
+                    x:Name="AutoDetectButton"
                     Style="{StaticResource PillButtonStyle}"
                     Command="{Binding AutoDetectCommand}"
                     Content="自动检测" />
@@ -117,18 +118,22 @@
 
           <StackPanel Grid.Column="1" Orientation="Horizontal">
             <Button Margin="0,0,8,0"
+                    x:Name="ReloadButton"
                     Style="{StaticResource SecondaryButtonStyle}"
                     Command="{Binding ReloadCommand}"
                     Content="重新加载" />
             <Button Margin="0,0,8,0"
+                    x:Name="SaveButton"
                     Style="{StaticResource SecondaryButtonStyle}"
                     Command="{Binding SaveCommand}"
                     Content="保存配置" />
             <Button Margin="0,0,8,0"
+                    x:Name="StartButton"
                     Style="{StaticResource PrimaryButtonStyle}"
                     Command="{Binding StartCommand}"
                     Content="启动后端" />
-            <Button Style="{StaticResource SecondaryButtonStyle}"
+            <Button x:Name="StopButton"
+                    Style="{StaticResource SecondaryButtonStyle}"
                     Command="{Binding StopCommand}"
                     Content="停止后端" />
           </StackPanel>
@@ -175,6 +180,9 @@
                   <StackPanel Grid.Column="0">
                     <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_API_KEY (DS 官方)" />
                     <TextBox Text="{Binding OpenAiDefaultApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="Leave blank to inherit OPENAI_API_KEY" />
                   </StackPanel>
 
                   <StackPanel Grid.Column="2">
@@ -200,6 +208,9 @@
                   <StackPanel Grid.Column="0">
                     <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_BASE_URL" />
                     <TextBox Text="{Binding OpenAiDefaultBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,0"
+                               Style="{StaticResource SectionSubtitleStyle}"
+                               Text="Leave blank to inherit OPENAI_BASE_URL" />
                   </StackPanel>
 
                   <StackPanel Grid.Column="2">
@@ -218,9 +229,102 @@
                            Text="OPENAI_ADVANCED_TRIGGER_PREFIXES" />
                 <TextBox Text="{Binding OpenAiAdvancedTriggerPrefixes, UpdateSourceTrigger=PropertyChanged}" />
 
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="1*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_REASONING_EFFORT" />
+                    <TextBox Text="{Binding OpenAiDefaultReasoningEffort, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_ADVANCED_REASONING_EFFORT" />
+                    <TextBox Text="{Binding OpenAiAdvancedReasoningEffort, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="1*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_TEXT_VERBOSITY" />
+                    <TextBox Text="{Binding OpenAiDefaultTextVerbosity, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_ADVANCED_TEXT_VERBOSITY" />
+                    <TextBox Text="{Binding OpenAiAdvancedTextVerbosity, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                </Grid>
+
                 <TextBlock Margin="0,16,0,8"
                            Style="{StaticResource FieldLabelStyle}"
                            Text="节点预设" />
+                <Grid Margin="0,16,0,0">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="14" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="1*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Row="0" Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_ENABLE_WEB_SEARCH" />
+                    <Border Padding="12,10"
+                            CornerRadius="8"
+                            Background="{StaticResource InputFillBrush}"
+                            BorderBrush="{StaticResource InputBorderBrush}"
+                            BorderThickness="1">
+                      <CheckBox x:Name="OpenAiDefaultEnableWebSearchCheckBox"
+                                Content="Enable web search on default route"
+                                IsChecked="{Binding IsOpenAiDefaultEnableWebSearchEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                    </Border>
+                  </StackPanel>
+                  <StackPanel Grid.Row="0" Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_ADVANCED_ENABLE_WEB_SEARCH" />
+                    <Border Padding="12,10"
+                            CornerRadius="8"
+                            Background="{StaticResource InputFillBrush}"
+                            BorderBrush="{StaticResource InputBorderBrush}"
+                            BorderThickness="1">
+                      <CheckBox x:Name="OpenAiAdvancedEnableWebSearchCheckBox"
+                                Content="Enable web search on advanced route"
+                                IsChecked="{Binding IsOpenAiAdvancedEnableWebSearchEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                    </Border>
+                  </StackPanel>
+                  <StackPanel Grid.Row="2" Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER" />
+                    <Border Padding="12,10"
+                            CornerRadius="8"
+                            Background="{StaticResource InputFillBrush}"
+                            BorderBrush="{StaticResource InputBorderBrush}"
+                            BorderThickness="1">
+                      <CheckBox x:Name="OpenAiDefaultEnableCodeInterpreterCheckBox"
+                                Content="Enable code interpreter on default route"
+                                IsChecked="{Binding IsOpenAiDefaultEnableCodeInterpreterEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                    </Border>
+                  </StackPanel>
+                  <StackPanel Grid.Row="2" Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER" />
+                    <Border Padding="12,10"
+                            CornerRadius="8"
+                            Background="{StaticResource InputFillBrush}"
+                            BorderBrush="{StaticResource InputBorderBrush}"
+                            BorderThickness="1">
+                      <CheckBox x:Name="OpenAiAdvancedEnableCodeInterpreterCheckBox"
+                                Content="Enable code interpreter on advanced route"
+                                IsChecked="{Binding IsOpenAiAdvancedEnableCodeInterpreterEnabled, UpdateSourceTrigger=PropertyChanged}" />
+                    </Border>
+                  </StackPanel>
+                </Grid>
+
                 <WrapPanel>
                   <Button Margin="0,0,8,8"
                           Style="{StaticResource SecondaryButtonStyle}"
@@ -276,7 +380,8 @@
                   </Grid.ColumnDefinitions>
                   <StackPanel Grid.Column="0">
                     <TextBlock Style="{StaticResource FieldLabelStyle}" Text="NAPCAT_WS_URL" />
-                    <TextBox Text="{Binding NapCatWsUrl, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox x:Name="NapCatWsUrlTextBox"
+                             Text="{Binding NapCatWsUrl, UpdateSourceTrigger=PropertyChanged}" />
                   </StackPanel>
                   <StackPanel Grid.Column="2">
                     <TextBlock Style="{StaticResource FieldLabelStyle}" Text="NAPCAT_TOKEN" />
@@ -310,6 +415,30 @@
                       <TextBlock Foreground="{StaticResource SecondaryTextBrush}"
                                  Text="{Binding ProcessStateText}" />
                     </Border>
+                  </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,16,0,0">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="WECHAT_BRIDGE_URL" />
+                    <TextBox x:Name="WechatBridgeUrlTextBox"
+                             Text="{Binding WechatBridgeUrl, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="WECHAT_BRIDGE_TOKEN" />
+                    <TextBox Text="{Binding WechatBridgeToken, UpdateSourceTrigger=PropertyChanged}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="4">
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="WECHAT_BOT_PREFIX" />
+                    <TextBox x:Name="WechatBotPrefixTextBox"
+                             Text="{Binding WechatBotPrefix, UpdateSourceTrigger=PropertyChanged}" />
                   </StackPanel>
                 </Grid>
               </StackPanel>
@@ -359,7 +488,8 @@
                 </Grid>
 
                 <TextBlock Style="{StaticResource FieldLabelStyle}" Text="后端根目录" />
-                <TextBox Text="{Binding BackendRootPath, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox x:Name="BackendRootPathTextBox"
+                         Text="{Binding BackendRootPath, UpdateSourceTrigger=PropertyChanged}" />
 
                 <Border Margin="0,12,0,16"
                         Padding="12,10"
@@ -387,12 +517,14 @@
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
                   <StackPanel Grid.Column="0">
-                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="ALLOWED_GROUP_IDS" />
-                    <TextBox Text="{Binding AllowedGroupIds, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Style="{StaticResource FieldLabelStyle}" Text="ALLOWED_CHAT_IDS" />
+                    <TextBox x:Name="AllowedChatIdsTextBox"
+                             Text="{Binding AllowedChatIds, UpdateSourceTrigger=PropertyChanged}" />
                   </StackPanel>
                   <StackPanel Grid.Column="2">
                     <TextBlock Style="{StaticResource FieldLabelStyle}" Text="ALLOWED_USER_IDS" />
-                    <TextBox Text="{Binding AllowedUserIds, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox x:Name="AllowedUserIdsTextBox"
+                             Text="{Binding AllowedUserIds, UpdateSourceTrigger=PropertyChanged}" />
                   </StackPanel>
                 </Grid>
               </StackPanel>
@@ -432,6 +564,32 @@
                 <TextBlock Text="{Binding LastSavedAtText}" />
                 <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="当前状态" />
                 <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="QQ Ready" />
+                <TextBlock Text="{Binding RuntimeReadyText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Wechat Runtime" />
+                <TextBlock Text="{Binding WechatRuntimeStateText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Wechat Ready" />
+                <TextBlock Text="{Binding WechatRuntimeReadyText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Wechat Bridge" />
+                <TextBlock Text="{Binding WechatBridgeStateText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Wechat Worker" />
+                <TextBlock Text="{Binding WechatWorkerProcessText}" TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Latest QQ LLM" />
+                <TextBlock x:Name="LatestQqLlmSummaryTextBlock"
+                           Text="{Binding LatestQqLlmSummaryText}"
+                           TextWrapping="Wrap" />
+                <TextBlock Margin="0,4,0,0"
+                           Style="{StaticResource SectionSubtitleStyle}"
+                           Text="{Binding LatestQqLlmDetailText}"
+                           TextWrapping="Wrap" />
+                <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Latest Wechat LLM" />
+                <TextBlock x:Name="LatestWechatLlmSummaryTextBlock"
+                           Text="{Binding LatestWechatLlmSummaryText}"
+                           TextWrapping="Wrap" />
+                <TextBlock Margin="0,4,0,0"
+                           Style="{StaticResource SectionSubtitleStyle}"
+                           Text="{Binding LatestWechatLlmDetailText}"
+                           TextWrapping="Wrap" />
                 <TextBlock Margin="0,12,0,4" Style="{StaticResource SectionSubtitleStyle}" Text="Startup" />
                 <TextBlock Text="{Binding AutoStartStateText}" TextWrapping="Wrap" />
               </StackPanel>

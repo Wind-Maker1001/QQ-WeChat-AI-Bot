@@ -1,23 +1,89 @@
-import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { loadRuntimeConfig } from './adapters/config/load-runtime-config.mjs';
-import {
-  readRuntimeConfigFromEnvFile,
-  readControlConfig,
-  writeControlConfig
-} from './adapters/config/control-config-file.mjs';
+import { buildRuntimeProcessEnv } from './adapters/config/control-config-file.mjs';
 import {
   createControlApiServer,
   DEFAULT_CONTROL_API_HOST,
-  DEFAULT_CONTROL_API_PORT
+  DEFAULT_CONTROL_API_PORT,
+  resolveDefaultControlApiHost,
+  resolveDefaultControlApiPort
 } from './app/control-api.mjs';
+import { createSupervisorRuntimeController } from './app/supervisor-runtime-controller.mjs';
+import {
+  applyQqWorkerMessage,
+  applyWechatWorkerMessage,
+  attachQqWorker,
+  attachWechatWorker,
+  buildSupervisorStatusPayload,
+  clearQqWorker,
+  clearWechatWorker,
+  createInitialRuntimeStatus
+} from './app/supervisor-runtime-state.mjs';
+import { createSupervisorWorkerSlot } from './app/supervisor-worker-slot.mjs';
 import { formatError } from './utils.mjs';
 
-const WORKER_ENTRY = path.resolve(process.cwd(), 'src', 'app', 'runtime-worker.mjs');
+const currentFilePath = fileURLToPath(import.meta.url);
+const currentDirPath = path.dirname(currentFilePath);
+const WORKER_ENTRY = path.resolve(currentDirPath, 'app', 'runtime-worker.mjs');
+const WECHAT_WORKER_ENTRY = path.resolve(currentDirPath, 'app', 'wechat-runtime-worker.mjs');
 const WORKER_RESTART_DELAY_MS = 1000;
 const BOOT_FAILURE_WINDOW_MS = 5000;
 const MAX_CONSECUTIVE_BOOT_FAILURES = 3;
+
+function normalizeLlmRequestStatus(status) {
+  if (!status || typeof status !== 'object') {
+    return null;
+  }
+
+  return {
+    capturedAt: typeof status.capturedAt === 'string' ? status.capturedAt : '',
+    channelId: typeof status.channelId === 'string' ? status.channelId : '',
+    route: typeof status.route === 'string' ? status.route : '',
+    routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
+    matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
+    model: typeof status.model === 'string' ? status.model : '',
+    configuredApiStyle:
+      typeof status.configuredApiStyle === 'string' ? status.configuredApiStyle : '',
+    effectiveApiStyle:
+      typeof status.effectiveApiStyle === 'string' ? status.effectiveApiStyle : '',
+    configuredReasoningEffort:
+      typeof status.configuredReasoningEffort === 'string' ? status.configuredReasoningEffort : '',
+    effectiveReasoningEffort:
+      typeof status.effectiveReasoningEffort === 'string' ? status.effectiveReasoningEffort : '',
+    configuredTextVerbosity:
+      typeof status.configuredTextVerbosity === 'string' ? status.configuredTextVerbosity : '',
+    effectiveTextVerbosity:
+      typeof status.effectiveTextVerbosity === 'string' ? status.effectiveTextVerbosity : '',
+    configuredTools: Array.isArray(status.configuredTools)
+      ? status.configuredTools.filter((tool) => typeof tool === 'string')
+      : [],
+    effectiveTools: Array.isArray(status.effectiveTools)
+      ? status.effectiveTools.filter((tool) => typeof tool === 'string')
+      : [],
+    imageCount: typeof status.imageCount === 'number' ? status.imageCount : 0,
+    chatId: typeof status.chatId === 'string' ? status.chatId : '',
+    userId: typeof status.userId === 'string' ? status.userId : '',
+    responseId: typeof status.responseId === 'string' ? status.responseId : ''
+  };
+}
+
+function normalizeLlmFailureStatus(status) {
+  if (!status || typeof status !== 'object') {
+    return null;
+  }
+
+  return {
+    capturedAt: typeof status.capturedAt === 'string' ? status.capturedAt : '',
+    channelId: typeof status.channelId === 'string' ? status.channelId : '',
+    route: typeof status.route === 'string' ? status.route : '',
+    routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
+    matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
+    chatId: typeof status.chatId === 'string' ? status.chatId : '',
+    userId: typeof status.userId === 'string' ? status.userId : '',
+    error: typeof status.error === 'string' ? status.error : ''
+  };
+}
 
 function logInfo(message, ...args) {
   console.log(new Date().toISOString(), message, ...args);
@@ -28,248 +94,138 @@ function logError(message, ...args) {
 }
 
 async function main() {
+  const controlApiHost = resolveDefaultControlApiHost();
+  const controlApiPort = resolveDefaultControlApiPort();
   const startedAt = new Date().toISOString();
-  let lastConfigSavedAt = null;
   let desiredRuntimeActive = true;
-  let worker = null;
-  let workerRestartTimer = null;
-  let stoppingWorker = false;
-  let consecutiveBootFailures = 0;
-  let lastWorkerStartedAt = 0;
-  let runtimeStatus = {
-    runtimeActive: false,
-    napcatConnected: false,
-    activeLockCount: 0,
-    workerProcessId: null,
-    workerStartedAt: null
-  };
+  let runtimeStatus = createInitialRuntimeStatus();
   const logger = {
     info: logInfo,
     error: logError
   };
+  const buildSpawnEnv = (envValues) => (envValues ? buildRuntimeProcessEnv(envValues) : process.env);
 
-  function buildStatusPayload() {
-    return {
-      startedAt,
-      processId: process.pid,
-      runtimeActive: runtimeStatus.runtimeActive,
-      napcatConnected: runtimeStatus.napcatConnected,
-      activeLockCount: runtimeStatus.activeLockCount,
-      configRestartRequired: false,
-      lastConfigSavedAt,
-      controlApiUrl: `http://${DEFAULT_CONTROL_API_HOST}:${DEFAULT_CONTROL_API_PORT}`,
-      configPath: `${process.cwd()}\\.env`,
-      workerProcessId: runtimeStatus.workerProcessId,
-      workerStartedAt: runtimeStatus.workerStartedAt
-    };
-  }
-
-  function clearWorkerRestartTimer() {
-    if (workerRestartTimer) {
-      clearTimeout(workerRestartTimer);
-      workerRestartTimer = null;
-    }
-  }
-
-  function scheduleWorkerRestart(reason) {
-    clearWorkerRestartTimer();
-
-    if (!desiredRuntimeActive) {
-      return;
-    }
-
-    logInfo(`[supervisor] Worker restart scheduled in ${WORKER_RESTART_DELAY_MS}ms: ${reason}`);
-    workerRestartTimer = setTimeout(() => {
-      workerRestartTimer = null;
-      void startWorker(`restart:${reason}`);
-    }, WORKER_RESTART_DELAY_MS);
-  }
-
-  function attachWorker(child, reason) {
-    lastWorkerStartedAt = Date.now();
-    runtimeStatus = {
-      runtimeActive: true,
-      napcatConnected: false,
-      activeLockCount: 0,
-      workerProcessId: child.pid ?? null,
-      workerStartedAt: new Date().toISOString()
-    };
-    worker = child;
-    logInfo(`[supervisor] Worker started: pid=${child.pid}, reason=${reason}`);
-
-    child.stdout?.on('data', (chunk) => {
-      process.stdout.write(chunk);
-    });
-
-    child.stderr?.on('data', (chunk) => {
-      process.stderr.write(chunk);
-    });
-
-    child.on('message', (message) => {
+  const workerSlot = createSupervisorWorkerSlot({
+    entryPath: WORKER_ENTRY,
+    label: 'Worker',
+    restartDelayMs: WORKER_RESTART_DELAY_MS,
+    bootFailureWindowMs: BOOT_FAILURE_WINDOW_MS,
+    maxConsecutiveBootFailures: MAX_CONSECUTIVE_BOOT_FAILURES,
+    buildSpawnEnv,
+    shouldKeepAlive: () => desiredRuntimeActive,
+    logInfo,
+    logError,
+    onAttach: (child) => {
+      runtimeStatus = attachQqWorker(runtimeStatus, child);
+    },
+    onMessage: (message) => {
       if (!message || typeof message !== 'object') {
         return;
       }
 
       if (message.type === 'status' && message.data && typeof message.data === 'object') {
-        runtimeStatus = {
-          ...runtimeStatus,
-          runtimeActive: message.data.runtimeActive === true,
-          napcatConnected: message.data.napcatConnected === true,
-          activeLockCount:
-            typeof message.data.activeLockCount === 'number' ? message.data.activeLockCount : 0
-        };
+        runtimeStatus = applyQqWorkerMessage(
+          runtimeStatus,
+          message.data,
+          normalizeLlmRequestStatus,
+          normalizeLlmFailureStatus
+        );
       }
-    });
-
-    child.on('exit', (code, signal) => {
-      const exitedWorker = worker === child;
-      if (exitedWorker) {
-        worker = null;
-      }
-
-      runtimeStatus = {
-        runtimeActive: false,
-        napcatConnected: false,
-        activeLockCount: 0,
-        workerProcessId: null,
-        workerStartedAt: null
-      };
-
-      logInfo(
-        `[supervisor] Worker exited: pid=${child.pid}, code=${code ?? 'none'}, signal=${signal ?? 'none'}`
+    },
+    onExit: () => {
+      runtimeStatus = clearQqWorker(runtimeStatus);
+    },
+    onAlreadyStopped: () => {
+      runtimeStatus = clearQqWorker(runtimeStatus);
+    },
+    onRestartDisabled: (count) => {
+      desiredRuntimeActive = false;
+      logError(
+        `[supervisor] Worker restart disabled after ${count} consecutive boot failures. Fix config or runtime errors, then call /start again.`
       );
+    }
+  });
 
-      if (!stoppingWorker && desiredRuntimeActive) {
-        const workerLifetimeMs = Date.now() - lastWorkerStartedAt;
-
-        if (workerLifetimeMs < BOOT_FAILURE_WINDOW_MS) {
-          consecutiveBootFailures += 1;
-          logError(
-            `[supervisor] Worker exited too quickly (${workerLifetimeMs}ms). consecutive_boot_failures=${consecutiveBootFailures}`
-          );
-        } else {
-          consecutiveBootFailures = 0;
-        }
-
-        if (consecutiveBootFailures >= MAX_CONSECUTIVE_BOOT_FAILURES) {
-          desiredRuntimeActive = false;
-          logError(
-            `[supervisor] Worker restart disabled after ${consecutiveBootFailures} consecutive boot failures. Fix config or runtime errors, then call /start again.`
-          );
-          return;
-        }
-
-        scheduleWorkerRestart('unexpected-exit');
+  const wechatWorkerSlot = createSupervisorWorkerSlot({
+    entryPath: WECHAT_WORKER_ENTRY,
+    label: 'Wechat worker',
+    restartDelayMs: WORKER_RESTART_DELAY_MS,
+    bootFailureWindowMs: BOOT_FAILURE_WINDOW_MS,
+    maxConsecutiveBootFailures: MAX_CONSECUTIVE_BOOT_FAILURES,
+    buildSpawnEnv,
+    shouldKeepAlive: () => desiredRuntimeActive,
+    logInfo,
+    logError,
+    onAttach: (child) => {
+      runtimeStatus = attachWechatWorker(runtimeStatus, child);
+    },
+    onMessage: (message, child) => {
+      if (!message || typeof message !== 'object') {
+        return;
       }
-    });
-  }
 
-  async function startWorker(reason = 'manual-start') {
-    if (worker) {
-      return false;
-    }
-
-    clearWorkerRestartTimer();
-    const child = spawn(process.execPath, [WORKER_ENTRY], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc']
-    });
-    attachWorker(child, reason);
-    return true;
-  }
-
-  async function stopWorker(reason = 'manual-stop') {
-    clearWorkerRestartTimer();
-
-    if (!worker) {
-      runtimeStatus = {
-        runtimeActive: false,
-        napcatConnected: false,
-        activeLockCount: 0,
-        workerProcessId: null,
-        workerStartedAt: null
-      };
-      return false;
-    }
-
-    stoppingWorker = true;
-    const child = worker;
-
-    await new Promise((resolve) => {
-      const timeoutId = setTimeout(() => {
-        if (!child.killed) {
-          child.kill('SIGKILL');
-        }
-      }, 3000);
-
-      child.once('exit', () => {
-        clearTimeout(timeoutId);
-        resolve();
+      if (message.type === 'status' && message.data && typeof message.data === 'object') {
+        runtimeStatus = applyWechatWorkerMessage(
+          runtimeStatus,
+          message.data,
+          child,
+          normalizeLlmRequestStatus,
+          normalizeLlmFailureStatus
+        );
+      }
+    },
+    onExit: () => {
+      runtimeStatus = clearWechatWorker(runtimeStatus);
+    },
+    onAlreadyStopped: () => {
+      runtimeStatus = clearWechatWorker(runtimeStatus, {
+        clearConfigured: false
       });
+    },
+    onRestartDisabled: (count) => {
+      logError(
+        `[supervisor] Wechat worker restart disabled after ${count} consecutive boot failures.`
+      );
+    }
+  });
 
-      child.kill('SIGTERM');
-    });
-
-    stoppingWorker = false;
-    logInfo(`[supervisor] Worker stopped: reason=${reason}`);
-    return true;
+  function clearWorkerRestartTimer() {
+    workerSlot.clearRestartTimer();
   }
 
-  async function startRuntime(source = 'control-api') {
-    desiredRuntimeActive = true;
-    consecutiveBootFailures = 0;
-    await startWorker(source);
-    return buildStatusPayload();
+  function clearWechatWorkerRestartTimer() {
+    wechatWorkerSlot.clearRestartTimer();
   }
-
-  async function stopRuntime(source = 'control-api') {
-    desiredRuntimeActive = false;
-    consecutiveBootFailures = 0;
-    await stopWorker(source);
-    return buildStatusPayload();
-  }
+  const runtimeController = createSupervisorRuntimeController({
+    getRuntimeStatus: () => runtimeStatus,
+    setRuntimeStatus: (nextRuntimeStatus) => {
+      runtimeStatus = nextRuntimeStatus;
+    },
+    getDesiredRuntimeActive: () => desiredRuntimeActive,
+    setDesiredRuntimeActive: (nextDesiredRuntimeActive) => {
+      desiredRuntimeActive = nextDesiredRuntimeActive;
+    },
+    workerSlot,
+    wechatWorkerSlot,
+    buildStatusPayload: (lastConfigSavedAt) =>
+      buildSupervisorStatusPayload({
+        startedAt,
+        lastConfigSavedAt,
+        controlApiHost,
+        controlApiPort,
+        runtimeStatus
+      })
+  });
 
   const controlApi = createControlApiServer({
-    host: DEFAULT_CONTROL_API_HOST,
-    port: DEFAULT_CONTROL_API_PORT,
+    host: controlApiHost,
+    port: controlApiPort,
     logger,
-    getStatus: async () => buildStatusPayload(),
-    getConfig: async () => {
-      const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
-        cwd: process.cwd()
-      });
-      const result = await readControlConfig({
-        cwd: process.cwd(),
-        runtimeConfig
-      });
-
-      return {
-        ...result.config,
-        envPath: result.envPath,
-        restartRequired: false
-      };
-    },
-    updateConfig: async (payload) => {
-      const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
-        cwd: process.cwd()
-      });
-      const result = await writeControlConfig({
-        cwd: process.cwd(),
-        runtimeConfig,
-        config: payload
-      });
-
-      lastConfigSavedAt = new Date().toISOString();
-
-      return {
-        ...result.config,
-        envPath: result.envPath,
-        restartRequired: false,
-        savedAt: lastConfigSavedAt
-      };
-    },
-    startRuntime: async () => startRuntime(),
-    stopRuntime: async () => stopRuntime()
+    getStatus: async () => runtimeController.getStatus(),
+    getConfig: async () => runtimeController.getConfig(),
+    updateConfig: async (payload) => runtimeController.updateConfig(payload),
+    startRuntime: async () => runtimeController.startRuntime(),
+    stopRuntime: async () => runtimeController.stopRuntime()
   });
 
   try {
@@ -277,21 +233,21 @@ async function main() {
   } catch (error) {
     if (error && error.code === 'EADDRINUSE') {
       throw new Error(
-        `Control API port ${DEFAULT_CONTROL_API_PORT} is already in use. Another supervisor may already be running.`
+        `Control API port ${controlApiPort} is already in use. Another supervisor may already be running.`
       );
     }
 
     throw error;
   }
-  logInfo(`[control] Listening on http://${DEFAULT_CONTROL_API_HOST}:${DEFAULT_CONTROL_API_PORT}`);
+  logInfo(`[control] Listening on http://${controlApiHost}:${controlApiPort}`);
 
-  await startWorker('startup');
+  await runtimeController.startRuntime('startup');
 
   async function shutdownSupervisor(signal) {
     logInfo(`[supervisor] Shutting down: signal=${signal}`);
-    desiredRuntimeActive = false;
     clearWorkerRestartTimer();
-    await stopWorker(`supervisor-${signal}`);
+    clearWechatWorkerRestartTimer();
+    await runtimeController.stopRuntime(`supervisor-${signal}`);
     process.exit(0);
   }
 

@@ -1,18 +1,18 @@
-import fs from 'node:fs';
-
 import { createNapCatClient } from '../napcat.mjs';
 import { createLlmRouter } from '../adapters/llm/llm-router.mjs';
 import { DEFAULT_OPENAI_BASE_URL, prepareImageInputs } from '../adapters/llm/openai-provider.mjs';
 import { loadRuntimeConfig } from '../adapters/config/load-runtime-config.mjs';
-import { readControlConfig } from '../adapters/config/control-config-file.mjs';
+import { createNapCatChannelPort } from '../adapters/napcat/channel-port.mjs';
 import { normalizeIncomingNapCatEvent } from '../adapters/napcat/normalize-event.mjs';
-import { handleIncomingMessage } from './handle-incoming-message.mjs';
 import { validateRuntimeConfig } from '../domain/runtime-config.mjs';
 import { createSessionStore } from '../session.mjs';
+import { createRuntimeConnectionManager } from './runtime-connection-manager.mjs';
+import { createRuntimeConfigReloader } from './runtime-config-reloader.mjs';
+import { processRuntimeMessage } from './process-runtime-message.mjs';
 import { formatError } from '../utils.mjs';
 
 let runtimeConfig = loadRuntimeConfig();
-let allowedGroupIds = new Set(runtimeConfig.access.allowedGroupIds);
+let allowedChatIds = new Set(runtimeConfig.access.allowedChatIds);
 let allowedUserIds = new Set(runtimeConfig.access.allowedUserIds);
 let llmRouter = createLlmRouter({
   defaultRoute: runtimeConfig.openai.defaultRoute,
@@ -20,7 +20,7 @@ let llmRouter = createLlmRouter({
   advancedTriggerPrefixes: runtimeConfig.openai.advancedTriggerPrefixes,
   botPersona: runtimeConfig.bot.persona
 });
-let runtimeConfigSignature = JSON.stringify(runtimeConfig);
+let runtimeConfigSignature = '';
 
 function logInfo(message, ...args) {
   console.log(new Date().toISOString(), message, ...args);
@@ -70,10 +70,12 @@ function rebuildDerivedRuntimeState(nextRuntimeConfig) {
 
   runtimeConfig = nextRuntimeConfig;
   runtimeConfigSignature = serializeRuntimeConfig(nextRuntimeConfig);
-  allowedGroupIds = new Set(runtimeConfig.access.allowedGroupIds);
+  allowedChatIds = new Set(runtimeConfig.access.allowedChatIds);
   allowedUserIds = new Set(runtimeConfig.access.allowedUserIds);
   llmRouter = nextLlmRouter;
 }
+
+runtimeConfigSignature = serializeRuntimeConfig(runtimeConfig);
 
 async function main() {
   validateRuntimeConfig(runtimeConfig);
@@ -84,19 +86,47 @@ async function main() {
     error: logError
   };
 
-  let reconnectTimer = null;
   let napcatConnected = false;
   let napcat = null;
-  let suppressedReconnectClient = null;
-  let envWatcher = null;
-  let envReloadTimer = null;
+  let lastLlmRequest = null;
+  let lastLlmFailure = null;
   let shuttingDown = false;
+  const configReloader = createRuntimeConfigReloader({
+    getRuntimeConfig: () => runtimeConfig,
+    applyRuntimeConfig,
+    logInfo,
+    logError,
+    logPrefix: 'runtime'
+  });
+  const connectionManager = createRuntimeConnectionManager({
+    connectionLabel: 'napcat',
+    errorLabel: 'WebSocket error',
+    getCurrentClient: () => napcat,
+    setCurrentClient: (client) => {
+      napcat = client;
+    },
+    setConnected: (connected) => {
+      napcatConnected = connected;
+    },
+    getReconnectDelayMs: () => runtimeConfig.runtime.reconnectDelayMs,
+    getConnectionTarget: () => runtimeConfig.napcat.wsUrl,
+    isShuttingDown: () => shuttingDown,
+    connectClient: (client) => client?.connect(),
+    disconnectClient: (client, reason) => client?.disconnect(1000, reason),
+    canDisconnectClient: (client) => Boolean(client?.getSocket?.()),
+    logInfo,
+    logError,
+    reportStatus
+  });
 
   function reportStatus() {
     sendStatus({
       runtimeActive: !shuttingDown,
+      runtimeReady: !shuttingDown && napcatConnected,
       napcatConnected,
-      activeLockCount: activeLocks.size
+      activeLockCount: activeLocks.size,
+      lastLlmRequest,
+      lastLlmFailure
     });
   }
 
@@ -122,83 +152,22 @@ async function main() {
       url: runtimeConfig.napcat.wsUrl,
       token: runtimeConfig.napcat.token,
       onEvent: (event) => {
-        if (napcat !== client || shuttingDown) {
+        if (!connectionManager.isActiveClient(client)) {
           return;
         }
 
         void handleEvent(event);
       },
-      onOpen: () => {
-        if (napcat !== client || shuttingDown) {
-          return;
-        }
-
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer);
-          reconnectTimer = null;
-        }
-
-        napcatConnected = true;
-        logInfo(`[napcat] Connected: ${runtimeConfig.napcat.wsUrl}`);
-        reportStatus();
-      },
-      onClose: (code, reason) => {
-        if (client === suppressedReconnectClient) {
-          suppressedReconnectClient = null;
-          return;
-        }
-
-        if (napcat !== client || shuttingDown) {
-          return;
-        }
-
-        napcatConnected = false;
-        logInfo(`[napcat] Closed: code=${code}, reason=${reason || 'none'}`);
-        reportStatus();
-        scheduleReconnect();
-      },
-      onError: (error) => {
-        if (napcat !== client || shuttingDown) {
-          return;
-        }
-
-        logError(`[napcat] WebSocket error: ${formatError(error)}`);
-      }
+      onOpen: () => connectionManager.handleOpen(client),
+      onClose: (code, reason) => connectionManager.handleClose(client, code, reason),
+      onError: (error) => connectionManager.handleError(client, error)
     });
 
     return client;
   }
 
-  function scheduleReconnect() {
-    if (reconnectTimer || shuttingDown) {
-      return;
-    }
-
-    logInfo(`[napcat] Reconnecting in ${runtimeConfig.runtime.reconnectDelayMs / 1000}s.`);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      logInfo('[napcat] Reconnecting now...');
-      napcat?.connect();
-    }, runtimeConfig.runtime.reconnectDelayMs);
-  }
-
   async function reconnectNapcatClient(reason) {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-
-    const previousClient = napcat;
-    napcat = createNapcatClientForCurrentConfig();
-    napcatConnected = false;
-    reportStatus();
-
-    if (previousClient?.getSocket()) {
-      suppressedReconnectClient = previousClient;
-      previousClient.disconnect(1000, reason);
-    }
-
-    napcat.connect();
+    connectionManager.replaceClient(createNapcatClientForCurrentConfig(), reason);
   }
 
   async function applyRuntimeConfig(nextRuntimeConfig, source) {
@@ -226,101 +195,39 @@ async function main() {
     return true;
   }
 
-  async function reloadRuntimeConfigFromDisk(source) {
-    const result = await readControlConfig({
-      cwd: process.cwd(),
-      runtimeConfig
-    });
-    const nextRuntimeConfig = loadRuntimeConfig({
-      cwd: process.cwd(),
-      env: result.envValues,
-      loadDotenv: false
-    });
-
-    return applyRuntimeConfig(nextRuntimeConfig, source);
-  }
-
-  function scheduleEnvReload(source) {
-    if (envReloadTimer) {
-      clearTimeout(envReloadTimer);
-    }
-
-    envReloadTimer = setTimeout(() => {
-      envReloadTimer = null;
-      void reloadRuntimeConfigFromDisk(source).catch((error) => {
-        logError(`[runtime] Config reload from ${source} failed: ${formatError(error)}`);
-      });
-    }, 250);
-  }
-
   async function handleEvent(event) {
     const message = normalizeIncomingEvent(event);
-
-    if (!message?.triggered) {
-      return;
-    }
-
-    const groupId = message.groupId;
-    const userId = message.userId;
-
-    if (groupId === null || userId === null) {
-      return;
-    }
-
-    const groupIdText = String(groupId);
-    const userIdText = String(userId);
-
-    if (allowedGroupIds.size > 0 && !allowedGroupIds.has(groupIdText)) {
-      logInfo(`[filter] Ignored group not in allowlist: group_id=${groupIdText}, user_id=${userIdText}`);
-      return;
-    }
-
-    if (allowedUserIds.size > 0 && !allowedUserIds.has(userIdText)) {
-      logInfo(`[filter] Ignored user not in allowlist: group_id=${groupIdText}, user_id=${userIdText}`);
-      return;
-    }
-
-    const lockKey = `${groupId}:${userId}`;
-
-    if (activeLocks.has(lockKey)) {
-      logInfo(`[lock] Ignored concurrent request: group_id=${groupId}, user_id=${userId}`);
-      return;
-    }
-
-    activeLocks.add(lockKey);
-    reportStatus();
-
-    try {
-      await handleIncomingMessage({
-        message,
-        sessionStore,
-        llmRouter,
-        napcat,
-        logger,
-        normalizeIncomingEvent,
-        prepareImageInputs,
-        imageCacheDir: runtimeConfig.paths.imageCacheDir,
-        maxOutputChars: runtimeConfig.bot.maxOutputChars
-      });
-    } finally {
-      activeLocks.delete(lockKey);
-      reportStatus();
-    }
+    await processRuntimeMessage({
+      message,
+      activeLocks,
+      allowedChatIds,
+      allowedUserIds,
+      createChannelPort: () =>
+        createNapCatChannelPort({
+          napcatClient: napcat,
+          prefix: runtimeConfig.bot.prefix
+        }),
+      sessionStore,
+      llmRouter,
+      logger,
+      prepareImageInputs,
+      imageCacheDir: runtimeConfig.paths.imageCacheDir,
+      maxOutputChars: runtimeConfig.bot.maxOutputChars,
+      reportStatus,
+      onReplyTelemetry: (telemetry) => {
+        lastLlmRequest = telemetry;
+        lastLlmFailure = null;
+        reportStatus();
+      },
+      onReplyFailureTelemetry: (telemetry) => {
+        lastLlmFailure = telemetry;
+        reportStatus();
+      }
+    });
   }
 
-  const initialControlConfig = await readControlConfig({
-    cwd: process.cwd(),
-    runtimeConfig
-  });
-  envWatcher = fs.watch(initialControlConfig.envPath, () => {
-    if (!shuttingDown) {
-      scheduleEnvReload('env-watch');
-    }
-  });
-  logInfo(`[runtime] Watching config file: ${initialControlConfig.envPath}`);
-
-  napcat = createNapcatClientForCurrentConfig();
-  napcat.connect();
+  await configReloader.startWatching();
+  connectionManager.attachInitialClient(createNapcatClientForCurrentConfig());
 
   async function shutdown(signal) {
     if (shuttingDown) {
@@ -332,22 +239,8 @@ async function main() {
     reportStatus();
     logInfo(`[runtime] Shutting down: signal=${signal}`);
 
-    if (envReloadTimer) {
-      clearTimeout(envReloadTimer);
-      envReloadTimer = null;
-    }
-
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-
-    envWatcher?.close();
-
-    if (napcat) {
-      suppressedReconnectClient = napcat;
-      napcat.disconnect(1000, `shutdown:${signal}`);
-    }
+    configReloader.stopWatching();
+    connectionManager.shutdownCurrentClient(`shutdown:${signal}`);
 
     setTimeout(() => {
       process.exit(0);

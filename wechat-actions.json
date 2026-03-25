@@ -1,0 +1,40 @@
+[
+  {
+    "id": "8d1ba346-ca1d-4ef5-af87-50b758a3d383",
+    "requestId": "wechat_req_1774266184956_1",
+    "action": "send_group_text",
+    "params": {
+      "chatId": "wx_group_mention",
+      "text": "您好！我是QQ群助手，有什么可以帮您的吗？"
+    },
+    "timestamp": "2026-03-23T11:43:04.958Z"
+  },
+  {
+    "id": "c831df26-3f19-49be-a24b-3517d229df75",
+    "requestId": "wechat_req_1774266185255_2",
+    "action": "get_message",
+    "params": {
+      "messageId": "wx_msg_2c3b4ff5-6d2a-490a-b14e-166961c76444"
+    },
+    "timestamp": "2026-03-23T11:43:05.256Z"
+  },
+  {
+    "id": "3e063cc3-23d2-4fdf-9a59-8d3038179eb9",
+    "requestId": "wechat_req_1774266185256_3",
+    "action": "download_image",
+    "params": {
+      "fileId": "img_demo_001"
+    },
+    "timestamp": "2026-03-23T11:43:05.257Z"
+  },
+  {
+    "id": "cc19d0da-a88b-43b1-8419-ca069a8c6e04",
+    "requestId": "wechat_req_1774266203544_4",
+    "action": "send_group_text",
+    "params": {
+      "chatId": "wx_group_reply",
+      "text": "这次没有生成可发送的文本。"
+    },
+    "timestamp": "2026-03-23T11:43:23.545Z"
+  }
+]

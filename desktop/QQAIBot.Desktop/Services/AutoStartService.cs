@@ -1,47 +1,60 @@
 using System.IO;
 using System.Reflection;
 
-using Microsoft.Win32;
-
 namespace QQAIBot.Desktop.Services;
 
-public sealed class AutoStartService
+public sealed class AutoStartService : IAutoStartService
 {
-    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string AppValueName = "QQAIBot.Desktop";
     private const string AutoStartArgument = "--minimized";
     private const string EnsureRuntimeArgument = "--ensure-runtime";
+    private readonly IAutoStartRegistryStore _registryStore;
+    private readonly Func<string> _resolveExecutablePath;
+
+    public AutoStartService(
+        IAutoStartRegistryStore? registryStore = null,
+        Func<string>? resolveExecutablePath = null)
+    {
+        _registryStore = registryStore ?? new WindowsAutoStartRegistryStore();
+        _resolveExecutablePath = resolveExecutablePath ?? (() => ResolveAutoStartExecutablePath());
+    }
 
     public bool IsEnabled()
     {
-        using var runKey = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-        var value = runKey?.GetValue(AppValueName) as string;
+        var value = _registryStore.GetValue(AppValueName);
         return !string.IsNullOrWhiteSpace(value);
     }
 
     public void SetEnabled(bool enabled)
     {
-        using var runKey = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
-            ?? throw new InvalidOperationException("Failed to open HKCU Run registry key.");
-
         if (!enabled)
         {
-            runKey.DeleteValue(AppValueName, throwOnMissingValue: false);
+            _registryStore.DeleteValue(AppValueName);
             return;
         }
 
-        var executablePath = ResolveAutoStartExecutablePath();
+        var executablePath = _resolveExecutablePath();
 
-        runKey.SetValue(
+        _registryStore.SetValue(
             AppValueName,
-            $"\"{executablePath}\" {AutoStartArgument} {EnsureRuntimeArgument}",
-            RegistryValueKind.String
-        );
+            BuildAutoStartCommand(executablePath));
     }
 
-    private static string ResolveAutoStartExecutablePath()
+    public static string BuildAutoStartCommand(string executablePath)
     {
-        var processPath = Environment.ProcessPath;
+        return $"\"{executablePath}\" {AutoStartArgument} {EnsureRuntimeArgument}";
+    }
+
+    public static string ResolveAutoStartExecutablePath(
+        string? processPath = null,
+        string? appBaseDirectory = null,
+        string? entryAssemblyName = null,
+        Func<string, bool>? fileExists = null)
+    {
+        processPath ??= Environment.ProcessPath;
+        appBaseDirectory ??= AppContext.BaseDirectory;
+        entryAssemblyName ??= Assembly.GetEntryAssembly()?.GetName().Name;
+        fileExists ??= File.Exists;
 
         if (!string.IsNullOrWhiteSpace(processPath) &&
             !string.Equals(Path.GetFileName(processPath), "dotnet.exe", StringComparison.OrdinalIgnoreCase))
@@ -49,12 +62,11 @@ public sealed class AutoStartService
             return processPath;
         }
 
-        var entryAssemblyName = Assembly.GetEntryAssembly()?.GetName().Name;
         if (!string.IsNullOrWhiteSpace(entryAssemblyName))
         {
-            var candidatePath = Path.Combine(AppContext.BaseDirectory, $"{entryAssemblyName}.exe");
+            var candidatePath = Path.Combine(appBaseDirectory, $"{entryAssemblyName}.exe");
 
-            if (File.Exists(candidatePath))
+            if (fileExists(candidatePath))
             {
                 return candidatePath;
             }

@@ -45,6 +45,7 @@ Runtime Worker
         +-- config hot reload
 ```
 
+
 ## 目录结构
 
 ```text
@@ -96,9 +97,9 @@ OPENAI_MODEL=gpt-5.4
 OPENAI_BASE_URL=
 
 OPENAI_DEFAULT_API_KEY=
-OPENAI_DEFAULT_MODEL=deepseek-chat
-OPENAI_DEFAULT_BASE_URL=https://api.deepseek.com/v1
-OPENAI_DEFAULT_API_STYLE=chat_completions
+OPENAI_DEFAULT_MODEL=gpt-5.4
+OPENAI_DEFAULT_BASE_URL=
+OPENAI_DEFAULT_API_STYLE=responses
 
 OPENAI_ADVANCED_API_KEY=
 OPENAI_ADVANCED_MODEL=gpt-5.4
@@ -112,9 +113,11 @@ NAPCAT_TOKEN=
 BOT_PREFIX=/ai
 BOT_PERSONA=
 MAX_OUTPUT_CHARS=800
-ALLOWED_GROUP_IDS=
+ALLOWED_CHAT_IDS=
 ALLOWED_USER_IDS=
 ```
+
+- `OPENAI_DEFAULT_API_KEY` / `OPENAI_DEFAULT_BASE_URL` can be left blank to inherit the shared route.
 
 说明：
 
@@ -126,7 +129,7 @@ ALLOWED_USER_IDS=
   命中这些前缀时切到高级路由
 - `BOT_PERSONA`
   支持多行，保存时会自动转义为 `\n`
-- `ALLOWED_GROUP_IDS` / `ALLOWED_USER_IDS`
+- `ALLOWED_CHAT_IDS` / `ALLOWED_USER_IDS`
   留空表示不过滤
 
 ## 启动方式
@@ -157,6 +160,102 @@ dotnet run --project .\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj
 - 可以附着已有 supervisor
 - 可配置开机启动
 - 开机启动时默认 `--minimized --ensure-runtime`
+
+### Desktop 验收脚本
+
+跨进程 desktop 验收与剩余人工检查步骤：
+
+```powershell
+npm run desktop:acceptance
+```
+
+只跑脚本里的自动化部分：
+
+```powershell
+npm run desktop:acceptance:auto
+```
+
+只校验路径和文件，不启动任何 GUI 进程：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\desktop-acceptance.ps1 -ValidateOnly
+```
+
+### 启动微信桥模拟器
+
+如果你还没有真实个人微信 bridge，可以先跑本地模拟器：
+
+```powershell
+npm run wechat:bridge:sim
+```
+
+默认地址：
+
+```text
+ws://127.0.0.1:3198
+```
+
+然后把 `.env` 里的这些值填上：
+
+```env
+WECHAT_BRIDGE_URL=ws://127.0.0.1:3198
+WECHAT_BRIDGE_TOKEN=
+WECHAT_BOT_PREFIX=/ai
+```
+
+模拟器还提供两个本地 HTTP 入口：
+
+- `GET /health`
+- `POST /emit-test-message`
+- `GET /actions`
+
+测试消息注入示例：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3198/emit-test-message
+```
+
+也可以传 JSON 自定义消息内容：
+
+```powershell
+$body = @{
+  chatId = "wx_group_demo"
+  userId = "wx_user_demo"
+  text = "/ai 帮我总结一下今天的任务"
+  mentioned = $false
+  replyToMessageIds = @()
+  images = @()
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:3198/emit-test-message `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+支持字段：
+
+- `chatId`
+- `userId`
+- `selfId`
+- `text`
+- `rawText`
+- `mentioned`
+- `replyToMessageIds`
+- `images`
+
+bridge 收到的 action 会写入当前工作目录下的：
+
+```text
+wechat-actions.json
+```
+
+你也可以用环境变量改路径：
+
+```env
+WECHAT_BRIDGE_SIM_ACTION_LOG=D:\path\to\wechat-actions.json
+```
 
 ## 发布打包
 
@@ -229,7 +328,7 @@ dist/qq-ai-bot-<version>-<timestamp>.zip
 - 命中升级前缀：走 `advanced`
 - 有图片输入：强制走 `advanced`
 
-会话按 `group_id:user_id` 隔离。
+会话按 `channel=<id>|chat=<id>|user=<id>` 隔离。
 不同 route 的上下文和 `previousResponseId` 分开保存。
 
 ## 会话存储

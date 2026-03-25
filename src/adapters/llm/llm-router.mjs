@@ -17,6 +17,10 @@ export function createLlmRouter({
     model: defaultRoute?.model || DEFAULT_DEFAULT_MODEL,
     baseURL: defaultRoute?.baseURL ?? null,
     apiStyle: defaultRoute?.apiStyle,
+    reasoningEffort: defaultRoute?.reasoningEffort,
+    textVerbosity: defaultRoute?.textVerbosity,
+    enableWebSearch: defaultRoute?.enableWebSearch,
+    enableCodeInterpreter: defaultRoute?.enableCodeInterpreter,
     botPersona
   });
 
@@ -26,11 +30,19 @@ export function createLlmRouter({
     model: advancedRoute?.model || DEFAULT_ADVANCED_MODEL,
     baseURL: advancedRoute?.baseURL ?? null,
     apiStyle: advancedRoute?.apiStyle,
+    reasoningEffort: advancedRoute?.reasoningEffort,
+    textVerbosity: advancedRoute?.textVerbosity,
+    enableWebSearch: advancedRoute?.enableWebSearch,
+    enableCodeInterpreter: advancedRoute?.enableCodeInterpreter,
     fallback: {
       apiKey: defaultRoute?.apiKey,
       model: DEFAULT_ADVANCED_MODEL,
       baseURL: advancedRoute?.baseURL ?? defaultRoute?.baseURL ?? null,
-      apiStyle: 'responses'
+      apiStyle: 'responses',
+      reasoningEffort: defaultRoute?.reasoningEffort,
+      textVerbosity: defaultRoute?.textVerbosity,
+      enableWebSearch: defaultRoute?.enableWebSearch,
+      enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
     },
     botPersona
   });
@@ -44,11 +56,19 @@ export function createLlmRouter({
       advancedTriggerPrefixes: normalizedAdvancedTriggerPrefixes,
       defaultRoute: {
         model: defaultProvider.model,
-        apiStyle: defaultProvider.apiStyle
+        apiStyle: defaultProvider.apiStyle,
+        reasoningEffort: defaultProvider.reasoningEffort,
+        textVerbosity: defaultProvider.textVerbosity,
+        enableWebSearch: defaultProvider.enableWebSearch,
+        enableCodeInterpreter: defaultProvider.enableCodeInterpreter
       },
       advancedRoute: {
         model: advancedProvider.model,
-        apiStyle: advancedProvider.apiStyle
+        apiStyle: advancedProvider.apiStyle,
+        reasoningEffort: advancedProvider.reasoningEffort,
+        textVerbosity: advancedProvider.textVerbosity,
+        enableWebSearch: advancedProvider.enableWebSearch,
+        enableCodeInterpreter: advancedProvider.enableCodeInterpreter
       }
     });
   }
@@ -58,7 +78,12 @@ export function createLlmRouter({
     userText,
     previousResponseId = null,
     sharedMessages = [],
-    imageInputs = []
+    imageInputs = [],
+    reasoningEffortOverride,
+    textVerbosityOverride,
+    enableWebSearchOverride,
+    enableCodeInterpreterOverride,
+    storeOverride
   }) {
     const provider = route === 'advanced' ? advancedProvider : defaultProvider;
 
@@ -66,7 +91,12 @@ export function createLlmRouter({
       userText,
       previousResponseId,
       sharedMessages,
-      imageInputs
+      imageInputs,
+      reasoningEffortOverride,
+      textVerbosityOverride,
+      enableWebSearchOverride,
+      enableCodeInterpreterOverride,
+      storeOverride
     });
   }
 

@@ -5,7 +5,7 @@ import OpenAI from 'openai';
 import { withTimeout } from '../../utils.mjs';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
-export const DEFAULT_DEFAULT_MODEL = 'deepseek-chat';
+export const DEFAULT_DEFAULT_MODEL = 'gpt-5.4';
 export const DEFAULT_ADVANCED_MODEL = 'gpt-5.4';
 
 const API_STYLE_RESPONSES = 'responses';
@@ -83,7 +83,162 @@ function normalizeApiStyle(style, routeName, model, baseURL) {
   return API_STYLE_RESPONSES;
 }
 
-function normalizeRouteConfig({ routeName, apiKey, model, baseURL, apiStyle, fallback }) {
+function inferDefaultReasoningEffort(routeName, model, apiStyle) {
+  if (apiStyle !== API_STYLE_RESPONSES) {
+    return '';
+  }
+
+  const normalizedModel = typeof model === 'string' ? model.trim().toLowerCase() : '';
+
+  if (!normalizedModel.startsWith('gpt-5')) {
+    return '';
+  }
+
+  return routeName === 'advanced' ? 'high' : 'medium';
+}
+
+function normalizeReasoningEffort(value, routeName, model, apiStyle) {
+  const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+  if (
+    normalizedValue === 'none' ||
+    normalizedValue === 'low' ||
+    normalizedValue === 'medium' ||
+    normalizedValue === 'high'
+  ) {
+    return normalizedValue;
+  }
+
+  return inferDefaultReasoningEffort(routeName, model, apiStyle);
+}
+
+function inferDefaultTextVerbosity(routeName, model, apiStyle) {
+  if (apiStyle !== API_STYLE_RESPONSES) {
+    return '';
+  }
+
+  const normalizedModel = typeof model === 'string' ? model.trim().toLowerCase() : '';
+
+  if (!normalizedModel.startsWith('gpt-5')) {
+    return '';
+  }
+
+  return routeName === 'advanced' ? 'high' : 'medium';
+}
+
+function normalizeTextVerbosity(value, routeName, model, apiStyle) {
+  const normalizedValue = typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+  if (normalizedValue === 'low' || normalizedValue === 'medium' || normalizedValue === 'high') {
+    return normalizedValue;
+  }
+
+  return inferDefaultTextVerbosity(routeName, model, apiStyle);
+}
+
+function normalizeBooleanFlag(value, fallback = false) {
+  if (value === true || value === false) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalizedValue = value.trim().toLowerCase();
+
+  if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalizedValue)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function buildResponsesTools({ enableWebSearch = false, enableCodeInterpreter = false } = {}) {
+  const tools = [];
+
+  if (enableWebSearch) {
+    tools.push({
+      type: 'web_search'
+    });
+  }
+
+  if (enableCodeInterpreter) {
+    tools.push({
+      type: 'code_interpreter',
+      container: {
+        type: 'auto'
+      }
+    });
+  }
+
+  return tools;
+}
+
+function buildEnabledToolKinds({ enableWebSearch = false, enableCodeInterpreter = false } = {}) {
+  const toolKinds = [];
+
+  if (enableWebSearch) {
+    toolKinds.push('web_search');
+  }
+
+  if (enableCodeInterpreter) {
+    toolKinds.push('code_interpreter');
+  }
+
+  return toolKinds;
+}
+
+function resolveEffectiveReasoningEffort(overrideValue, selectedClient) {
+  if (typeof overrideValue !== 'string' || !overrideValue.trim()) {
+    return selectedClient.reasoningEffort;
+  }
+
+  return (
+    normalizeReasoningEffort(
+      overrideValue.trim(),
+      selectedClient.routeName,
+      selectedClient.model,
+      selectedClient.apiStyle
+    ) || selectedClient.reasoningEffort
+  );
+}
+
+function resolveEffectiveTextVerbosity(overrideValue, selectedClient) {
+  if (typeof overrideValue !== 'string' || !overrideValue.trim()) {
+    return selectedClient.textVerbosity;
+  }
+
+  return (
+    normalizeTextVerbosity(
+      overrideValue.trim(),
+      selectedClient.routeName,
+      selectedClient.model,
+      selectedClient.apiStyle
+    ) || selectedClient.textVerbosity
+  );
+}
+
+function resolveEffectiveBooleanFlag(overrideValue, fallback) {
+  return typeof overrideValue === 'boolean' ? overrideValue : fallback;
+}
+
+function normalizeRouteConfig({
+  routeName,
+  apiKey,
+  model,
+  baseURL,
+  apiStyle,
+  reasoningEffort,
+  textVerbosity,
+  enableWebSearch,
+  enableCodeInterpreter,
+  fallback
+}) {
   const resolvedApiKey = apiKey || fallback?.apiKey || '';
   const resolvedModel = model || fallback?.model || '';
   const resolvedBaseURL = normalizeBaseUrl(baseURL ?? fallback?.baseURL ?? null);
@@ -92,6 +247,26 @@ function normalizeRouteConfig({ routeName, apiKey, model, baseURL, apiStyle, fal
     routeName,
     resolvedModel,
     resolvedBaseURL || ''
+  );
+  const resolvedReasoningEffort = normalizeReasoningEffort(
+    reasoningEffort ?? fallback?.reasoningEffort ?? '',
+    routeName,
+    resolvedModel,
+    resolvedApiStyle
+  );
+  const resolvedTextVerbosity = normalizeTextVerbosity(
+    textVerbosity ?? fallback?.textVerbosity ?? '',
+    routeName,
+    resolvedModel,
+    resolvedApiStyle
+  );
+  const resolvedEnableWebSearch = normalizeBooleanFlag(
+    enableWebSearch ?? fallback?.enableWebSearch ?? false,
+    false
+  );
+  const resolvedEnableCodeInterpreter = normalizeBooleanFlag(
+    enableCodeInterpreter ?? fallback?.enableCodeInterpreter ?? false,
+    false
   );
 
   if (typeof resolvedApiKey !== 'string' || !resolvedApiKey) {
@@ -114,6 +289,10 @@ function normalizeRouteConfig({ routeName, apiKey, model, baseURL, apiStyle, fal
     routeName,
     model: resolvedModel,
     apiStyle: resolvedApiStyle,
+    reasoningEffort: resolvedReasoningEffort,
+    textVerbosity: resolvedTextVerbosity,
+    enableWebSearch: resolvedEnableWebSearch,
+    enableCodeInterpreter: resolvedEnableCodeInterpreter,
     baseURL: resolvedBaseURL || DEFAULT_OPENAI_BASE_URL,
     client: new OpenAI(clientOptions)
   };
@@ -151,6 +330,10 @@ function looksLikeLocalPath(value) {
   return /^[a-zA-Z]:\\/.test(value) || value.startsWith('\\\\') || value.startsWith('file:///');
 }
 
+function looksLikeRemoteHttpUrl(value) {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+}
+
 function safeFileUrlToPath(fileUrl) {
   try {
     const url = new URL(fileUrl);
@@ -182,21 +365,6 @@ async function readLocalImageAsDataUrl(localPath) {
   return `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
 }
 
-async function fetchImageAsDataUrl(imageUrl) {
-  const response = await fetch(imageUrl, {
-    method: 'GET',
-    redirect: 'follow'
-  });
-
-  if (!response.ok) {
-    throw new Error(`Image fetch failed: ${response.status} ${response.statusText}`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const mimeType = normalizeMimeType(response.headers.get('content-type'), imageUrl);
-  return `data:${mimeType};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
-}
-
 async function normalizeImageInput(imageInput) {
   if (!imageInput || typeof imageInput !== 'object') {
     return null;
@@ -210,9 +378,21 @@ async function normalizeImageInput(imageInput) {
     return imageInput;
   }
 
-  const resolvedImageUrl = looksLikeLocalPath(imageInput.imageUrl)
+  if (looksLikeRemoteHttpUrl(imageInput.imageUrl)) {
+    throw new Error(
+      `Remote image URLs are not allowed: ${imageInput.imageUrl}`
+    );
+  }
+
+  const canReadLocalPath =
+    looksLikeLocalPath(imageInput.imageUrl) && imageInput.trustedLocalPath === true;
+  const resolvedImageUrl = canReadLocalPath
     ? await readLocalImageAsDataUrl(imageInput.imageUrl)
-    : await fetchImageAsDataUrl(imageInput.imageUrl);
+    : null;
+
+  if (!resolvedImageUrl) {
+    throw new Error(`Unsupported image reference: ${imageInput.imageUrl}`);
+  }
 
   return {
     ...imageInput,
@@ -444,6 +624,10 @@ export function createOpenAIProvider({
   model,
   baseURL,
   apiStyle,
+  reasoningEffort,
+  textVerbosity,
+  enableWebSearch,
+  enableCodeInterpreter,
   fallback,
   botPersona = ''
 }) {
@@ -453,19 +637,58 @@ export function createOpenAIProvider({
     model,
     baseURL,
     apiStyle,
+    reasoningEffort,
+    textVerbosity,
+    enableWebSearch,
+    enableCodeInterpreter,
     fallback
   });
   const instructions = buildBotInstructions(botPersona);
+
+  function buildReplyEnvelope(reply, effectiveRequest) {
+    const effectiveApiStyle = effectiveRequest.apiStyle;
+
+    return {
+      ...reply,
+      route: selectedClient.routeName,
+      model: selectedClient.model,
+      apiStyle:
+        selectedClient.apiStyle === effectiveApiStyle
+          ? selectedClient.apiStyle
+          : `${selectedClient.apiStyle}->${effectiveApiStyle}`,
+      configuredApiStyle: selectedClient.apiStyle,
+      effectiveApiStyle,
+      configuredReasoningEffort: selectedClient.reasoningEffort,
+      effectiveReasoningEffort: effectiveRequest.reasoningEffort,
+      configuredTextVerbosity: selectedClient.textVerbosity,
+      effectiveTextVerbosity: effectiveRequest.textVerbosity,
+      configuredEnableWebSearch: selectedClient.enableWebSearch,
+      effectiveEnableWebSearch: effectiveRequest.enableWebSearch,
+      configuredEnableCodeInterpreter: selectedClient.enableCodeInterpreter,
+      effectiveEnableCodeInterpreter: effectiveRequest.enableCodeInterpreter,
+      configuredTools: buildEnabledToolKinds({
+        enableWebSearch: selectedClient.enableWebSearch,
+        enableCodeInterpreter: selectedClient.enableCodeInterpreter
+      }),
+      effectiveTools: buildEnabledToolKinds({
+        enableWebSearch: effectiveRequest.enableWebSearch,
+        enableCodeInterpreter: effectiveRequest.enableCodeInterpreter
+      }),
+      baseURL: selectedClient.baseURL
+    };
+  }
 
   async function generateResponsesReply({
     userText,
     previousResponseId,
     imageInputs,
-    sharedMessages
+    sharedMessages,
+    effectiveSettings,
+    store = true
   }) {
     const request = {
       model: selectedClient.model,
-      store: true,
+      store,
       instructions,
       input: [
         {
@@ -477,6 +700,27 @@ export function createOpenAIProvider({
 
     if (typeof previousResponseId === 'string' && previousResponseId) {
       request.previous_response_id = previousResponseId;
+    }
+
+    if (effectiveSettings.reasoningEffort) {
+      request.reasoning = {
+        effort: effectiveSettings.reasoningEffort
+      };
+    }
+
+    if (effectiveSettings.textVerbosity) {
+      request.text = {
+        verbosity: effectiveSettings.textVerbosity
+      };
+    }
+
+    const tools = buildResponsesTools({
+      enableWebSearch: effectiveSettings.enableWebSearch,
+      enableCodeInterpreter: effectiveSettings.enableCodeInterpreter
+    });
+
+    if (tools.length > 0) {
+      request.tools = tools;
     }
 
     const response = await selectedClient.client.responses.create(request);
@@ -526,8 +770,26 @@ export function createOpenAIProvider({
     userText,
     previousResponseId = null,
     sharedMessages = [],
-    imageInputs = []
+    imageInputs = [],
+    reasoningEffortOverride,
+    textVerbosityOverride,
+    enableWebSearchOverride,
+    enableCodeInterpreterOverride,
+    storeOverride
   }) {
+    const effectiveSettings = {
+      reasoningEffort: resolveEffectiveReasoningEffort(reasoningEffortOverride, selectedClient),
+      textVerbosity: resolveEffectiveTextVerbosity(textVerbosityOverride, selectedClient),
+      enableWebSearch: resolveEffectiveBooleanFlag(
+        enableWebSearchOverride,
+        selectedClient.enableWebSearch
+      ),
+      enableCodeInterpreter: resolveEffectiveBooleanFlag(
+        enableCodeInterpreterOverride,
+        selectedClient.enableCodeInterpreter
+      )
+    };
+    const effectiveStore = typeof storeOverride === 'boolean' ? storeOverride : true;
     let reply;
 
     if (selectedClient.apiStyle === API_STYLE_CHAT_COMPLETIONS) {
@@ -537,15 +799,24 @@ export function createOpenAIProvider({
         imageInputs,
         allowImages: imageInputs.length > 0
       });
+      return buildReplyEnvelope(reply, {
+        apiStyle: API_STYLE_CHAT_COMPLETIONS,
+        reasoningEffort: '',
+        textVerbosity: '',
+        enableWebSearch: false,
+        enableCodeInterpreter: false
+      });
     } else if (imageInputs.length > 0) {
       try {
-        reply = await withTimeout(
+      reply = await withTimeout(
           () =>
             generateResponsesReply({
               userText,
               previousResponseId,
               imageInputs,
-              sharedMessages
+              sharedMessages,
+              effectiveSettings,
+              store: effectiveStore
             }),
           ADVANCED_IMAGE_REQUEST_TIMEOUT_MS,
           `Image request timed out: ${selectedClient.routeName}/${selectedClient.model}`
@@ -557,38 +828,48 @@ export function createOpenAIProvider({
           imageInputs,
           allowImages: true
         });
-
-        return {
-          ...reply,
-          route: selectedClient.routeName,
-          model: selectedClient.model,
-          apiStyle: `${selectedClient.apiStyle}->${API_STYLE_CHAT_COMPLETIONS}`,
-          baseURL: selectedClient.baseURL
-        };
+        return buildReplyEnvelope(reply, {
+          apiStyle: API_STYLE_CHAT_COMPLETIONS,
+          reasoningEffort: '',
+          textVerbosity: '',
+          enableWebSearch: false,
+          enableCodeInterpreter: false
+        });
       }
     } else {
       reply = await generateResponsesReply({
         userText,
         previousResponseId,
         imageInputs,
-        sharedMessages
+        sharedMessages,
+        effectiveSettings,
+        store: effectiveStore
       });
     }
 
-    return {
-      ...reply,
-      route: selectedClient.routeName,
-      model: selectedClient.model,
-      apiStyle: selectedClient.apiStyle,
-      baseURL: selectedClient.baseURL
-    };
+    return buildReplyEnvelope(reply, {
+      apiStyle: API_STYLE_RESPONSES,
+      reasoningEffort: effectiveSettings.reasoningEffort,
+      textVerbosity: effectiveSettings.textVerbosity,
+      enableWebSearch: effectiveSettings.enableWebSearch,
+      enableCodeInterpreter: effectiveSettings.enableCodeInterpreter
+    });
   }
 
   return {
     routeName: selectedClient.routeName,
     model: selectedClient.model,
     apiStyle: selectedClient.apiStyle,
+    reasoningEffort: selectedClient.reasoningEffort,
+    textVerbosity: selectedClient.textVerbosity,
+    enableWebSearch: selectedClient.enableWebSearch,
+    enableCodeInterpreter: selectedClient.enableCodeInterpreter,
     baseURL: selectedClient.baseURL,
     generateReply
   };
 }
+
+export const __test__ = Object.freeze({
+  buildResponsesTools,
+  buildEnabledToolKinds
+});

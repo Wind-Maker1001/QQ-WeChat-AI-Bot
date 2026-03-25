@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
+  buildLegacyConversationId,
+  parseConversationId,
   CONVERSATION_ROUTE_NAMES,
   createEmptyConversationState,
   normalizeConversationMessages,
@@ -10,11 +11,6 @@ import {
   parseConversationStorageKey
 } from './domain/conversation-state.mjs';
 import { safeJsonParse } from './utils.mjs';
-
-const currentFilePath = fileURLToPath(import.meta.url);
-const currentDirPath = path.dirname(currentFilePath);
-const dataDirPath = path.resolve(currentDirPath, '..', 'data');
-const sessionFilePath = path.join(dataDirPath, 'sessions.json');
 
 function normalizeLegacyRouteState(routeState) {
   if (!routeState || typeof routeState !== 'object' || Array.isArray(routeState)) {
@@ -167,13 +163,78 @@ function mergeLegacyIntoConversation(currentConversation, legacyState, routeHint
   return nextConversation;
 }
 
-export async function createSessionStore() {
-  const conversations = new Map();
-  let saveQueue = Promise.resolve();
-  const invalidJson = Symbol('invalid_json');
+function mergeConversationMaps(targetConversations, sourceConversations) {
+  for (const [conversationId, conversationState] of sourceConversations.entries()) {
+    const existingConversation =
+      targetConversations.get(conversationId) ?? createEmptyConversationState(conversationId);
+
+    targetConversations.set(
+      conversationId,
+      mergeConversationState(existingConversation, conversationState)
+    );
+  }
+
+  return targetConversations;
+}
+
+function hydrateConversationsFromParsed(parsed, conversations) {
   let migrationApplied = false;
 
-  await fs.mkdir(dataDirPath, { recursive: true });
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      conversations,
+      migrationApplied
+    };
+  }
+
+  for (const [storageKey, value] of Object.entries(parsed)) {
+    const { conversationId, routeName } = parseConversationStorageKey(storageKey);
+
+    if (!conversationId) {
+      migrationApplied = true;
+      continue;
+    }
+
+    if (routeName !== null) {
+      migrationApplied = true;
+    }
+
+    if (value && typeof value === 'object' && !Array.isArray(value) && value.version === 2) {
+      const normalizedConversation = normalizeConversationState(value, conversationId);
+      const existingConversation =
+        conversations.get(conversationId) ?? createEmptyConversationState(conversationId);
+      conversations.set(
+        conversationId,
+        mergeConversationState(existingConversation, normalizedConversation)
+      );
+      continue;
+    }
+
+    const legacyState = normalizeLegacySessionState(value);
+
+    if (!legacyState) {
+      migrationApplied = true;
+      continue;
+    }
+
+    migrationApplied = true;
+    const existingConversation =
+      conversations.get(conversationId) ?? createEmptyConversationState(conversationId);
+    conversations.set(
+      conversationId,
+      mergeLegacyIntoConversation(existingConversation, legacyState, routeName)
+    );
+  }
+
+  return {
+    conversations,
+    migrationApplied
+  };
+}
+
+async function loadConversationsFromDisk(sessionFilePath, invalidJson) {
+  const conversations = new Map();
+  let migrationApplied = false;
 
   try {
     const raw = await fs.readFile(sessionFilePath, 'utf8');
@@ -181,79 +242,201 @@ export async function createSessionStore() {
 
     if (parsed === invalidJson) {
       console.warn(`[session] Invalid JSON in ${sessionFilePath}; starting with empty store.`);
-    } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      for (const [storageKey, value] of Object.entries(parsed)) {
-        const { conversationId, routeName } = parseConversationStorageKey(storageKey);
-
-        if (!conversationId) {
-          migrationApplied = true;
-          continue;
-        }
-
-        if (routeName !== null) {
-          migrationApplied = true;
-        }
-
-        if (value && typeof value === 'object' && !Array.isArray(value) && value.version === 2) {
-          const normalizedConversation = normalizeConversationState(value, conversationId);
-          const existingConversation =
-            conversations.get(conversationId) ?? createEmptyConversationState(conversationId);
-          conversations.set(
-            conversationId,
-            mergeConversationState(existingConversation, normalizedConversation)
-          );
-          continue;
-        }
-
-        const legacyState = normalizeLegacySessionState(value);
-
-        if (!legacyState) {
-          migrationApplied = true;
-          continue;
-        }
-
-        migrationApplied = true;
-        const existingConversation =
-          conversations.get(conversationId) ?? createEmptyConversationState(conversationId);
-        conversations.set(
-          conversationId,
-          mergeLegacyIntoConversation(existingConversation, legacyState, routeName)
-        );
-      }
-    } else {
-      console.warn(`[session] Unexpected content in ${sessionFilePath}; starting with empty store.`);
+      return {
+        conversations,
+        migrationApplied
+      };
     }
+
+    const hydrationResult = hydrateConversationsFromParsed(parsed, conversations);
+    migrationApplied = hydrationResult.migrationApplied;
   } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      await fs.writeFile(sessionFilePath, '{}\n', 'utf8');
-    } else {
+    if (error?.code !== 'ENOENT') {
       console.error(`[session] Failed to read ${sessionFilePath}:`, error);
     }
   }
 
-  async function saveConversations() {
-    const payload = JSON.stringify(Object.fromEntries(conversations), null, 2);
+  return {
+    conversations,
+    migrationApplied
+  };
+}
 
+const SESSION_LOCK_TIMEOUT_MS = 5000;
+const STALE_SESSION_LOCK_AGE_MS = 15000;
+
+function buildSessionLockPayload() {
+  return JSON.stringify(
+    {
+      pid: process.pid,
+      acquiredAt: new Date().toISOString()
+    },
+    null,
+    2
+  );
+}
+
+function parseSessionLockPayload(raw) {
+  const parsed = safeJsonParse(raw, null);
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      pid: null,
+      acquiredAt: null
+    };
+  }
+
+  const pid = Number.isInteger(parsed.pid) && parsed.pid > 0 ? parsed.pid : null;
+  const acquiredAt =
+    typeof parsed.acquiredAt === 'string' && parsed.acquiredAt.trim() ? parsed.acquiredAt : null;
+
+  return {
+    pid,
+    acquiredAt
+  };
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function withSessionFileLock(lockFilePath, task, timeoutMs = SESSION_LOCK_TIMEOUT_MS) {
+  const startedAt = Date.now();
+
+  while (true) {
+    try {
+      const lockHandle = await fs.open(lockFilePath, 'wx');
+
+      try {
+        await lockHandle.writeFile(`${buildSessionLockPayload()}\n`, 'utf8');
+        return await task();
+      } finally {
+        await lockHandle.close();
+        await fs.rm(lockFilePath, { force: true });
+      }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        throw error;
+      }
+
+      try {
+        const rawLockFile = await fs.readFile(lockFilePath, 'utf8');
+        const stats = await fs.stat(lockFilePath);
+        const lockAgeMs = Date.now() - stats.mtimeMs;
+        const lockState = parseSessionLockPayload(rawLockFile);
+        const ownerAlive = isProcessAlive(lockState.pid);
+
+        if (lockAgeMs >= STALE_SESSION_LOCK_AGE_MS && !ownerAlive) {
+          await fs.rm(lockFilePath, { force: true });
+          console.warn(
+            `[session] Removed stale lock file: ${lockFilePath} age_ms=${Math.round(lockAgeMs)} owner_pid=${lockState.pid ?? 'unknown'}`
+          );
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code === 'ENOENT') {
+          continue;
+        }
+
+        throw statError;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(`Timed out waiting for session file lock: ${lockFilePath}`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
+function resolveConversationKeys(key) {
+  const { conversationId } = parseConversationStorageKey(key);
+  const normalizedKey = conversationId || key;
+  const parsedConversationId = parseConversationId(normalizedKey);
+  const legacyKey =
+    parsedConversationId.channelId && parsedConversationId.chatId && parsedConversationId.userId
+      ? buildLegacyConversationId({
+          chatId: parsedConversationId.chatId,
+          userId: parsedConversationId.userId
+        })
+      : '';
+
+  return {
+    normalizedKey,
+    legacyKey: legacyKey && legacyKey !== normalizedKey ? legacyKey : ''
+  };
+}
+
+export async function createSessionStore({
+  cwd = process.cwd(),
+  dataDirPath = path.resolve(cwd, 'data'),
+  sessionFilePath = path.join(dataDirPath, 'sessions.json')
+} = {}) {
+  const conversations = new Map();
+  const sessionLockFilePath = `${sessionFilePath}.lock`;
+  const sessionTempFilePath = `${sessionFilePath}.tmp`;
+  let saveQueue = Promise.resolve();
+  const invalidJson = Symbol('invalid_json');
+  let migrationApplied = false;
+
+  await fs.mkdir(dataDirPath, { recursive: true });
+
+  const loadResult = await loadConversationsFromDisk(sessionFilePath, invalidJson);
+  mergeConversationMaps(conversations, loadResult.conversations);
+  migrationApplied = loadResult.migrationApplied;
+
+  if ((await fs.stat(sessionFilePath).catch(() => null)) === null) {
+    await fs.writeFile(sessionFilePath, '{}\n', 'utf8');
+  }
+
+  async function saveConversations() {
     saveQueue = saveQueue
       .catch(() => {})
-      .then(() => fs.writeFile(sessionFilePath, `${payload}\n`, 'utf8'));
+      .then(() =>
+        withSessionFileLock(sessionLockFilePath, async () => {
+          const diskResult = await loadConversationsFromDisk(sessionFilePath, invalidJson);
+          const mergedConversations = mergeConversationMaps(
+            diskResult.conversations,
+            conversations
+          );
+          const payload = JSON.stringify(Object.fromEntries(mergedConversations), null, 2);
+
+          conversations.clear();
+          mergeConversationMaps(conversations, mergedConversations);
+
+          await fs.writeFile(sessionTempFilePath, `${payload}\n`, 'utf8');
+          await fs.rename(sessionTempFilePath, sessionFilePath);
+        })
+      );
 
     return saveQueue;
   }
 
   function getConversation(key) {
-    const { conversationId } = parseConversationStorageKey(key);
-    const normalizedKey = conversationId || key;
+    const { normalizedKey, legacyKey } = resolveConversationKeys(key);
+    const lookupKey =
+      conversations.has(normalizedKey) || !legacyKey || !conversations.has(legacyKey)
+        ? normalizedKey
+        : legacyKey;
 
     return normalizeConversationState(
-      conversations.get(normalizedKey) ?? createEmptyConversationState(normalizedKey),
+      conversations.get(lookupKey) ?? createEmptyConversationState(normalizedKey),
       normalizedKey
     );
   }
 
   async function setConversation(key, conversationState) {
-    const { conversationId } = parseConversationStorageKey(key);
-    const normalizedKey = conversationId || key;
+    const { normalizedKey, legacyKey } = resolveConversationKeys(key);
 
     if (typeof normalizedKey !== 'string' || !normalizedKey) {
       throw new Error('Conversation key is required.');
@@ -262,6 +445,11 @@ export async function createSessionStore() {
     const normalizedConversation = normalizeConversationState(conversationState, normalizedKey);
     normalizedConversation.updatedAt = new Date().toISOString();
     conversations.set(normalizedKey, normalizedConversation);
+
+    if (legacyKey && conversations.has(legacyKey)) {
+      conversations.delete(legacyKey);
+    }
+
     await saveConversations();
   }
 

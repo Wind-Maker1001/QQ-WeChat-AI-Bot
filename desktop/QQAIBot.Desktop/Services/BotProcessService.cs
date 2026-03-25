@@ -1,10 +1,9 @@
-using System.IO;
 using System.Diagnostics;
-using System.Text;
+using System.IO;
 
 namespace QQAIBot.Desktop.Services;
 
-public sealed class BotProcessService : IDisposable
+public sealed class BotProcessService : IBotProcessService
 {
     private Process? _process;
 
@@ -23,7 +22,7 @@ public sealed class BotProcessService : IDisposable
 
         if (!Directory.Exists(workingDirectory))
         {
-            throw new DirectoryNotFoundException($"后端目录不存在: {workingDirectory}");
+            throw new DirectoryNotFoundException($"Backend directory does not exist: {workingDirectory}");
         }
 
         var process = new Process
@@ -34,28 +33,22 @@ public sealed class BotProcessService : IDisposable
                 Arguments = "./src/index.mjs",
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
                 CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
+                RedirectStandardOutput = false,
+                RedirectStandardError = false
             },
             EnableRaisingEvents = true
         };
 
-        process.OutputDataReceived += OnOutputDataReceived;
-        process.ErrorDataReceived += OnErrorDataReceived;
         process.Exited += OnProcessExited;
 
         if (!process.Start())
         {
-            throw new InvalidOperationException("启动 Node 后端失败。");
+            throw new InvalidOperationException("Failed to start backend Node process.");
         }
 
         _process = process;
-        RaiseLog($"已启动后端进程，PID={process.Id}，命令=node ./src/index.mjs");
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+        RaiseLog($"Started backend process, PID={process.Id}, command=node ./src/index.mjs");
     }
 
     public async Task StopAsync()
@@ -69,11 +62,25 @@ public sealed class BotProcessService : IDisposable
 
         if (!process.HasExited)
         {
-            RaiseLog($"正在停止后端进程，PID={process.Id}");
+            RaiseLog($"Stopping backend process, PID={process.Id}");
             process.Kill(true);
             await process.WaitForExitAsync();
         }
 
+        DetachProcess(process);
+        process.Dispose();
+        _process = null;
+    }
+
+    public void Detach()
+    {
+        if (_process is null)
+        {
+            return;
+        }
+
+        var process = _process;
+        RaiseLog($"Detached desktop ownership from backend process, PID={process.Id}");
         DetachProcess(process);
         process.Dispose();
         _process = null;
@@ -91,27 +98,11 @@ public sealed class BotProcessService : IDisposable
         _process = null;
     }
 
-    private void OnOutputDataReceived(object sender, DataReceivedEventArgs e)
-    {
-        if (!string.IsNullOrWhiteSpace(e.Data))
-        {
-            RaiseLog(e.Data);
-        }
-    }
-
-    private void OnErrorDataReceived(object sender, DataReceivedEventArgs e)
-    {
-        if (!string.IsNullOrWhiteSpace(e.Data))
-        {
-            RaiseLog($"[stderr] {e.Data}");
-        }
-    }
-
     private void OnProcessExited(object? sender, EventArgs e)
     {
         if (_process is not null)
         {
-            RaiseLog($"后端进程已退出，ExitCode={_process.ExitCode}");
+            RaiseLog($"Backend process exited, ExitCode={_process.ExitCode}");
         }
 
         ProcessExited?.Invoke(this, EventArgs.Empty);
@@ -124,8 +115,6 @@ public sealed class BotProcessService : IDisposable
 
     private void DetachProcess(Process process)
     {
-        process.OutputDataReceived -= OnOutputDataReceived;
-        process.ErrorDataReceived -= OnErrorDataReceived;
         process.Exited -= OnProcessExited;
     }
 }

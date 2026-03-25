@@ -8,6 +8,8 @@ public sealed class BackendRuntimeStatus
 
     public bool RuntimeActive { get; set; }
 
+    public bool RuntimeReady { get; set; }
+
     public bool NapcatConnected { get; set; }
 
     public int ActiveLockCount { get; set; }
@@ -23,4 +25,20 @@ public sealed class BackendRuntimeStatus
     public int? WorkerProcessId { get; set; }
 
     public string WorkerStartedAt { get; set; } = string.Empty;
+
+    public BackendLlmRequestStatus? LastQqLlmRequest { get; set; }
+
+    public bool WechatConfigured { get; set; }
+
+    public bool WechatRuntimeActive { get; set; }
+
+    public bool WechatRuntimeReady { get; set; }
+
+    public bool WechatBridgeConnected { get; set; }
+
+    public int? WechatWorkerProcessId { get; set; }
+
+    public string WechatWorkerStartedAt { get; set; } = string.Empty;
+
+    public BackendLlmRequestStatus? LastWechatLlmRequest { get; set; }
 }

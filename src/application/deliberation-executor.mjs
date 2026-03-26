@@ -1,6 +1,54 @@
 import { createLlmReplyOutcome } from '../domain/llm-reply-outcome.mjs';
+import {
+  createExecutionProjection,
+  DELIBERATION_EXECUTION_STAGES,
+  EXECUTION_KIND_DELIBERATION,
+  EXECUTION_RECOVERY_PLANNER_FAILED,
+  EXECUTION_RECOVERY_REWRITE_FALLBACK_TO_DRAFT,
+  EXECUTION_STAGE_DRAFT,
+  EXECUTION_STAGE_PLANNER,
+  EXECUTION_STAGE_REWRITE
+} from '../domain/execution-projection.mjs';
 import { buildDeliberationConversationDelta } from './deliberation-policy.mjs';
 import { formatError } from '../utils.mjs';
+
+function buildDeliberationFailureProjection({
+  failedStage,
+  completedStages = [],
+  recoveries = []
+}) {
+  return createExecutionProjection({
+    kind: EXECUTION_KIND_DELIBERATION,
+    stages: DELIBERATION_EXECUTION_STAGES,
+    failedStage,
+    completedStages,
+    recoveries
+  });
+}
+
+function buildDeliberationSuccessProjection({
+  completedStages = [],
+  recoveries = []
+}) {
+  return createExecutionProjection({
+    kind: EXECUTION_KIND_DELIBERATION,
+    stages: DELIBERATION_EXECUTION_STAGES,
+    completedStages,
+    recoveries
+  });
+}
+
+function attachExecutionFailureProjection(error, executionProjection) {
+  if (error instanceof Error) {
+    error.executionFailureProjection = executionProjection;
+    return error;
+  }
+
+  const wrappedError = new Error(String(error));
+  wrappedError.cause = error;
+  wrappedError.executionFailureProjection = executionProjection;
+  return wrappedError;
+}
 
 function buildPlannerPrompt(userText) {
   return [
@@ -47,6 +95,8 @@ export async function runDeliberationPipeline({
 }) {
   const { deliberation, route, sessionContext, userText } = executionPlan;
   let planText = '';
+  const completedStages = [];
+  const recoveries = [];
 
   try {
     const plannerReply = await llmRouter.generateReply({
@@ -56,18 +106,35 @@ export async function runDeliberationPipeline({
     });
 
     planText = plannerReply.text || '';
+    completedStages.push(EXECUTION_STAGE_PLANNER);
     logger.info?.(
       `[openai] Planner generated: route=${plannerReply.route}, model=${plannerReply.model}, length=${planText.length}`
     );
   } catch (error) {
     logger.error?.(`[openai] Planner failed, fallback to direct drafting: ${formatError(error)}`);
+    recoveries.push(EXECUTION_RECOVERY_PLANNER_FAILED);
   }
 
-  const draftReply = await llmRouter.generateReply({
-    ...deliberation.draftRequest,
-    route,
-    userText: buildDraftPrompt(userText, planText)
-  });
+  let draftReply;
+
+  try {
+    draftReply = await llmRouter.generateReply({
+      ...deliberation.draftRequest,
+      route,
+      userText: buildDraftPrompt(userText, planText)
+    });
+    completedStages.push(EXECUTION_STAGE_DRAFT);
+  } catch (error) {
+    throw attachExecutionFailureProjection(
+      error,
+      buildDeliberationFailureProjection({
+        failedStage: EXECUTION_STAGE_DRAFT,
+        completedStages,
+        recoveries
+      })
+    );
+  }
+
   const draftText = draftReply.text || '';
 
   try {
@@ -77,9 +144,14 @@ export async function runDeliberationPipeline({
       userText: buildRewritePrompt(userText, planText, draftText)
     });
     const rewrittenText = rewriteReply.text || draftText;
+    completedStages.push(EXECUTION_STAGE_REWRITE);
 
     return {
       ...rewriteReply,
+      executionProjection: buildDeliberationSuccessProjection({
+        completedStages,
+        recoveries
+      }),
       ...createLlmReplyOutcome({
         text: rewrittenText,
         responseId: rewriteReply.responseId,
@@ -92,8 +164,13 @@ export async function runDeliberationPipeline({
     };
   } catch (error) {
     logger.error?.(`[openai] Final rewrite failed, fallback to draft answer: ${formatError(error)}`);
+    recoveries.push(EXECUTION_RECOVERY_REWRITE_FALLBACK_TO_DRAFT);
     return {
       ...draftReply,
+      executionProjection: buildDeliberationSuccessProjection({
+        completedStages,
+        recoveries
+      }),
       ...createLlmReplyOutcome({
         text: draftText,
         responseId: draftReply.responseId,
@@ -106,3 +183,8 @@ export async function runDeliberationPipeline({
     };
   }
 }
+
+export const __test__ = Object.freeze({
+  buildDeliberationFailureProjection,
+  buildDeliberationSuccessProjection
+});

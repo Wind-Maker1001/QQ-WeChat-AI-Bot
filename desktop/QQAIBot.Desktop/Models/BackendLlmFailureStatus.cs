@@ -14,6 +14,12 @@ public sealed class BackendLlmFailureStatus
 
     public BackendDecisionSummary? DecisionSummary { get; set; }
 
+    public string ExecutionKind { get; set; } = string.Empty;
+
+    public string ExecutionSummary { get; set; } = string.Empty;
+
+    public BackendExecutionProjection? ExecutionProjection { get; set; }
+
     public string ChatId { get; set; } = string.Empty;
 
     public string UserId { get; set; } = string.Empty;

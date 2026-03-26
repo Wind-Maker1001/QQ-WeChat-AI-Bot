@@ -7,6 +7,17 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { WebSocketServer } from 'ws';
+import {
+  createExecutionProjection,
+  DELIBERATION_EXECUTION_STAGES,
+  EXECUTION_KIND_DELIBERATION,
+  EXECUTION_KIND_DIRECT,
+  EXECUTION_STAGE_DIRECT,
+  EXECUTION_STAGE_DRAFT,
+  EXECUTION_STAGE_PLANNER,
+  EXECUTION_STAGE_REWRITE,
+  getExecutionSummary
+} from '../src/domain/execution-projection.mjs';
 
 const repoRoot = 'D:\\QQ AI Bot';
 const supervisorEntry = path.join(repoRoot, 'src', 'index.mjs');
@@ -646,10 +657,34 @@ test('supervisor starts both workers and processes QQ + WeChat messages end to e
     assert.equal(statusPayload.lastQqLlmRequest.route, 'default');
     assert.equal(statusPayload.lastQqLlmRequest.model, 'fake-default');
     assert.equal(statusPayload.lastQqLlmRequest.effectiveApiStyle, 'chat_completions');
+    assert.equal(statusPayload.lastQqLlmRequest.executionKind, EXECUTION_KIND_DIRECT);
+    assert.equal(
+      statusPayload.lastQqLlmRequest.executionSummary,
+      getExecutionSummary(EXECUTION_KIND_DIRECT)
+    );
+    assert.deepEqual(
+      statusPayload.lastQqLlmRequest.executionProjection,
+      createExecutionProjection({
+        kind: EXECUTION_KIND_DIRECT,
+        completedStages: [EXECUTION_STAGE_DIRECT]
+      })
+    );
     assert.equal(statusPayload.runtimeReady, true);
     assert.equal(statusPayload.lastWechatLlmRequest.route, 'default');
     assert.equal(statusPayload.lastWechatLlmRequest.model, 'fake-default');
     assert.equal(statusPayload.lastWechatLlmRequest.effectiveApiStyle, 'chat_completions');
+    assert.equal(statusPayload.lastWechatLlmRequest.executionKind, EXECUTION_KIND_DIRECT);
+    assert.equal(
+      statusPayload.lastWechatLlmRequest.executionSummary,
+      getExecutionSummary(EXECUTION_KIND_DIRECT)
+    );
+    assert.deepEqual(
+      statusPayload.lastWechatLlmRequest.executionProjection,
+      createExecutionProjection({
+        kind: EXECUTION_KIND_DIRECT,
+        completedStages: [EXECUTION_STAGE_DIRECT]
+      })
+    );
     assert.equal(statusPayload.wechatRuntimeReady, true);
 
     const stopResponse = await fetch(`${controlApiUrl}/stop`, {
@@ -1099,6 +1134,7 @@ test('supervisor uses planner-draft-rewrite pipeline for complex text requests',
     const sessions = JSON.parse(await fs.readFile(sessionsPath, 'utf8'));
     const storedMessages = sessions['channel=qq|chat=qq_group_demo|user=qq_user_demo']?.routes?.default?.messages ?? [];
     const storedPreviousResponseId = sessions['channel=qq|chat=qq_group_demo|user=qq_user_demo']?.routes?.default?.previousResponseId;
+    const statusPayload = await (await fetch(`${controlApiUrl}/status`)).json();
 
     assert.equal(storedMessages.length, 2);
     assert.equal(storedMessages[0].role, 'user');
@@ -1108,6 +1144,23 @@ test('supervisor uses planner-draft-rewrite pipeline for complex text requests',
     assert.equal(
       typeof storedPreviousResponseId === 'string' && storedPreviousResponseId ? storedPreviousResponseId : null,
       null
+    );
+    assert.equal(statusPayload.lastQqLlmRequest.executionKind, EXECUTION_KIND_DELIBERATION);
+    assert.equal(
+      statusPayload.lastQqLlmRequest.executionSummary,
+      getExecutionSummary(EXECUTION_KIND_DELIBERATION)
+    );
+    assert.deepEqual(
+      statusPayload.lastQqLlmRequest.executionProjection,
+      createExecutionProjection({
+        kind: EXECUTION_KIND_DELIBERATION,
+        stages: DELIBERATION_EXECUTION_STAGES,
+        completedStages: [
+          EXECUTION_STAGE_PLANNER,
+          EXECUTION_STAGE_DRAFT,
+          EXECUTION_STAGE_REWRITE
+        ]
+      })
     );
 
     const stopResponse = await fetch(`${controlApiUrl}/stop`, {

@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runDeliberationPipeline } from '../src/application/deliberation-executor.mjs';
+import {
+  createExecutionProjection,
+  DELIBERATION_EXECUTION_STAGES,
+  EXECUTION_KIND_DELIBERATION,
+  EXECUTION_RECOVERY_PLANNER_FAILED,
+  EXECUTION_RECOVERY_REWRITE_FALLBACK_TO_DRAFT,
+  EXECUTION_STAGE_DRAFT,
+  EXECUTION_STAGE_PLANNER,
+  EXECUTION_STAGE_REWRITE
+} from '../src/domain/execution-projection.mjs';
+import { __test__, runDeliberationPipeline } from '../src/application/deliberation-executor.mjs';
 
 function createLogger() {
   return {
@@ -148,6 +158,18 @@ test('deliberation executor runs planner draft rewrite with explicit internal se
   assert.deepEqual(calls[2].imageInputs, []);
 
   assert.equal(reply.text, 'rewritten-answer');
+  assert.deepEqual(
+    reply.executionProjection,
+    createExecutionProjection({
+      kind: EXECUTION_KIND_DELIBERATION,
+      stages: DELIBERATION_EXECUTION_STAGES,
+      completedStages: [
+        EXECUTION_STAGE_PLANNER,
+        EXECUTION_STAGE_DRAFT,
+        EXECUTION_STAGE_REWRITE
+      ]
+    })
+  );
   assert.equal(reply.conversationDelta.clearPreviousResponseId, true);
   assert.equal(reply.conversationDelta.previousResponseId, null);
   assert.deepEqual(reply.conversationDelta.sharedMessages, [
@@ -250,6 +272,18 @@ test('deliberation executor falls back to draft when rewrite fails and tolerates
   assert.equal(calls[2].textVerbosityOverride, 'medium');
 
   assert.equal(reply.text, 'draft-answer');
+  assert.deepEqual(
+    reply.executionProjection,
+    createExecutionProjection({
+      kind: EXECUTION_KIND_DELIBERATION,
+      stages: DELIBERATION_EXECUTION_STAGES,
+      completedStages: [EXECUTION_STAGE_DRAFT],
+      recoveries: [
+        EXECUTION_RECOVERY_PLANNER_FAILED,
+        EXECUTION_RECOVERY_REWRITE_FALLBACK_TO_DRAFT
+      ]
+    })
+  );
   assert.deepEqual(reply.conversationDelta.sharedMessages, [
     {
       role: 'user',
@@ -264,4 +298,103 @@ test('deliberation executor falls back to draft when rewrite fails and tolerates
   assert.equal(logger.errors.length, 2);
   assert.match(logger.errors[0], /Planner failed/);
   assert.match(logger.errors[1], /Final rewrite failed/);
+});
+
+test('deliberation executor tags draft-stage failures with completed-stage metadata', async () => {
+  const logger = createLogger();
+  const llmRouter = {
+    async generateReply(request) {
+      if (request.userText.includes('[INTERNAL_PLANNER]')) {
+        return {
+          route: 'advanced',
+          model: 'gpt-5.4',
+          text: 'planner-outline'
+        };
+      }
+
+      if (request.userText.includes('[INTERNAL_DRAFT]')) {
+        throw new Error('draft failed hard');
+      }
+
+      throw new Error('Unexpected deliberation stage.');
+    }
+  };
+
+  await assert.rejects(
+    () =>
+      runDeliberationPipeline({
+        llmRouter,
+        executionPlan: {
+          route: 'advanced',
+          userText: 'Compute this.',
+          sessionContext: {
+            sharedMessages: []
+          },
+          deliberation: {
+            plannerRequest: {
+              route: 'advanced',
+              previousResponseId: null,
+              sharedMessages: [],
+              imageInputs: [],
+              reasoningEffortOverride: 'high',
+              textVerbosityOverride: 'low',
+              enableWebSearchOverride: false,
+              enableCodeInterpreterOverride: false,
+              storeOverride: false
+            },
+            draftRequest: {
+              route: 'advanced',
+              previousResponseId: null,
+              sharedMessages: [],
+              imageInputs: [],
+              reasoningEffortOverride: 'high',
+              textVerbosityOverride: '',
+              enableWebSearchOverride: false,
+              enableCodeInterpreterOverride: true,
+              storeOverride: false
+            },
+            rewriteRequest: {
+              route: 'advanced',
+              previousResponseId: null,
+              sharedMessages: [],
+              imageInputs: [],
+              reasoningEffortOverride: 'high',
+              textVerbosityOverride: 'medium',
+              enableWebSearchOverride: false,
+              enableCodeInterpreterOverride: true,
+              storeOverride: false
+            }
+          }
+        },
+        logger
+      }),
+    (error) => {
+      assert.match(error.message, /draft failed hard/);
+      assert.deepEqual(
+        error.executionFailureProjection,
+        createExecutionProjection({
+          kind: EXECUTION_KIND_DELIBERATION,
+          stages: DELIBERATION_EXECUTION_STAGES,
+          failedStage: EXECUTION_STAGE_DRAFT,
+          completedStages: [EXECUTION_STAGE_PLANNER]
+        })
+      );
+      return true;
+    }
+  );
+});
+
+test('deliberation executor exposes canonical failure projection shape', () => {
+  assert.deepEqual(
+    __test__.buildDeliberationFailureProjection({
+      failedStage: 'draft',
+      completedStages: ['planner']
+    }),
+    createExecutionProjection({
+      kind: EXECUTION_KIND_DELIBERATION,
+      stages: DELIBERATION_EXECUTION_STAGES,
+      failedStage: EXECUTION_STAGE_DRAFT,
+      completedStages: [EXECUTION_STAGE_PLANNER]
+    })
+  );
 });

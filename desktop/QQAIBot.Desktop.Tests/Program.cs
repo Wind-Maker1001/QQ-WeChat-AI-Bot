@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Diagnostics;
+using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json;
 using System.IO;
@@ -33,6 +34,21 @@ await RunTestAsync("LocalActivityStateStore round-trips and normalizes persisted
 await RunTestAsync("LocalActivityStateStore prunes activity older than the retention window", TestLocalActivityStateStoreRetentionAsync);
 await RunTestAsync("LocalActivityStateStore drops incompatible versions and deletes default state files", TestLocalActivityStateStoreVersionCleanupAsync);
 await RunTestAsync("BackendControlApiService uses camelCase control API contract", TestBackendControlApiServiceCamelCaseContractAsync);
+await RunTestAsync("BackendExecutionProjectionFormatter formats direct and degraded deliberation projections", TestBackendExecutionProjectionFormatterAsync);
+await RunTestAsync("BackendLlmProjectionFormatter formats request and failure details", TestBackendLlmProjectionFormatterAsync);
+await RunTestAsync("BackendActivityProjectionFormatter formats summaries and timelines", TestBackendActivityProjectionFormatterAsync);
+await RunTestAsync("BackendRecentActivityProjector updates order, selection, and de-duplicates replayed events", TestBackendRecentActivityProjectorAsync);
+await RunTestAsync("BackendRecentActivityViewStateHelper filters items and resolves visible selection", TestBackendRecentActivityViewStateHelperAsync);
+await RunTestAsync("BackendRecentActivityCoordinator composes runtime update, restore, and filter selection", TestBackendRecentActivityCoordinatorAsync);
+await RunTestAsync("BackendRuntimeSnapshotCoordinator projects runtime status and activity restore state", TestBackendRuntimeSnapshotCoordinatorAsync);
+await RunTestAsync("BackendRuntimeSnapshotViewHelper replaces recent activities and enumerates snapshot property names", TestBackendRuntimeSnapshotViewHelperAsync);
+await RunTestAsync("BackendControlApiStatusPollCoordinator evaluates unreachable, unauthorized, and success transitions", TestBackendControlApiStatusPollCoordinatorAsync);
+await RunTestAsync("BackendControlApiStatusWaiter waits through unreachable retries and stops on immediate failures", TestBackendControlApiStatusWaiterAsync);
+await RunTestAsync("BackendControlApiRecoveryCoordinator handles recovered, started, and aborted recovery paths", TestBackendControlApiRecoveryCoordinatorAsync);
+await RunTestAsync("BackendControlPlaneCoordinator handles load and save recovery paths", TestBackendControlPlaneCoordinatorAsync);
+await RunTestAsync("BackendRuntimeControlCoordinator handles start and stop branches", TestBackendRuntimeControlCoordinatorAsync);
+await RunTestAsync("BackendControlPlaneFacade composes load, save, start, and stop entry points", TestBackendControlPlaneFacadeAsync);
+await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
@@ -56,6 +72,7 @@ await RunTestAsync("MainViewModel rejects unknown control API config failures be
 await RunTestAsync("MainViewModel rejects unauthorized control API config failures before file fallback", TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
 await RunTestAsync("MainViewModel loads through recovered control API before file fallback", TestMainViewModelLoadsThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
+await RunTestAsync("MainViewModel keeps edited BOT_SYSTEM_PROMPT when save response omits it", TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsItAsync);
 await RunTestAsync("MainViewModel surfaces rejected control API saves without env fallback or recovery", TestMainViewModelSurfacesRejectedControlApiSaveAsync);
 await RunTestAsync("MainViewModel restores local activity state for recent events and pin/filter preferences", TestMainViewModelRestoresLocalActivityStateAsync);
 await RunTestAsync("MainWindow auto-starts backend when control API is unreachable on load", TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync);
@@ -166,6 +183,7 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
         {
             OpenAiApiKey = "advanced-key",
             OpenAiDefaultApiKey = "default-key",
+            BotSystemPrompt = "Base prompt line 1\nBase prompt line 2",
             OpenAiDefaultReasoningEffort = "medium",
             OpenAiAdvancedReasoningEffort = "high",
             OpenAiDefaultTextVerbosity = "low",
@@ -188,8 +206,10 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
     AssertContains(envText, "OPENAI_ADVANCED_ENABLE_WEB_SEARCH=true", "Saved env should contain advanced web search toggle.");
     AssertContains(envText, "OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER=false", "Saved env should contain default code interpreter toggle.");
     AssertContains(envText, "OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER=true", "Saved env should contain advanced code interpreter toggle.");
+    AssertContains(envText, "BOT_SYSTEM_PROMPT=Base prompt line 1\\nBase prompt line 2", "Saved env should contain bot system prompt.");
 
     var loadedDocument = await reader.LoadAsync(rootPath);
+    AssertEqual("Base prompt line 1\nBase prompt line 2", loadedDocument.Config.BotSystemPrompt, "Bot system prompt should round-trip.");
     AssertEqual("medium", loadedDocument.Config.OpenAiDefaultReasoningEffort, "Default reasoning effort should round-trip.");
     AssertEqual("high", loadedDocument.Config.OpenAiAdvancedReasoningEffort, "Advanced reasoning effort should round-trip.");
     AssertEqual("low", loadedDocument.Config.OpenAiDefaultTextVerbosity, "Default text verbosity should round-trip.");
@@ -479,6 +499,18 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                                     effectiveReasoningEffort = "medium",
                                     effectiveTextVerbosity = "medium",
                                     effectiveTools = new[] { "web_search" },
+                                    executionKind = BackendExecutionProjectionTags.DirectKind,
+                                    executionSummary = BackendExecutionProjectionTags.DirectKind,
+                                    executionProjection = new
+                                    {
+                                        kind = BackendExecutionProjectionTags.DirectKind,
+                                        summary = BackendExecutionProjectionTags.DirectKind,
+                                        stages = new[] { BackendExecutionProjectionTags.DirectStage },
+                                        failedStage = "",
+                                        completedStages = new[] { BackendExecutionProjectionTags.DirectStage },
+                                        degraded = false,
+                                        recoveries = Array.Empty<string>()
+                                    },
                                     decisionSummary = new
                                     {
                                         trigger = new
@@ -553,6 +585,14 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     AssertTrue(status.WechatRuntimeReady, "WechatRuntimeReady should deserialize from camelCase.");
     AssertEqual("default", status.LastQqLlmRequest?.Route ?? string.Empty, "LastQqLlmRequest route should deserialize from camelCase.");
     AssertEqual("responses", status.LastQqLlmRequest?.EffectiveApiStyle ?? string.Empty, "LastQqLlmRequest api style should deserialize from camelCase.");
+    AssertEqual(BackendExecutionProjectionTags.DirectKind, status.LastQqLlmRequest?.ExecutionKind ?? string.Empty, "LastQqLlmRequest execution kind should deserialize from camelCase.");
+    AssertEqual(BackendExecutionProjectionTags.DirectKind, status.LastQqLlmRequest?.ExecutionSummary ?? string.Empty, "LastQqLlmRequest execution summary should deserialize from camelCase.");
+    AssertEqual(BackendExecutionProjectionTags.DirectKind, status.LastQqLlmRequest?.ExecutionProjection?.Kind ?? string.Empty, "LastQqLlmRequest execution projection kind should deserialize from camelCase.");
+    AssertEqual(BackendExecutionProjectionTags.DirectStage, status.LastQqLlmRequest?.ExecutionProjection?.Stages?.FirstOrDefault() ?? string.Empty, "LastQqLlmRequest execution projection stages should deserialize from camelCase.");
+    AssertEqual(string.Empty, status.LastQqLlmRequest?.ExecutionProjection?.FailedStage ?? string.Empty, "LastQqLlmRequest execution projection failed stage should deserialize from camelCase.");
+    AssertEqual(BackendExecutionProjectionTags.DirectStage, status.LastQqLlmRequest?.ExecutionProjection?.CompletedStages?.FirstOrDefault() ?? string.Empty, "LastQqLlmRequest execution projection completed stages should deserialize from camelCase.");
+    AssertFalse(status.LastQqLlmRequest?.ExecutionProjection?.Degraded == true, "LastQqLlmRequest execution projection degraded flag should deserialize from camelCase.");
+    AssertEqual(0, status.LastQqLlmRequest?.ExecutionProjection?.Recoveries?.Length ?? 0, "LastQqLlmRequest execution projection recoveries should deserialize from camelCase.");
     AssertEqual("directive", status.LastQqLlmRequest?.DecisionSummary?.Trigger?.Kind ?? string.Empty, "DecisionSummary trigger kind should deserialize from camelCase.");
     AssertEqual("/ai", status.LastQqLlmRequest?.DecisionSummary?.MatchedPrefix ?? string.Empty, "DecisionSummary matchedPrefix should deserialize from camelCase.");
     AssertTrue(status.LastQqLlmRequest?.DecisionSummary?.ReasonGroups?.CapabilityReasons?.Contains("web_search") == true, "DecisionSummary capability reasons should deserialize from camelCase.");
@@ -571,6 +611,981 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
 
     listener.Stop();
     await serverTask;
+}
+
+Task TestBackendExecutionProjectionFormatterAsync()
+{
+    var directText = BackendExecutionProjectionFormatter.Format(
+        new BackendExecutionProjection
+        {
+            Kind = BackendExecutionProjectionTags.DirectKind,
+            Summary = BackendExecutionProjectionTags.DirectKind,
+            Stages = [BackendExecutionProjectionTags.DirectStage],
+            CompletedStages = [BackendExecutionProjectionTags.DirectStage]
+        },
+        BackendExecutionProjectionTags.DirectKind,
+        BackendExecutionProjectionTags.DirectKind);
+
+    AssertEqual("execution=direct", directText, "Direct execution formatting should suppress redundant completed-path details.");
+
+    var degradedText = BackendExecutionProjectionFormatter.Format(
+        new BackendExecutionProjection
+        {
+            Kind = BackendExecutionProjectionTags.DeliberationKind,
+            Summary = BackendExecutionProjectionTags.DeliberationSummary,
+            Stages = BackendExecutionProjectionTags.DeliberationStages,
+            CompletedStages =
+            [
+                BackendExecutionProjectionTags.PlannerStage,
+                BackendExecutionProjectionTags.DraftStage
+            ],
+            Degraded = true,
+            Recoveries = [BackendExecutionProjectionTags.RewriteFallbackToDraftRecovery]
+        },
+        BackendExecutionProjectionTags.DeliberationKind,
+        BackendExecutionProjectionTags.DeliberationSummary);
+
+    AssertContains(degradedText, "execution=deliberation", "Deliberation formatting should include execution kind.");
+    AssertContains(degradedText, "stages=planner->draft->rewrite", "Deliberation formatting should include planned stage path.");
+    AssertContains(degradedText, "completed=planner->draft", "Deliberation formatting should include actual completed stages when degraded.");
+    AssertContains(degradedText, "degraded=yes", "Deliberation formatting should mark degraded success.");
+    AssertContains(degradedText, "recoveries=rewrite-fallback-to-draft", "Deliberation formatting should include recovery tags.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendLlmProjectionFormatterAsync()
+{
+    var requestDetail = BackendLlmProjectionFormatter.FormatRequestDetail(
+        new BackendLlmRequestStatus
+        {
+            Route = "advanced",
+            RouteReason = "directive:/gpt",
+            MatchedPrefix = "/gpt",
+            CapturedAt = "2026-03-24T00:00:01.000Z",
+            EffectiveReasoningEffort = "high",
+            EffectiveTextVerbosity = "high",
+            EffectiveTools = ["web_search", "code_interpreter"],
+            ImageCount = 1,
+            ExecutionProjection = new BackendExecutionProjection
+            {
+                Kind = BackendExecutionProjectionTags.DeliberationKind,
+                Summary = BackendExecutionProjectionTags.DeliberationSummary,
+                Stages = BackendExecutionProjectionTags.DeliberationStages,
+                CompletedStages = [BackendExecutionProjectionTags.PlannerStage, BackendExecutionProjectionTags.DraftStage],
+                Degraded = true,
+                Recoveries = [BackendExecutionProjectionTags.RewriteFallbackToDraftRecovery]
+            },
+            DecisionSummary = new BackendDecisionSummary
+            {
+                Trigger = new BackendDecisionTrigger
+                {
+                    Kind = "directive",
+                    MatchedPrefix = "/gpt"
+                },
+                ReasonGroups = new BackendDecisionReasonGroups
+                {
+                    TriggerReasons = ["directive:/gpt"],
+                    CapabilityReasons = [],
+                    UpgradeReasons = []
+                }
+            }
+        });
+
+    AssertContains(requestDetail, "trigger=directive:/gpt", "Request detail should include decision trigger.");
+    AssertContains(requestDetail, "execution=deliberation", "Request detail should include execution kind.");
+    AssertContains(requestDetail, "completed=planner->draft", "Request detail should include completed stages when degraded.");
+    AssertContains(requestDetail, "recoveries=rewrite-fallback-to-draft", "Request detail should include recovery tags.");
+
+    var failureDetail = BackendLlmProjectionFormatter.FormatFailureDetail(
+        new BackendLlmFailureStatus
+        {
+            Route = "advanced",
+            MatchedPrefix = "/gpt",
+            Error = "provider rejected request",
+            CapturedAt = "2026-03-24T00:00:03.000Z",
+            ExecutionProjection = new BackendExecutionProjection
+            {
+                Kind = BackendExecutionProjectionTags.DeliberationKind,
+                Summary = BackendExecutionProjectionTags.DeliberationSummary,
+                Stages = BackendExecutionProjectionTags.DeliberationStages,
+                FailedStage = BackendExecutionProjectionTags.DraftStage,
+                CompletedStages = [BackendExecutionProjectionTags.PlannerStage]
+            },
+            DecisionSummary = new BackendDecisionSummary
+            {
+                Trigger = new BackendDecisionTrigger
+                {
+                    Kind = "directive",
+                    MatchedPrefix = "/gpt"
+                },
+                ReasonGroups = new BackendDecisionReasonGroups
+                {
+                    CapabilityReasons = ["web_search"],
+                    UpgradeReasons = ["capability_upgrade"]
+                }
+            }
+        });
+
+    AssertContains(failureDetail, "trigger=directive:/gpt", "Failure detail should include decision trigger.");
+    AssertContains(failureDetail, "failed_stage=draft", "Failure detail should include failed stage.");
+    AssertContains(failureDetail, "capability=web_search", "Failure detail should include capability reasons.");
+    AssertContains(failureDetail, "upgrade=capability_upgrade", "Failure detail should include upgrade reasons.");
+    AssertContains(failureDetail, "error=provider rejected request", "Failure detail should include backend error.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendActivityProjectionFormatterAsync()
+{
+    var request = new BackendLlmRequestStatus
+    {
+        Route = "advanced",
+        Model = "gpt-5.4",
+        EffectiveApiStyle = "responses",
+        CapturedAt = "2026-03-24T00:00:05.000Z"
+    };
+    var failure = new BackendLlmFailureStatus
+    {
+        Route = "advanced",
+        CapturedAt = "2026-03-24T00:00:03.000Z",
+        Error = "provider rejected request"
+    };
+
+    AssertEqual(
+        "advanced / gpt-5.4 / responses",
+        BackendActivityProjectionFormatter.FormatRequestSummary(request, "empty"),
+        "Activity formatter should build request summaries.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatActivitySummary(request, failure, "empty"),
+        "Latest event: request",
+        "Activity formatter should report the latest event.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatRecentActivity(
+            [
+                new BackendRecentActivityItem
+                {
+                    EventType = "Request",
+                    Summary = "advanced / gpt-5.4 / responses"
+                }
+            ],
+            "empty"),
+        "Request | advanced / gpt-5.4 / responses",
+        "Activity formatter should render recent activity lists.");
+    AssertEqual(
+        "Recovered after failure",
+        BackendActivityProjectionFormatter.FormatActivityState(request, failure),
+        "Activity formatter should describe recovered state.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatLatestSuccess(request),
+        "Success |",
+        "Activity formatter should render latest success checkpoint.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatLatestFailure(failure),
+        "Failure |",
+        "Activity formatter should render latest failure checkpoint.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatRecoveryState(request, failure),
+        "Recovery |",
+        "Activity formatter should render recovery checkpoint.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatRequestTimeline(request),
+        "Request |",
+        "Activity formatter should render request timeline.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatFailureSummary(failure, "empty"),
+        "advanced /",
+        "Activity formatter should render failure summary.");
+    AssertContains(
+        BackendActivityProjectionFormatter.FormatFailureTimeline(failure),
+        "Failure |",
+        "Activity formatter should render failure timeline.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendRecentActivityProjectorAsync()
+{
+    var existingItem = new BackendRecentActivityItem
+    {
+        EventKey = "existing",
+        CapturedAt = "2026-03-24T00:00:01.000Z",
+        EventType = "Request",
+        Summary = "existing item",
+        Meta = "2026-03-24 08:00:01",
+        Detail = "existing detail"
+    };
+    var request = new BackendLlmRequestStatus
+    {
+        Route = "advanced",
+        Model = "gpt-5.4",
+        EffectiveApiStyle = "responses",
+        CapturedAt = "2026-03-24T00:00:04.000Z",
+        ResponseId = "resp-1"
+    };
+    var failure = new BackendLlmFailureStatus
+    {
+        Route = "advanced",
+        Error = "provider rejected request",
+        CapturedAt = "2026-03-24T00:00:05.000Z"
+    };
+
+    var pinnedResult = BackendRecentActivityProjector.Project(
+        request,
+        failure,
+        [existingItem],
+        lastRequestEventKey: string.Empty,
+        lastFailureEventKey: string.Empty,
+        isPinned: true,
+        selectedItem: existingItem);
+
+    AssertEqual(3, pinnedResult.Items.Count, "Recent activity projector should append new request and failure events.");
+    AssertEqual("Failure", pinnedResult.Items[0].EventType, "Newest failure should be inserted first.");
+    AssertEqual("Request", pinnedResult.Items[1].EventType, "New request should remain ahead of older history.");
+    AssertEqual(existingItem, pinnedResult.SelectedItem, "Pinned selection should stay on the existing item.");
+
+    var unpinnedReplayResult = BackendRecentActivityProjector.Project(
+        request,
+        failure,
+        pinnedResult.Items,
+        pinnedResult.LastRequestEventKey,
+        pinnedResult.LastFailureEventKey,
+        isPinned: false,
+        selectedItem: existingItem);
+
+    AssertEqual(3, unpinnedReplayResult.Items.Count, "Replayed request/failure events should not be duplicated.");
+    AssertEqual(existingItem, unpinnedReplayResult.SelectedItem, "Without new events, replay should not disturb the current selection.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendRecentActivityViewStateHelperAsync()
+{
+    var requestItem = new BackendRecentActivityItem
+    {
+        EventKey = "request-1",
+        EventType = "Request",
+        Summary = "request"
+    };
+    var failureItem = new BackendRecentActivityItem
+    {
+        EventKey = "failure-1",
+        EventType = "Failure",
+        Summary = "failure",
+        IsFailure = true
+    };
+    var items = new[] { requestItem, failureItem };
+
+    AssertTrue(
+        BackendRecentActivityViewStateHelper.ShouldInclude(requestItem, failuresOnly: false),
+        "View-state helper should include requests when failures-only is disabled.");
+    AssertFalse(
+        BackendRecentActivityViewStateHelper.ShouldInclude(requestItem, failuresOnly: true),
+        "View-state helper should hide requests when failures-only is enabled.");
+    AssertTrue(
+        BackendRecentActivityViewStateHelper.ShouldInclude(failureItem, failuresOnly: true),
+        "View-state helper should include failures when failures-only is enabled.");
+
+    AssertEqual(
+        requestItem,
+        BackendRecentActivityViewStateHelper.ResolveVisibleSelection(items, requestItem, failuresOnly: false),
+        "Visible selected item should be retained.");
+    AssertEqual(
+        failureItem,
+        BackendRecentActivityViewStateHelper.ResolveVisibleSelection(items, requestItem, failuresOnly: true),
+        "When the selected item becomes hidden, selection should fall back to the first visible item.");
+    AssertEqual(
+        null,
+        BackendRecentActivityViewStateHelper.ResolveVisibleSelection([requestItem], requestItem, failuresOnly: true),
+        "When no items remain visible, selection should clear.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendRecentActivityCoordinatorAsync()
+{
+    var request = new BackendLlmRequestStatus
+    {
+        Route = "advanced",
+        Model = "gpt-5.4",
+        EffectiveApiStyle = "responses",
+        CapturedAt = "2026-03-24T00:00:04.000Z",
+        ResponseId = "resp-1"
+    };
+    var failure = new BackendLlmFailureStatus
+    {
+        Route = "advanced",
+        Error = "provider rejected request",
+        CapturedAt = "2026-03-24T00:00:05.000Z"
+    };
+
+    var runtimeProjection = BackendRecentActivityCoordinator.ProjectRuntimeUpdate(
+        request,
+        failure,
+        existingItems: [],
+        lastRequestEventKey: string.Empty,
+        lastFailureEventKey: string.Empty,
+        isPinned: false,
+        selectedItem: null);
+
+    AssertEqual(2, runtimeProjection.Items.Count, "Coordinator should surface projected runtime activity items.");
+    AssertEqual("Failure", runtimeProjection.Items[0].EventType, "Coordinator should preserve newest-first ordering from the projector.");
+    AssertEqual("Request", runtimeProjection.Items[1].EventType, "Coordinator should retain the request event after the failure.");
+
+    var policy = new DesktopActivityStatePolicy();
+    var restoredSelection = BackendRecentActivityCoordinator.ResolveSelectionAfterRestore(
+        policy,
+        runtimeProjection.Items,
+        runtimeProjection.Items[1].EventKey,
+        failuresOnly: true);
+
+    AssertEqual(
+        runtimeProjection.Items[0].EventKey,
+        restoredSelection?.EventKey ?? string.Empty,
+        "Coordinator should re-resolve restored selection through current filter visibility.");
+
+    var visibleSelection = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
+        runtimeProjection.Items,
+        runtimeProjection.Items[1],
+        failuresOnly: true);
+
+    AssertEqual(
+        runtimeProjection.Items[0].EventKey,
+        visibleSelection?.EventKey ?? string.Empty,
+        "Coordinator should fall back to the first visible item after a filter change.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendRuntimeSnapshotCoordinatorAsync()
+{
+    var status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = true,
+        WorkerProcessId = 321,
+        WechatWorkerProcessId = 654,
+        WechatConfigured = true,
+        WechatRuntimeActive = true,
+        WechatRuntimeReady = false,
+        WechatBridgeConnected = true,
+        LastQqLlmRequest = new BackendLlmRequestStatus
+        {
+            Route = "advanced",
+            Model = "gpt-5.4",
+            EffectiveApiStyle = "responses",
+            CapturedAt = "2026-03-24T00:00:04.000Z",
+            ResponseId = "resp-1"
+        },
+        LastWechatLlmFailure = new BackendLlmFailureStatus
+        {
+            Route = "advanced",
+            Error = "provider rejected request",
+            CapturedAt = "2026-03-24T00:00:05.000Z"
+        }
+    };
+
+    var runtimeProjection = BackendRuntimeSnapshotCoordinator.ProjectRuntimeStatus(
+        status,
+        controlApiReachable: true,
+        new BackendChannelActivityContext([], string.Empty, string.Empty, false, null),
+        new BackendChannelActivityContext([], string.Empty, string.Empty, false, null));
+
+    AssertTrue(runtimeProjection.SnapshotState.RuntimeActive == true, "Runtime snapshot coordinator should project runtime-active state.");
+    AssertEqual(321, runtimeProjection.SnapshotState.WorkerProcessId ?? 0, "Runtime snapshot coordinator should project QQ worker PID.");
+    AssertEqual(654, runtimeProjection.SnapshotState.WechatWorkerProcessId ?? 0, "Runtime snapshot coordinator should project Wechat worker PID.");
+    AssertEqual(1, runtimeProjection.QqActivity.Items.Count, "Runtime snapshot coordinator should project QQ activity updates.");
+    AssertEqual(1, runtimeProjection.WechatActivity.Items.Count, "Runtime snapshot coordinator should project Wechat activity updates.");
+    AssertEqual("Request", runtimeProjection.QqActivity.Items[0].EventType, "QQ activity projection should retain request event type.");
+    AssertEqual("Failure", runtimeProjection.WechatActivity.Items[0].EventType, "Wechat activity projection should retain failure event type.");
+    AssertTrue(runtimeProjection.SnapshotState.ControlApiReachable == true, "Runtime snapshot coordinator should retain control API reachability.");
+
+    var restoreProjection = BackendRuntimeSnapshotCoordinator.ProjectActivityRestore(
+        new DesktopActivityStatePolicy(),
+        new DesktopActivityState
+        {
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "request-1",
+                    EventType = "Request",
+                    Summary = "request"
+                },
+                new BackendRecentActivityItem
+                {
+                    EventKey = "failure-1",
+                    EventType = "Failure",
+                    Summary = "failure",
+                    IsFailure = true
+                }
+            ],
+            SelectedQqEventKey = "request-1",
+            ShowOnlyQqFailures = true
+        });
+
+    AssertTrue(restoreProjection.ShowOnlyQqFailures, "Activity restore projection should retain failure-only filter state.");
+    AssertEqual("failure-1", restoreProjection.SelectedQqRecentActivity?.EventKey ?? string.Empty, "Activity restore projection should resolve selection through current filter visibility.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendControlApiStatusPollCoordinatorAsync()
+{
+    var previousSnapshot = new BackendRuntimeSnapshotViewState
+    {
+        ControlApiReachable = true,
+        RuntimeActive = true,
+        WorkerProcessId = 100,
+        WechatWorkerProcessId = 200
+    };
+
+    var unreachableOutcome = BackendControlApiStatusPollCoordinator.Evaluate(
+        previousSnapshot,
+        new BackendControlApiPollState(),
+        status: null,
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        recoveryAttemptThreshold: 2,
+        outageNotificationThreshold: 3);
+
+    AssertFalse(unreachableOutcome.ShouldApplyRuntimeStatus, "Unreachable status failure should not apply runtime status.");
+    AssertFalse(unreachableOutcome.ShouldAttemptRecovery, "First unreachable failure should not trigger recovery.");
+    AssertFalse(unreachableOutcome.NextRuntimeSnapshot.ControlApiReachable == true, "Unreachable status failure should mark control API as unreachable.");
+    AssertEqual(1, unreachableOutcome.NextPollState.ConsecutiveFailures, "Unreachable status failure should increment consecutive failures.");
+
+    var unauthorizedOutcome = BackendControlApiStatusPollCoordinator.Evaluate(
+        previousSnapshot,
+        new BackendControlApiPollState(),
+        status: null,
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unauthorized,
+            Message = "Control API authentication failed."
+        },
+        recoveryAttemptThreshold: 2,
+        outageNotificationThreshold: 3);
+
+    AssertFalse(unauthorizedOutcome.ShouldApplyRuntimeStatus, "Unauthorized status failure should not apply runtime status.");
+    AssertEqual(true, unauthorizedOutcome.NextRuntimeSnapshot.ControlApiReachable, "Unauthorized status failure should still treat the control API as reachable.");
+    AssertTrue(unauthorizedOutcome.NextPollState.UnauthorizedNotified, "Unauthorized status failure should set the unauthorized notification flag.");
+    AssertTrue(unauthorizedOutcome.LogMessages.Any(static message => message.Contains("authentication failed", StringComparison.Ordinal)), "Unauthorized status failure should emit the authentication guidance log.");
+
+    var successOutcome = BackendControlApiStatusPollCoordinator.Evaluate(
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = false,
+            RuntimeActive = true,
+            WorkerProcessId = 100,
+            WechatWorkerProcessId = 200
+        },
+        new BackendControlApiPollState
+        {
+            ConsecutiveFailures = 3,
+            OutageNotified = true
+        },
+        new BackendRuntimeStatus
+        {
+            RuntimeActive = false,
+            WorkerProcessId = 101,
+            WechatWorkerProcessId = 201
+        },
+        new BackendControlApiFailure(),
+        recoveryAttemptThreshold: 2,
+        outageNotificationThreshold: 3);
+
+    AssertTrue(successOutcome.ShouldApplyRuntimeStatus, "Successful status poll should apply runtime status.");
+    AssertEqual(0, successOutcome.NextPollState.ConsecutiveFailures, "Successful status poll should reset control API failure counters.");
+    AssertTrue(successOutcome.LogMessages.Any(static message => message.Contains("became reachable again", StringComparison.Ordinal)), "Successful status poll should log control API recovery.");
+    AssertTrue(successOutcome.LogMessages.Any(static message => message.Contains("Worker restarted", StringComparison.Ordinal)), "Successful status poll should log QQ worker restart.");
+    AssertTrue(successOutcome.LogMessages.Any(static message => message.Contains("Wechat worker restarted", StringComparison.Ordinal)), "Successful status poll should log Wechat worker restart.");
+    AssertTrue(successOutcome.LogMessages.Any(static message => message.Contains("Runtime became inactive", StringComparison.Ordinal)), "Successful status poll should log runtime-stop transition.");
+    AssertEqual(4, successOutcome.Notifications.Count, "Successful status poll should emit recovery and restart/runtime notifications.");
+    return Task.CompletedTask;
+}
+
+async Task TestBackendControlApiStatusWaiterAsync()
+{
+    var callCount = 0;
+    var lastFailure = new BackendControlApiFailure
+    {
+        Kind = BackendControlApiFailureKind.Unreachable,
+        Message = "Control API is unreachable."
+    };
+
+    var recoveredStatus = await BackendControlApiStatusWaiter.WaitForStatusAsync(
+        tryGetStatusAsync: (_cancellationToken) =>
+        {
+            callCount += 1;
+            return Task.FromResult(callCount >= 3
+                ? new BackendRuntimeStatus
+                {
+                    RuntimeActive = true
+                }
+                : null as BackendRuntimeStatus);
+        },
+        getLastFailure: () => lastFailure,
+        maxAttempts: 5,
+        retryDelay: TimeSpan.Zero,
+        delayAsync: static (_delay, _token) => Task.CompletedTask);
+
+    AssertTrue(recoveredStatus?.RuntimeActive == true, "Status waiter should return the first recovered runtime status.");
+    AssertEqual(3, callCount, "Status waiter should retry until the control API becomes reachable.");
+
+    var immediateFailureWaitCallCount = 0;
+    var immediateFailure = await BackendControlApiStatusWaiter.WaitForStatusAsync(
+        tryGetStatusAsync: (_cancellationToken) =>
+        {
+            immediateFailureWaitCallCount += 1;
+            return Task.FromResult<BackendRuntimeStatus?>(null);
+        },
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unauthorized,
+            Message = "Control API authentication failed."
+        },
+        maxAttempts: 5,
+        retryDelay: TimeSpan.Zero,
+        delayAsync: static (_delay, _token) => Task.CompletedTask);
+
+    AssertEqual(null, immediateFailure, "Status waiter should stop immediately on non-unreachable failures.");
+    AssertEqual(1, immediateFailureWaitCallCount, "Status waiter should not keep retrying after an immediate failure.");
+}
+
+async Task TestBackendControlApiRecoveryCoordinatorAsync()
+{
+    var existingStatus = new BackendRuntimeStatus
+    {
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+    var recoveredOutcome = await BackendControlApiRecoveryCoordinator.TryRecoverAsync(
+        "status-poll",
+        prepareAsync: () => Task.CompletedTask,
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(existingStatus),
+        getLastFailure: () => new BackendControlApiFailure(),
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => false,
+        startProcess: static () => throw new InvalidOperationException("Should not start process when status is already reachable."),
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        detachProcess: static () => { });
+
+    AssertEqual(existingStatus, recoveredOutcome.RecoveredStatus, "Recovery coordinator should return the already-recovered status.");
+    AssertTrue(recoveredOutcome.LogMessages.Any(static message => message.Contains("recovered before local restart", StringComparison.Ordinal)), "Recovery coordinator should log when recovery happens before local restart.");
+
+    var startedStatus = new BackendRuntimeStatus
+    {
+        ControlApiUrl = "http://127.0.0.1:3200"
+    };
+    var startCallCount = 0;
+    var detachCallCount = 0;
+    var startedOutcome = await BackendControlApiRecoveryCoordinator.TryRecoverAsync(
+        "save-config",
+        prepareAsync: () => Task.CompletedTask,
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => false,
+        startProcess: () => startCallCount += 1,
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(startedStatus),
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        detachProcess: () => detachCallCount += 1);
+
+    AssertEqual(startedStatus, startedOutcome.RecoveredStatus, "Recovery coordinator should return the started status when /start succeeds.");
+    AssertEqual(1, startCallCount, "Recovery coordinator should start the local backend when it is not already running.");
+    AssertEqual(1, detachCallCount, "Recovery coordinator should detach the local backend launcher after successful recovery.");
+    AssertTrue(startedOutcome.LogMessages.Any(static message => message.Contains("Started local backend host", StringComparison.Ordinal)), "Recovery coordinator should log local backend startup.");
+    AssertTrue(startedOutcome.LogMessages.Any(static message => message.Contains("recovery succeeded", StringComparison.Ordinal)), "Recovery coordinator should log recovery success.");
+
+    var abortedOutcome = await BackendControlApiRecoveryCoordinator.TryRecoverAsync(
+        "load-config",
+        prepareAsync: () => Task.CompletedTask,
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unauthorized,
+            Message = "Control API authentication failed."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => true,
+        startProcess: static () => throw new InvalidOperationException("Should not start process for immediate failures."),
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        detachProcess: static () => { });
+
+    AssertEqual(null, abortedOutcome.RecoveredStatus, "Recovery coordinator should abort on immediate failures.");
+    AssertTrue(abortedOutcome.LogMessages.Any(static message => message.Contains("recovery aborted", StringComparison.Ordinal)), "Recovery coordinator should log recovery aborts.");
+}
+
+async Task TestBackendControlPlaneCoordinatorAsync()
+{
+    var recoveredConfig = new BackendControlConfigResponse
+    {
+        WechatBotPrefix = "/ai"
+    };
+    var recoveredStatus = new BackendRuntimeStatus
+    {
+        RuntimeActive = true
+    };
+    var configCallCount = 0;
+    var statusCallCount = 0;
+    var recoverCallCount = 0;
+    BackendControlApiFailure lastFailure = new()
+    {
+        Kind = BackendControlApiFailureKind.Unreachable,
+        Message = "Control API is unreachable."
+    };
+
+    var loadResult = await BackendControlPlaneCoordinator.LoadAuthoritativeConfigAsync(
+        tryGetConfigAsync: (_cancellationToken) =>
+        {
+            configCallCount += 1;
+            return Task.FromResult(configCallCount >= 2 ? recoveredConfig : null);
+        },
+        getLastFailure: () => lastFailure,
+        tryGetStatusAsync: (_cancellationToken) =>
+        {
+            statusCallCount += 1;
+            return Task.FromResult(statusCallCount >= 2 ? recoveredStatus : null);
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        tryRecoverControlApiAsync: () =>
+        {
+            recoverCallCount += 1;
+            lastFailure = new BackendControlApiFailure();
+            return Task.CompletedTask;
+        });
+
+    AssertEqual(recoveredConfig, loadResult.ApiConfig, "Control-plane coordinator should retry config load after recovery.");
+    AssertEqual(recoveredStatus, loadResult.ApiStatus, "Control-plane coordinator should return the recovered status.");
+    AssertEqual(1, recoverCallCount, "Control-plane coordinator should trigger recovery exactly once for unreachable config loads.");
+
+    var saveCallCount = 0;
+    var saveRecoverCallCount = 0;
+    lastFailure = new BackendControlApiFailure
+    {
+        Kind = BackendControlApiFailureKind.Unreachable,
+        Message = "Control API is unreachable."
+    };
+
+    var saveResult = await BackendControlPlaneCoordinator.SaveThroughControlApiAsync(
+        new BotConfig
+        {
+            WechatBotPrefix = "/wx"
+        },
+        trySaveConfigAsync: (config, _cancellationToken) =>
+        {
+            saveCallCount += 1;
+            return Task.FromResult(saveCallCount >= 2
+                ? new BackendControlConfigResponse
+                {
+                    WechatBotPrefix = config.WechatBotPrefix
+                }
+                : null);
+        },
+        getLastFailure: () => lastFailure,
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        tryRecoverControlApiAsync: () =>
+        {
+            saveRecoverCallCount += 1;
+            lastFailure = new BackendControlApiFailure();
+            return Task.CompletedTask;
+        });
+
+    AssertEqual("/wx", saveResult.WechatBotPrefix, "Control-plane coordinator should retry save after recovery.");
+    AssertEqual(1, saveRecoverCallCount, "Control-plane coordinator should trigger recovery exactly once for unreachable saves.");
+}
+
+async Task TestBackendRuntimeControlCoordinatorAsync()
+{
+    var attachStatus = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+
+    var startAttachOutcome = await BackendRuntimeControlCoordinator.StartAsync(
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(attachStatus),
+        getLastFailure: () => new BackendControlApiFailure(),
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        startProcess: static () => throw new InvalidOperationException("Should not start local backend when control API is already reachable."),
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null));
+
+    AssertEqual(attachStatus, startAttachOutcome.AppliedStatus, "Runtime control coordinator should attach to the existing backend host.");
+    AssertTrue(startAttachOutcome.ShouldDetachProcess, "Attach flow should detach the local launcher.");
+    AssertTrue(startAttachOutcome.ShouldReloadConfig, "Attach flow should request a config reload.");
+
+    BackendControlApiFailure lastFailure = new()
+    {
+        Kind = BackendControlApiFailureKind.Unreachable,
+        Message = "Control API is unreachable."
+    };
+    var startProcessCallCount = 0;
+    var waitOutcome = await BackendRuntimeControlCoordinator.StartAsync(
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => lastFailure,
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        startProcess: () => startProcessCallCount += 1,
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null));
+
+    AssertEqual(1, startProcessCallCount, "Runtime control coordinator should start the local backend when control API is unreachable.");
+    AssertEqual("Backend started, waiting for control API", waitOutcome.StatusText, "Runtime control coordinator should expose waiting status when control API does not come up yet.");
+    AssertFalse(waitOutcome.ControlApiReachable, "Waiting start outcome should mark control API as not yet reachable.");
+
+    var stopWithApiStatus = new BackendRuntimeStatus
+    {
+        RuntimeActive = false,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+    var stopApiOutcome = await BackendRuntimeControlCoordinator.StopAsync(
+        tryStopAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(stopWithApiStatus),
+        getLastFailure: () => new BackendControlApiFailure(),
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => true,
+        stopProcessAsync: () => Task.CompletedTask);
+
+    AssertEqual(stopWithApiStatus, stopApiOutcome.AppliedStatus, "Runtime control coordinator should apply stop status returned by the control API.");
+    AssertEqual("Backend stopped", stopApiOutcome.StatusText, "Runtime control coordinator should report stopped status from control API response.");
+    AssertEqual(1, stopApiOutcome.Notifications.Count, "Control API stop should emit one tray notification.");
+
+    var localStopCallCount = 0;
+    var stopLocalOutcome = await BackendRuntimeControlCoordinator.StopAsync(
+        tryStopAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => true,
+        stopProcessAsync: () =>
+        {
+            localStopCallCount += 1;
+            return Task.CompletedTask;
+        });
+
+    AssertEqual(1, localStopCallCount, "Runtime control coordinator should stop the local backend when control API is unreachable but the launcher still owns the process.");
+    AssertEqual("Backend host stopped", stopLocalOutcome.StatusText, "Runtime control coordinator should report local backend shutdown.");
+
+    var unreachableStopOutcome = await BackendRuntimeControlCoordinator.StopAsync(
+        tryStopAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => false,
+        stopProcessAsync: () => Task.CompletedTask);
+
+    AssertEqual("Backend is not reachable", unreachableStopOutcome.StatusText, "Runtime control coordinator should surface unreachable-stop state when nothing is running locally.");
+    AssertTrue(unreachableStopOutcome.LogMessages.Any(static message => message.Contains("no local backend host process is attached", StringComparison.Ordinal)), "Runtime control coordinator should log missing local backend ownership.");
+}
+
+async Task TestBackendControlPlaneFacadeAsync()
+{
+    var prepareCallCount = 0;
+    var recoverCallCount = 0;
+    BackendControlApiFailure lastFailure = new()
+    {
+        Kind = BackendControlApiFailureKind.Unreachable,
+        Message = "Control API is unreachable."
+    };
+    var configCallCount = 0;
+    var statusCallCount = 0;
+
+    var loadResult = await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
+        tryGetConfigAsync: (_cancellationToken) =>
+        {
+            configCallCount += 1;
+            return Task.FromResult(configCallCount >= 2
+                ? new BackendControlConfigResponse
+                {
+                    WechatBotPrefix = "/ai"
+                }
+                : null as BackendControlConfigResponse);
+        },
+        getLastFailure: () => lastFailure,
+        tryGetStatusAsync: (_cancellationToken) =>
+        {
+            statusCallCount += 1;
+            return Task.FromResult(statusCallCount >= 2
+                ? new BackendRuntimeStatus
+                {
+                    RuntimeActive = true
+                }
+                : null as BackendRuntimeStatus);
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        tryRecoverControlApiAsync: () =>
+        {
+            recoverCallCount += 1;
+            lastFailure = new BackendControlApiFailure();
+            return Task.CompletedTask;
+        });
+
+    AssertEqual("/ai", loadResult.ApiConfig?.WechatBotPrefix ?? string.Empty, "Facade load should flow through control-plane load coordination.");
+    AssertEqual(1, recoverCallCount, "Facade load should invoke recovery when needed.");
+
+    var savePrepareCallCount = 0;
+    lastFailure = new BackendControlApiFailure();
+    var saveResult = await BackendControlPlaneFacade.SaveConfigAsync(
+        prepareAsync: () =>
+        {
+            savePrepareCallCount += 1;
+            return Task.CompletedTask;
+        },
+        config: new BotConfig
+        {
+            WechatBotPrefix = "/wx"
+        },
+        trySaveConfigAsync: (config, _cancellationToken) => Task.FromResult<BackendControlConfigResponse?>(
+            new BackendControlConfigResponse
+            {
+                WechatBotPrefix = config.WechatBotPrefix
+            }),
+        getLastFailure: () => lastFailure,
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        tryRecoverControlApiAsync: () => Task.CompletedTask);
+
+    AssertEqual(1, savePrepareCallCount, "Facade save should run preflight prepare step.");
+    AssertEqual("/wx", saveResult.WechatBotPrefix, "Facade save should flow through control-plane save coordination.");
+
+    var startPrepareCallCount = 0;
+    var startProcessCallCount = 0;
+    var startOutcome = await BackendControlPlaneFacade.StartBackendAsync(
+        prepareAsync: () =>
+        {
+            startPrepareCallCount += 1;
+            return Task.CompletedTask;
+        },
+        tryGetStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        startProcess: () => startProcessCallCount += 1,
+        waitForStatusAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        tryStartAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null));
+
+    AssertEqual(1, startPrepareCallCount, "Facade start should run preflight prepare step.");
+    AssertEqual(1, startProcessCallCount, "Facade start should pass through runtime start coordination.");
+    AssertEqual("Backend started, waiting for control API", startOutcome.StatusText, "Facade start should preserve waiting-for-control-api outcome.");
+
+    var stopPrepareCallCount = 0;
+    var stopLocalCallCount = 0;
+    var stopOutcome = await BackendControlPlaneFacade.StopBackendAsync(
+        prepareAsync: () =>
+        {
+            stopPrepareCallCount += 1;
+            return Task.CompletedTask;
+        },
+        tryStopAsync: (_cancellationToken) => Task.FromResult<BackendRuntimeStatus?>(null),
+        getLastFailure: () => new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
+        isProcessRunning: static () => true,
+        stopProcessAsync: () =>
+        {
+            stopLocalCallCount += 1;
+            return Task.CompletedTask;
+        });
+
+    AssertEqual(1, stopPrepareCallCount, "Facade stop should run preflight prepare step.");
+    AssertEqual(1, stopLocalCallCount, "Facade stop should pass through runtime stop coordination.");
+    AssertEqual("Backend host stopped", stopOutcome.StatusText, "Facade stop should preserve local-stop outcome.");
+}
+
+Task TestDesktopControlPlaneFeedbackAsync()
+{
+    var statusText = string.Empty;
+    var logs = new List<string>();
+    var notifications = new List<TrayNotification>();
+    var dialogs = new List<(string Title, string Message)>();
+
+    DesktopControlPlaneFeedback.ApplyOutcome(
+        statusText: "Backend stopped",
+        logMessages: ["Sent stop command via control API: http://127.0.0.1:3199"],
+        notifications:
+        [
+            new TrayNotification
+            {
+                Title = "QQ AI Bot",
+                Message = "Runtime stopped by user."
+            }
+        ],
+        setStatusText: (text) => statusText = text,
+        addLog: (message) => logs.Add(message),
+        notify: (notification) => notifications.Add(notification));
+
+    AssertEqual("Backend stopped", statusText, "Feedback helper should apply status text for successful outcomes.");
+    AssertEqual(1, logs.Count, "Feedback helper should append outcome log messages.");
+    AssertEqual(1, notifications.Count, "Feedback helper should forward tray notifications.");
+
+    DesktopControlPlaneFeedback.ApplyError(
+        statusText: "Save failed",
+        logMessage: "Save config failed: boom",
+        showDialog: true,
+        dialogTitle: "Save failed",
+        dialogMessage: "Save config failed:\nboom",
+        setStatusText: (text) => statusText = text,
+        addLog: (message) => logs.Add(message),
+        showErrorDialog: (title, message) => dialogs.Add((title, message)));
+
+    AssertEqual("Save failed", statusText, "Feedback helper should apply error status text.");
+    AssertTrue(logs.Any(static message => message.Contains("Save config failed", StringComparison.Ordinal)), "Feedback helper should append error logs.");
+    AssertEqual(1, dialogs.Count, "Feedback helper should trigger the error dialog when requested.");
+    AssertEqual("Save failed", dialogs[0].Title, "Feedback helper should pass dialog title through.");
+    AssertContains(dialogs[0].Message, "boom", "Feedback helper should pass dialog message through.");
+    return Task.CompletedTask;
+}
+
+Task TestBackendRuntimeSnapshotViewHelperAsync()
+{
+    var target = new ObservableCollection<BackendRecentActivityItem>
+    {
+        new()
+        {
+            EventKey = "old",
+            Summary = "old"
+        }
+    };
+
+    BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(
+        target,
+        [
+            new BackendRecentActivityItem
+            {
+                EventKey = "req-1",
+                Summary = "request"
+            },
+            new BackendRecentActivityItem
+            {
+                EventKey = "",
+                Summary = "should drop"
+            }
+        ]);
+
+    AssertEqual(1, target.Count, "Runtime snapshot view helper should replace the collection and drop invalid activity items.");
+    AssertEqual("req-1", target[0].EventKey, "Runtime snapshot view helper should preserve valid event keys.");
+
+    var notifiedProperties = new List<string>();
+    BackendRuntimeSnapshotViewHelper.NotifyRuntimeSnapshotChanged((propertyName) => notifiedProperties.Add(propertyName));
+
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestQqLlmDetailText)), "Runtime snapshot notifier should include QQ detail properties.");
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestWechatLlmDetailText)), "Runtime snapshot notifier should include Wechat detail properties.");
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedQqRecentActivityDetailText)), "Runtime snapshot notifier should include QQ selected activity detail.");
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedWechatRecentActivityDetailText)), "Runtime snapshot notifier should include Wechat selected activity detail.");
+    return Task.CompletedTask;
 }
 
 async Task TestBackendControlApiServiceUnauthorizedAsync()
@@ -1290,6 +2305,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertContains(defaultBotInstructionsTextBox.Text, "你是 QQ 群助手。", "Default bot instructions textbox should show the backend default system prompt.");
                 AssertContains(defaultBotInstructionsTextBox.Text, "默认使用简体中文。", "Default bot instructions textbox should show the backend language guidance.");
                 AssertEqual(defaultBotInstructionsTextBox.Text, effectiveBotInstructionsTextBox.Text, "Effective bot instructions should match the default prompt when BOT_PERSONA is empty.");
+                AssertFalse(defaultBotInstructionsTextBox.IsReadOnly, "System prompt textbox should be editable.");
                 AssertEqual("chat-a,chat-b", allowedChatIdsTextBox.Text, "AllowedChatIds textbox should reflect loaded config.");
                 AssertEqual(false, defaultWebSearchCheckBox.IsChecked ?? false, "Default web search checkbox should reflect loaded config.");
                 AssertEqual(true, advancedWebSearchCheckBox.IsChecked ?? false, "Advanced web search checkbox should reflect loaded config.");
@@ -1302,6 +2318,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / gpt-5.4 / responses", "Selected QQ recent activity summary should show the latest request event.");
                 AssertContains(selectedQqRecentActivityMetaTextBlock.Text, "2026-03-24", "Selected QQ recent activity meta should show the captured time.");
                 AssertContains(selectedQqRecentActivityDetailTextBlock.Text, "trigger=default", "Selected QQ recent activity detail should show the request detail.");
+                AssertContains(selectedQqRecentActivityDetailTextBlock.Text, "execution=direct", "Selected QQ recent activity detail should show the execution path.");
                 AssertEqual("Recovered after failure", latestQqActivityStateTextBlock.Text, "Latest QQ activity state should reflect recovery.");
                 AssertContains(latestQqLatestSuccessTextBlock.Text, "Success |", "Latest QQ latest success should render activity checkpoint.");
                 AssertContains(latestQqLatestFailureTextBlock.Text, "Failure |", "Latest QQ latest failure should render activity checkpoint.");
@@ -1316,6 +2333,8 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "advanced / provider rejected request", "Selected Wechat recent activity summary should show the latest failure event.");
                 AssertContains(selectedWechatRecentActivityMetaTextBlock.Text, "2026-03-24", "Selected Wechat recent activity meta should show the captured time.");
                 AssertContains(selectedWechatRecentActivityDetailTextBlock.Text, "error=provider rejected request", "Selected Wechat recent activity detail should show the failure detail.");
+                AssertContains(selectedWechatRecentActivityDetailTextBlock.Text, "failed_stage=draft", "Selected Wechat recent activity detail should show the failed execution stage.");
+                AssertContains(selectedWechatRecentActivityDetailTextBlock.Text, "completed=planner", "Selected Wechat recent activity detail should show completed execution stages.");
                 AssertEqual("Failure is latest event", latestWechatActivityStateTextBlock.Text, "Latest Wechat activity state should reflect failure-latest state.");
                 AssertContains(latestWechatLatestSuccessTextBlock.Text, "Success |", "Latest Wechat latest success should render activity checkpoint.");
                 AssertContains(latestWechatLatestFailureTextBlock.Text, "Failure |", "Latest Wechat latest failure should render activity checkpoint.");
@@ -1340,9 +2359,13 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertContains(viewModel.LatestQqLlmDetailText, "trigger=default", "Latest QQ LLM detail should prefer structured decision trigger.");
                 AssertContains(viewModel.LatestQqLlmDetailText, "capability=default", "Latest QQ LLM detail should show structured capability reasons.");
                 AssertContains(viewModel.LatestQqLlmDetailText, "upgrade=none", "Latest QQ LLM detail should show structured upgrade reasons.");
+                AssertContains(viewModel.LatestQqLlmDetailText, "execution=direct", "Latest QQ LLM detail should show the execution path.");
                 AssertContains(viewModel.LatestWechatLlmDetailText, "trigger=directive:/gpt", "Latest Wechat LLM detail should prefer structured directive trigger.");
                 AssertContains(viewModel.LatestWechatLlmDetailText, "capability=default", "Latest Wechat LLM detail should show structured capability reasons when none are present.");
                 AssertContains(viewModel.LatestWechatLlmDetailText, "upgrade=none", "Latest Wechat LLM detail should show structured upgrade reasons when none are present.");
+                AssertContains(viewModel.LatestWechatLlmDetailText, "execution=deliberation", "Latest Wechat LLM detail should show the execution path.");
+                AssertContains(viewModel.LatestWechatLlmDetailText, $"stages={BackendExecutionProjectionTags.DeliberationSummary}", "Latest Wechat LLM detail should show the deliberation stage path.");
+                AssertDoesNotContain(viewModel.LatestWechatLlmDetailText, "degraded=yes", "Latest Wechat LLM detail should not mark a full deliberation success as degraded.");
                 AssertFalse(qqPinSelectionToggleButton.IsChecked ?? true, "QQ pin toggle should be off by default.");
                 AssertFalse(wechatPinSelectionToggleButton.IsChecked ?? true, "Wechat pin toggle should be off by default.");
 
@@ -1359,6 +2382,21 @@ async Task TestMainWindowSmokeAutomationAsync()
                     EffectiveReasoningEffort = "high",
                     EffectiveTextVerbosity = "high",
                     EffectiveTools = ["web_search"],
+                    ExecutionKind = BackendExecutionProjectionTags.DeliberationKind,
+                    ExecutionSummary = BackendExecutionProjectionTags.DeliberationSummary,
+                    ExecutionProjection = new BackendExecutionProjection
+                    {
+                        Kind = BackendExecutionProjectionTags.DeliberationKind,
+                        Summary = BackendExecutionProjectionTags.DeliberationSummary,
+                        Stages = BackendExecutionProjectionTags.DeliberationStages,
+                        FailedStage = "",
+                        CompletedStages = [
+                            BackendExecutionProjectionTags.PlannerStage,
+                            BackendExecutionProjectionTags.DraftStage
+                        ],
+                        Degraded = true,
+                        Recoveries = [BackendExecutionProjectionTags.RewriteFallbackToDraftRecovery]
+                    },
                     DecisionSummary = new BackendDecisionSummary
                     {
                         Trigger = new BackendDecisionTrigger
@@ -1391,12 +2429,16 @@ async Task TestMainWindowSmokeAutomationAsync()
                 applyStatusMethod.Invoke(viewModel, [fakeBackend.Status, true]);
                 await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 3, "QQ recent activity grows after pinned update");
                 AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / gpt-5.4 / responses", "Pinned QQ selection should remain on the prior event after a newer request arrives.");
+                AssertContains(viewModel.LatestQqLlmDetailText, $"completed={BackendExecutionProjectionTags.PlannerStage}->{BackendExecutionProjectionTags.DraftStage}", "Latest QQ LLM detail should show partially completed deliberation stages.");
+                AssertContains(viewModel.LatestQqLlmDetailText, "degraded=yes", "Latest QQ LLM detail should mark the partial deliberation success as degraded.");
+                AssertContains(viewModel.LatestQqLlmDetailText, $"recoveries={BackendExecutionProjectionTags.RewriteFallbackToDraftRecovery}", "Latest QQ LLM detail should show the recovery that produced the partial success.");
 
                 qqFailuresOnlyToggleButton.IsChecked = true;
                 wechatFailuresOnlyToggleButton.IsChecked = true;
                 await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 1, "QQ failures-only filter");
                 await WaitForAsync(() => latestWechatRecentActivityListBox.Items.Count == 1, "Wechat failures-only filter");
                 AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "default / search timed out", "QQ failures-only filter should select the failure event.");
+                AssertContains(selectedQqRecentActivityDetailTextBlock.Text, "failed_stage=direct", "QQ failures-only filter should surface the failed execution stage.");
                 AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "advanced / provider rejected request", "Wechat failures-only filter should keep the failure event selected.");
                 clearQqActivityHistoryButton.Command.Execute(null);
                 await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 0, "QQ clear activity history");
@@ -1407,6 +2449,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("Wechat channel ready", wechatRuntimeReadyText, "Wechat runtime ready text should reflect runtime status.");
 
                 wechatPrefixTextBox.Text = "/wx";
+                defaultBotInstructionsTextBox.Text = "Base prompt line 1\r\nBase prompt line 2";
                 botPersonaTextBox.Text = "冷静、专业。";
                 allowedChatIdsTextBox.Text = "chat-x,chat-y";
                 defaultWebSearchCheckBox.IsChecked = true;
@@ -1417,11 +2460,15 @@ async Task TestMainWindowSmokeAutomationAsync()
                     () => effectiveBotInstructionsTextBox.Text.Contains("附加人格设定:", StringComparison.Ordinal)
                         && effectiveBotInstructionsTextBox.Text.Contains("冷静、专业。", StringComparison.Ordinal),
                     "effective bot instructions preview update");
+                await WaitForAsync(
+                    () => effectiveBotInstructionsTextBox.Text.Contains("Base prompt line 1", StringComparison.Ordinal),
+                    "effective bot system prompt preview update");
 
                 saveButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.SaveConfigCallCount == 1, "save command invocation");
                 AssertNotNull(fakeBackend.LastSavedConfig, "Saved config payload should be captured.");
                 AssertEqual("/wx", fakeBackend.LastSavedConfig!.WechatBotPrefix, "Save should use edited WechatBotPrefix.");
+                AssertEqual("Base prompt line 1\r\nBase prompt line 2", fakeBackend.LastSavedConfig.BotSystemPrompt, "Save should use edited BOT_SYSTEM_PROMPT.");
                 AssertEqual("冷静、专业。", fakeBackend.LastSavedConfig.BotPersona, "Save should use edited BOT_PERSONA.");
                 AssertEqual("chat-x,chat-y", fakeBackend.LastSavedConfig.AllowedChatIds, "Save should use edited AllowedChatIds.");
                 AssertEqual("true", fakeBackend.LastSavedConfig.OpenAiDefaultEnableWebSearch, "Save should use edited default web search toggle.");
@@ -1745,6 +2792,67 @@ async Task TestMainViewModelSavesThroughRecoveredControlApiAsync()
                 AssertEqual(0, fakeLocalFallbackReader.SaveCallCount, "Save should not fall back to direct env file writes.");
                 AssertNotNull(fakeBackend.LastSavedConfig, "Recovered control API save should capture config payload.");
                 AssertEqual("/wx", fakeBackend.LastSavedConfig!.WechatBotPrefix, "Recovered control API save should use edited config.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsItAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-save-bot-system-prompt-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.OmitBotSystemPromptOnSaveResponse = true;
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                viewModel.BotSystemPrompt = "Edited prompt line 1\r\nEdited prompt line 2";
+                viewModel.SaveCommand.Execute(null);
+
+                await WaitForAsync(
+                    () => fakeBackend.SaveConfigCallCount == 1 && !viewModel.HasUnsavedChanges,
+                    "save edited bot system prompt");
+
+                AssertNotNull(fakeBackend.LastSavedConfig, "Save should capture edited config payload.");
+                AssertEqual(
+                    "Edited prompt line 1\r\nEdited prompt line 2",
+                    fakeBackend.LastSavedConfig!.BotSystemPrompt,
+                    "Save payload should include the edited BOT_SYSTEM_PROMPT.");
+                AssertEqual(
+                    "Edited prompt line 1\r\nEdited prompt line 2",
+                    viewModel.BotSystemPrompt,
+                    "View model should preserve the edited BOT_SYSTEM_PROMPT when save response omits it.");
+                AssertContains(
+                    viewModel.EffectiveBotInstructionsText,
+                    "Edited prompt line 1",
+                    "Effective bot instructions should continue to show the edited BOT_SYSTEM_PROMPT.");
             }
             finally
             {
@@ -2232,6 +3340,18 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 EffectiveReasoningEffort = "medium",
                 EffectiveTextVerbosity = "medium",
                 EffectiveTools = [],
+                ExecutionKind = BackendExecutionProjectionTags.DirectKind,
+                ExecutionSummary = BackendExecutionProjectionTags.DirectKind,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DirectKind,
+                    Summary = BackendExecutionProjectionTags.DirectKind,
+                    Stages = [BackendExecutionProjectionTags.DirectStage],
+                    FailedStage = "",
+                    CompletedStages = [BackendExecutionProjectionTags.DirectStage],
+                    Degraded = false,
+                    Recoveries = []
+                },
                 RouteReason = "default",
                 DecisionSummary = new BackendDecisionSummary
                 {
@@ -2265,6 +3385,18 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
             {
                 Route = "default",
                 RouteReason = "web_search",
+                ExecutionKind = BackendExecutionProjectionTags.DirectKind,
+                ExecutionSummary = BackendExecutionProjectionTags.DirectKind,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DirectKind,
+                    Summary = BackendExecutionProjectionTags.DirectKind,
+                    Stages = [BackendExecutionProjectionTags.DirectStage],
+                    FailedStage = BackendExecutionProjectionTags.DirectStage,
+                    CompletedStages = [],
+                    Degraded = false,
+                    Recoveries = []
+                },
                 DecisionSummary = new BackendDecisionSummary
                 {
                     Trigger = new BackendDecisionTrigger
@@ -2301,6 +3433,18 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 EffectiveReasoningEffort = "high",
                 EffectiveTextVerbosity = "high",
                 EffectiveTools = ["web_search", "code_interpreter"],
+                ExecutionKind = BackendExecutionProjectionTags.DeliberationKind,
+                ExecutionSummary = BackendExecutionProjectionTags.DeliberationSummary,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DeliberationKind,
+                    Summary = BackendExecutionProjectionTags.DeliberationSummary,
+                    Stages = BackendExecutionProjectionTags.DeliberationStages,
+                    FailedStage = "",
+                    CompletedStages = BackendExecutionProjectionTags.DeliberationStages,
+                    Degraded = false,
+                    Recoveries = []
+                },
                 RouteReason = "directive:/gpt",
                 DecisionSummary = new BackendDecisionSummary
                 {
@@ -2334,6 +3478,18 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
             {
                 Route = "advanced",
                 RouteReason = "directive:/gpt+capability_upgrade",
+                ExecutionKind = BackendExecutionProjectionTags.DeliberationKind,
+                ExecutionSummary = BackendExecutionProjectionTags.DeliberationSummary,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DeliberationKind,
+                    Summary = BackendExecutionProjectionTags.DeliberationSummary,
+                    Stages = BackendExecutionProjectionTags.DeliberationStages,
+                    FailedStage = BackendExecutionProjectionTags.DraftStage,
+                    CompletedStages = [BackendExecutionProjectionTags.PlannerStage],
+                    Degraded = false,
+                    Recoveries = []
+                },
                 DecisionSummary = new BackendDecisionSummary
                 {
                     Trigger = new BackendDecisionTrigger
@@ -2718,6 +3874,7 @@ sealed class TestEnvConfigSnapshotWriter
         "WECHAT_BRIDGE_TOKEN",
         "WECHAT_BOT_PREFIX",
         "BOT_PREFIX",
+        "BOT_SYSTEM_PROMPT",
         "BOT_PERSONA",
         "MAX_OUTPUT_CHARS",
         "ALLOWED_CHAT_IDS",
@@ -2760,6 +3917,7 @@ sealed class TestEnvConfigSnapshotWriter
             $"WECHAT_BRIDGE_TOKEN={config.WechatBridgeToken}",
             $"WECHAT_BOT_PREFIX={config.WechatBotPrefix}",
             $"BOT_PREFIX={config.BotPrefix}",
+            $"BOT_SYSTEM_PROMPT={EncodeEnvValue(config.BotSystemPrompt)}",
             $"BOT_PERSONA={EncodeEnvValue(config.BotPersona)}",
             $"MAX_OUTPUT_CHARS={config.MaxOutputChars}",
             $"ALLOWED_CHAT_IDS={config.AllowedChatIds}",
@@ -2829,6 +3987,7 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
 
     public bool RequireReachableForSave { get; set; }
     public bool RequireReachableForConfig { get; set; }
+    public bool OmitBotSystemPromptOnSaveResponse { get; set; }
 
     public BackendControlApiFailureKind ConfigFailureKind { get; set; } = BackendControlApiFailureKind.None;
 
@@ -2938,6 +4097,7 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
             WechatBridgeToken = config.WechatBridgeToken,
             WechatBotPrefix = config.WechatBotPrefix,
             BotPrefix = config.BotPrefix,
+            BotSystemPrompt = OmitBotSystemPromptOnSaveResponse ? string.Empty : config.BotSystemPrompt,
             BotPersona = config.BotPersona,
             MaxOutputChars = config.MaxOutputChars,
             AllowedChatIds = config.AllowedChatIds,

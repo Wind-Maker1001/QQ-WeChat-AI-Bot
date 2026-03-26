@@ -33,6 +33,7 @@ const KNOWN_KEY_ORDER = [
   'WECHAT_BRIDGE_TOKEN',
   'WECHAT_BOT_PREFIX',
   'BOT_PREFIX',
+  'BOT_SYSTEM_PROMPT',
   'BOT_PERSONA',
   'MAX_OUTPUT_CHARS',
   'ALLOWED_CHAT_IDS',
@@ -305,7 +306,8 @@ function buildEnvLines(values) {
 
   return orderedKeys.map((key) => {
     const rawValue = values[key] ?? '';
-    const encodedValue = key === 'BOT_PERSONA' ? encodeEnvValue(rawValue) : rawValue;
+    const encodedValue =
+      key === 'BOT_PERSONA' || key === 'BOT_SYSTEM_PROMPT' ? encodeEnvValue(rawValue) : rawValue;
     return `${key}=${encodedValue}`;
   });
 }

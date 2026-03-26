@@ -51,8 +51,8 @@ test('OpenAI provider applies GPT-5 default reasoning and verbosity heuristics',
     apiStyle: 'responses'
   });
 
-  assert.equal(defaultProvider.reasoningEffort, 'medium');
-  assert.equal(defaultProvider.textVerbosity, 'medium');
+  assert.equal(defaultProvider.reasoningEffort, 'high');
+  assert.equal(defaultProvider.textVerbosity, 'high');
   assert.equal(advancedProvider.reasoningEffort, 'high');
   assert.equal(advancedProvider.textVerbosity, 'high');
 });
@@ -113,6 +113,62 @@ test('OpenAI provider sends configured reasoning effort and text verbosity in re
     assert.equal(reply.effectiveReasoningEffort, 'high');
     assert.equal(reply.configuredTextVerbosity, 'high');
     assert.equal(reply.effectiveTextVerbosity, 'high');
+  } finally {
+    await close(server);
+  }
+});
+
+test('OpenAI provider uses configurable bot system prompt and appends persona', async () => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/responses') {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+
+    const chunks = [];
+
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+
+    requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(
+      JSON.stringify({
+        id: 'resp_prompt',
+        output_text: 'ok'
+      })
+    );
+  });
+
+  const port = await listen(server);
+
+  try {
+    const provider = createOpenAIProvider({
+      routeName: 'advanced',
+      apiKey: 'test-key',
+      model: 'gpt-5.4',
+      baseURL: `http://127.0.0.1:${port}`,
+      apiStyle: 'responses',
+      botSystemPrompt: 'Base instructions',
+      botPersona: 'Keep it concise.'
+    });
+
+    await provider.generateReply({
+      userText: 'hello',
+      previousResponseId: null,
+      sharedMessages: [],
+      imageInputs: []
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(
+      requests[0].instructions,
+      'Base instructions\n\n附加人格设定:\nKeep it concise.'
+    );
   } finally {
     await close(server);
   }

@@ -130,3 +130,72 @@ test('execution plan formalizes deliberation stage requests for complex text tur
   assert.equal(executionPlan.deliberation.rewriteRequest.enableCodeInterpreterOverride, false);
   assert.equal(executionPlan.deliberation.rewriteRequest.storeOverride, false);
 });
+
+test('execution plan merges route histories and clears stale response ids when routes diverge', () => {
+  const executionPlan = buildLlmExecutionPlan({
+    routeInfo: createRouteDecision({
+      route: 'advanced',
+      userText: 'Continue the earlier thread.',
+      selectedRoute: {
+        model: 'gpt-5.4',
+        apiStyle: 'responses'
+      },
+      requestedCapabilities: {
+        reasoningEffort: '',
+        textVerbosity: '',
+        enableWebSearch: undefined,
+        enableCodeInterpreter: undefined,
+        needsResponsesCapabilities: false
+      }
+    }),
+    routeState: {
+      previousResponseId: 'resp_advanced_prev',
+      messages: [
+        {
+          role: 'user',
+          content: 'Only advanced sees this turn'
+        }
+      ]
+    },
+    conversationState: {
+      routes: {
+        default: {
+          previousResponseId: 'resp_default_prev',
+          messages: [
+            {
+              role: 'user',
+              content: 'Shared context'
+            },
+            {
+              role: 'assistant',
+              content: 'Shared answer'
+            }
+          ]
+        },
+        advanced: {
+          previousResponseId: 'resp_advanced_prev',
+          messages: [
+            {
+              role: 'user',
+              content: 'Only advanced sees this turn'
+            }
+          ]
+        }
+      }
+    },
+    preparedImageInputs: []
+  });
+
+  assert.equal(executionPlan.sessionContext.previousResponseId, null);
+  assert.deepEqual(executionPlan.sessionContext.sharedMessages, [
+    {
+      role: 'user',
+      content: 'Shared context'
+    },
+    {
+      role: 'assistant',
+      content: 'Shared answer'
+    }
+  ]);
+  assert.equal(executionPlan.directRequest.previousResponseId, null);
+});

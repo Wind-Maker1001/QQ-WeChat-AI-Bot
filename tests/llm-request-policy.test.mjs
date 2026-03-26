@@ -32,8 +32,8 @@ test('request policy applies GPT-5 defaults for responses routes', () => {
     apiStyle: 'responses'
   });
 
-  assert.equal(defaultPolicy.reasoningEffort, 'medium');
-  assert.equal(defaultPolicy.textVerbosity, 'medium');
+  assert.equal(defaultPolicy.reasoningEffort, 'high');
+  assert.equal(defaultPolicy.textVerbosity, 'high');
   assert.equal(advancedPolicy.reasoningEffort, 'high');
   assert.equal(advancedPolicy.textVerbosity, 'high');
 });

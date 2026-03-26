@@ -12,7 +12,7 @@ function inferDefaultReasoningEffort(routeName, model, apiStyle) {
     return '';
   }
 
-  return routeName === 'advanced' ? 'high' : 'medium';
+  return 'high';
 }
 
 function normalizeReasoningEffort(value, routeName, model, apiStyle) {
@@ -41,7 +41,7 @@ function inferDefaultTextVerbosity(routeName, model, apiStyle) {
     return '';
   }
 
-  return routeName === 'advanced' ? 'high' : 'medium';
+  return 'high';
 }
 
 function normalizeTextVerbosity(value, routeName, model, apiStyle) {

@@ -23,6 +23,7 @@ public class BotConfig
     public string WechatBridgeToken { get; set; } = string.Empty;
     public string WechatBotPrefix { get; set; } = "/ai";
     public string BotPrefix { get; set; } = "/ai";
+    public string BotSystemPrompt { get; set; } = string.Empty;
     public string BotPersona { get; set; } = string.Empty;
     public string MaxOutputChars { get; set; } = "800";
     public string AllowedChatIds { get; set; } = string.Empty;

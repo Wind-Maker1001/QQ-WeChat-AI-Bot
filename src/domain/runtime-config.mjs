@@ -78,6 +78,7 @@ export function createRuntimeConfig({
     }),
     bot: Object.freeze({
       prefix: typeof bot.prefix === 'string' ? bot.prefix : '',
+      systemPrompt: typeof bot.systemPrompt === 'string' ? bot.systemPrompt : '',
       persona: typeof bot.persona === 'string' ? bot.persona : '',
       maxOutputChars: Number.isInteger(bot.maxOutputChars) ? bot.maxOutputChars : 800
     }),

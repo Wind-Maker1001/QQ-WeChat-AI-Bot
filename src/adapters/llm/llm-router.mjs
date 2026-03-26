@@ -1,5 +1,10 @@
 import { resolveRouteDecision, DEFAULT_ADVANCED_TRIGGER_PREFIXES, normalizeTriggerPrefixes } from '../../domain/route-decision.mjs';
-import { resolveRouteRequestPolicy } from '../../domain/llm-request-policy.mjs';
+import {
+  API_STYLE_RESPONSES,
+  buildEnabledToolKinds,
+  resolveEffectiveRequestPolicy,
+  resolveRouteRequestPolicy
+} from '../../domain/llm-request-policy.mjs';
 import {
   createOpenAIProvider,
   DEFAULT_ADVANCED_MODEL,
@@ -10,6 +15,7 @@ export function createLlmRouter({
   defaultRoute,
   advancedRoute,
   advancedTriggerPrefixes = DEFAULT_ADVANCED_TRIGGER_PREFIXES,
+  botSystemPrompt = '',
   botPersona = ''
 }) {
   const defaultRoutePolicy = resolveRouteRequestPolicy({
@@ -48,6 +54,7 @@ export function createLlmRouter({
     model: defaultRoutePolicy.model,
     baseURL: defaultRoute?.baseURL ?? null,
     routePolicy: defaultRoutePolicy,
+    botSystemPrompt,
     botPersona
   });
 
@@ -67,10 +74,66 @@ export function createLlmRouter({
       enableWebSearch: defaultRoute?.enableWebSearch,
       enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
     },
+    botSystemPrompt,
     botPersona
   });
 
   const normalizedAdvancedTriggerPrefixes = normalizeTriggerPrefixes(advancedTriggerPrefixes);
+
+  function describeRequest({
+    route = 'default',
+    reasoningEffortOverride,
+    textVerbosityOverride,
+    enableWebSearchOverride,
+    enableCodeInterpreterOverride
+  } = {}) {
+    const routePolicy = route === 'advanced' ? advancedRoutePolicy : defaultRoutePolicy;
+    const effectiveRequest = resolveEffectiveRequestPolicy({
+      routePolicy,
+      reasoningEffortOverride,
+      textVerbosityOverride,
+      enableWebSearchOverride,
+      enableCodeInterpreterOverride
+    });
+    const supportsResponsesCapabilities = effectiveRequest.apiStyle === API_STYLE_RESPONSES;
+
+    return {
+      route: routePolicy.routeName,
+      model: routePolicy.model,
+      configuredApiStyle: routePolicy.apiStyle,
+      effectiveApiStyle: effectiveRequest.apiStyle,
+      configuredReasoningEffort:
+        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.reasoningEffort : '',
+      effectiveReasoningEffort:
+        supportsResponsesCapabilities ? effectiveRequest.reasoningEffort : '',
+      configuredTextVerbosity:
+        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.textVerbosity : '',
+      effectiveTextVerbosity:
+        supportsResponsesCapabilities ? effectiveRequest.textVerbosity : '',
+      configuredEnableWebSearch:
+        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.enableWebSearch : false,
+      effectiveEnableWebSearch:
+        supportsResponsesCapabilities ? effectiveRequest.enableWebSearch : false,
+      configuredEnableCodeInterpreter:
+        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.enableCodeInterpreter : false,
+      effectiveEnableCodeInterpreter:
+        supportsResponsesCapabilities ? effectiveRequest.enableCodeInterpreter : false,
+      configuredTools:
+        routePolicy.apiStyle === API_STYLE_RESPONSES
+          ? buildEnabledToolKinds({
+              enableWebSearch: routePolicy.enableWebSearch,
+              enableCodeInterpreter: routePolicy.enableCodeInterpreter
+            })
+          : [],
+      effectiveTools:
+        supportsResponsesCapabilities
+          ? buildEnabledToolKinds({
+              enableWebSearch: effectiveRequest.enableWebSearch,
+              enableCodeInterpreter: effectiveRequest.enableCodeInterpreter
+            })
+          : []
+    };
+  }
 
   function resolveRoute({ userText, imageInputs = [] }) {
     return resolveRouteDecision({
@@ -138,6 +201,7 @@ export function createLlmRouter({
     },
     advancedTriggerPrefixes: normalizedAdvancedTriggerPrefixes,
     resolveRoute,
+    describeRequest,
     generateReply
   };
 }

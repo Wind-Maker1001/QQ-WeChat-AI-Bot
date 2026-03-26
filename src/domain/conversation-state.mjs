@@ -30,6 +30,102 @@ export function normalizeConversationMessages(messages) {
     .filter(Boolean);
 }
 
+function serializeConversationMessages(messages) {
+  return JSON.stringify(normalizeConversationMessages(messages));
+}
+
+function conversationMessagesEqual(left, right) {
+  return serializeConversationMessages(left) === serializeConversationMessages(right);
+}
+
+function findConversationMessageOverlap(left, right) {
+  const maxOverlap = Math.min(left.length, right.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+
+    for (let index = 0; index < overlap; index += 1) {
+      const leftMessage = left[left.length - overlap + index];
+      const rightMessage = right[index];
+
+      if (
+        !leftMessage ||
+        !rightMessage ||
+        leftMessage.role !== rightMessage.role ||
+        leftMessage.content !== rightMessage.content
+      ) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return overlap;
+    }
+  }
+
+  return 0;
+}
+
+export function mergeConversationMessages(leftMessages, rightMessages, { prefer = 'left' } = {}) {
+  const left = normalizeConversationMessages(leftMessages);
+  const right = normalizeConversationMessages(rightMessages);
+
+  if (left.length === 0) {
+    return right;
+  }
+
+  if (right.length === 0) {
+    return left;
+  }
+
+  if (conversationMessagesEqual(left, right)) {
+    return left;
+  }
+
+  const leftToRightOverlap = findConversationMessageOverlap(left, right);
+  const rightToLeftOverlap = findConversationMessageOverlap(right, left);
+  const leftThenRight = leftToRightOverlap > 0 ? [...left, ...right.slice(leftToRightOverlap)] : null;
+  const rightThenLeft = rightToLeftOverlap > 0 ? [...right, ...left.slice(rightToLeftOverlap)] : null;
+
+  if (leftThenRight && rightThenLeft) {
+    if (leftThenRight.length < rightThenLeft.length) {
+      return leftThenRight;
+    }
+
+    if (rightThenLeft.length < leftThenRight.length) {
+      return rightThenLeft;
+    }
+
+    return prefer === 'right' ? leftThenRight : rightThenLeft;
+  }
+
+  if (leftThenRight) {
+    return leftThenRight;
+  }
+
+  if (rightThenLeft) {
+    return rightThenLeft;
+  }
+
+  if (left.length === right.length) {
+    return prefer === 'right' ? right : left;
+  }
+
+  return left.length > right.length ? left : right;
+}
+
+export function buildConversationSharedMessages(conversationState, preferredRoute = 'default') {
+  const defaultMessages = normalizeConversationMessages(conversationState?.routes?.default?.messages);
+  const advancedMessages = normalizeConversationMessages(conversationState?.routes?.advanced?.messages);
+
+  if (preferredRoute === 'advanced') {
+    return mergeConversationMessages(advancedMessages, defaultMessages, { prefer: 'left' });
+  }
+
+  return mergeConversationMessages(defaultMessages, advancedMessages, { prefer: 'left' });
+}
+
 function normalizeRouteContext(routeContext) {
   if (!routeContext || typeof routeContext !== 'object' || Array.isArray(routeContext)) {
     return {

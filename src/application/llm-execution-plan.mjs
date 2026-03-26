@@ -1,6 +1,10 @@
 import {
   getRouteDecisionRequestedCapabilities
 } from '../domain/route-decision.mjs';
+import {
+  buildConversationSharedMessages,
+  normalizeConversationMessages
+} from '../domain/conversation-state.mjs';
 import { shouldUseDeliberationPipeline } from './deliberation-policy.mjs';
 
 function createGenerateReplyRequest({
@@ -49,14 +53,23 @@ function createGenerateReplyRequest({
 export function buildLlmExecutionPlan({
   routeInfo,
   routeState,
+  conversationState,
   preparedImageInputs = []
 }) {
   const requestedCapabilities = getRouteDecisionRequestedCapabilities(routeInfo);
-  const sharedMessages = Array.isArray(routeState?.messages) ? routeState.messages : [];
-  const previousResponseId =
+  const routeMessages = normalizeConversationMessages(routeState?.messages);
+  const mergedConversationMessages = buildConversationSharedMessages(
+    conversationState,
+    routeInfo.route
+  );
+  const sharedMessages =
+    mergedConversationMessages.length > 0 ? mergedConversationMessages : routeMessages;
+  const routePreviousResponseId =
     typeof routeState?.previousResponseId === 'string' && routeState.previousResponseId
       ? routeState.previousResponseId
       : null;
+  const previousResponseId =
+    JSON.stringify(sharedMessages) === JSON.stringify(routeMessages) ? routePreviousResponseId : null;
   const deliberationEnabled = shouldUseDeliberationPipeline(routeInfo, preparedImageInputs);
 
   return {
@@ -95,7 +108,7 @@ export function buildLlmExecutionPlan({
             sharedMessages,
             imageInputs: preparedImageInputs,
             reasoningEffortOverride: requestedCapabilities.reasoningEffort || 'high',
-            textVerbosityOverride: requestedCapabilities.textVerbosity,
+            textVerbosityOverride: requestedCapabilities.textVerbosity || 'high',
             enableWebSearchOverride: requestedCapabilities.enableWebSearch,
             enableCodeInterpreterOverride: requestedCapabilities.enableCodeInterpreter,
             storeOverride: false
@@ -106,7 +119,7 @@ export function buildLlmExecutionPlan({
             sharedMessages,
             imageInputs: [],
             reasoningEffortOverride: 'high',
-            textVerbosityOverride: requestedCapabilities.textVerbosity || 'medium',
+            textVerbosityOverride: requestedCapabilities.textVerbosity || 'high',
             enableWebSearchOverride: requestedCapabilities.enableWebSearch,
             enableCodeInterpreterOverride: requestedCapabilities.enableCodeInterpreter,
             storeOverride: false

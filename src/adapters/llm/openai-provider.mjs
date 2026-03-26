@@ -20,29 +20,39 @@ export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_DEFAULT_MODEL = 'gpt-5.4';
 export const DEFAULT_ADVANCED_MODEL = 'gpt-5.4';
 
-const MAX_SHARED_HISTORY_MESSAGES = 24;
-const MAX_SHARED_CONTEXT_MESSAGES = 10;
+const MAX_SHARED_HISTORY_MESSAGES = 40;
+const MAX_SHARED_CONTEXT_MESSAGES = 20;
 const IMAGE_FETCH_TIMEOUT_MS = 15000;
 const ADVANCED_IMAGE_REQUEST_TIMEOUT_MS = 20000;
 
-export const BOT_INSTRUCTIONS = [
-  '\u4f60\u662f QQ \u7fa4\u52a9\u624b\u3002',
+export const DEFAULT_BOT_SYSTEM_PROMPT = [
+  '\u4f60\u662f QQ \u7fa4\u52a9\u624b\uff0c\u540c\u65f6\u4e5f\u662f\u4e00\u4e2a\u5bf9\u8bdd\u578b AI \u52a9\u624b\u3002',
   '\u9ed8\u8ba4\u4f7f\u7528\u7b80\u4f53\u4e2d\u6587\u3002',
-  '\u56de\u7b54\u76f4\u63a5\u3001\u51c6\u786e\u3001\u7b80\u6d01\u3002',
-  '\u4e0d\u8981\u8bf4\u6559\u3002',
-  '\u4e0d\u8981\u8f93\u51fa\u591a\u4f59\u514d\u8d23\u58f0\u660e\u3002',
-  '\u4e0d\u786e\u5b9a\u65f6\u660e\u786e\u8bf4\u4e0d\u786e\u5b9a\u3002'
+  '\u5148\u76f4\u63a5\u56de\u7b54\u7528\u6237\u7684\u95ee\u9898\uff0c\u518d\u6309\u9700\u8981\u8865\u5145\u5173\u952e\u7406\u7531\u3001\u6b65\u9aa4\u3001\u4f8b\u5b50\u6216\u98ce\u9669\u3002',
+  '\u9047\u5230\u590d\u6742\u95ee\u9898\u65f6\uff0c\u5148\u62c6\u89e3\u95ee\u9898\uff0c\u518d\u7ed9\u51fa\u7ed3\u8bba\uff0c\u4e0d\u8981\u56e0\u4e3a\u201c\u7fa4\u52a9\u624b\u201d\u800c\u628a\u56de\u7b54\u538b\u5f97\u8fc7\u77ed\u3002',
+  '\u4fdd\u6301\u51c6\u786e\u3001\u5177\u4f53\u3001\u6709\u5224\u65ad\u529b\uff1b\u4e0d\u786e\u5b9a\u65f6\u660e\u786e\u8bf4\u51fa\u4e0d\u786e\u5b9a\u70b9\u3002',
+  '\u9664\u975e\u7528\u6237\u8981\u6c42\uff0c\u5426\u5219\u4e0d\u8981\u8bf4\u6559\uff0c\u4e0d\u8981\u5806\u780c\u5ba2\u5957\u8bdd\uff0c\u4e5f\u4e0d\u8981\u8f93\u51fa\u591a\u4f59\u514d\u8d23\u58f0\u660e\u3002'
 ].join('\n');
 
-function buildBotInstructions(botPersona = '') {
+export const BOT_INSTRUCTIONS = DEFAULT_BOT_SYSTEM_PROMPT;
+
+function normalizeBotSystemPrompt(botSystemPrompt = '') {
+  const normalizedSystemPrompt =
+    typeof botSystemPrompt === 'string' ? botSystemPrompt.replace(/\\n/g, '\n').trim() : '';
+
+  return normalizedSystemPrompt || DEFAULT_BOT_SYSTEM_PROMPT;
+}
+
+function buildBotInstructions({ botSystemPrompt = '', botPersona = '' } = {}) {
+  const normalizedSystemPrompt = normalizeBotSystemPrompt(botSystemPrompt);
   const normalizedPersona =
     typeof botPersona === 'string' ? botPersona.replace(/\\n/g, '\n').trim() : '';
 
   if (!normalizedPersona) {
-    return BOT_INSTRUCTIONS;
+    return normalizedSystemPrompt;
   }
 
-  return `${BOT_INSTRUCTIONS}\n\n\u9644\u52a0\u4eba\u683c\u8bbe\u5b9a:\n${normalizedPersona}`;
+  return `${normalizedSystemPrompt}\n\n\u9644\u52a0\u4eba\u683c\u8bbe\u5b9a:\n${normalizedPersona}`;
 }
 
 function normalizeBaseUrl(baseURL) {
@@ -277,7 +287,7 @@ function formatSharedContext(sharedMessages) {
     .map((message) => `${message.role === 'assistant' ? '\u52a9\u624b' : '\u7528\u6237'}: ${message.content}`)
     .join('\n');
 
-  return `\u4ee5\u4e0b\u662f\u6700\u8fd1\u5bf9\u8bdd\u4e0a\u4e0b\u6587\uff0c\u8bf7\u56de\u7b54\u5f53\u524d\u95ee\u9898\u65f6\u53c2\u8003\uff1a\n${transcript}`;
+  return `\u4ee5\u4e0b\u662f\u6700\u8fd1\u5bf9\u8bdd\u4e0a\u4e0b\u6587\uff0c\u8bf7\u4f18\u5148\u4fdd\u6301\u4e0a\u4e0b\u6587\u8fde\u7eed\u6027\uff0c\u5728\u56de\u7b54\u5f53\u524d\u95ee\u9898\u65f6\u53c2\u8003\uff1a\n${transcript}`;
 }
 
 function buildResponsesContent(userText, imageInputs, sharedMessages, previousResponseId) {
@@ -369,7 +379,7 @@ function buildChatCompletionMessages(
   userText,
   imageInputs,
   allowImages = false,
-  instructions = BOT_INSTRUCTIONS
+  instructions = DEFAULT_BOT_SYSTEM_PROMPT
 ) {
   const normalizedSharedMessages = normalizeConversationMessages(sharedMessages).slice(
     -MAX_SHARED_HISTORY_MESSAGES
@@ -427,6 +437,7 @@ export function createOpenAIProvider({
   enableCodeInterpreter,
   fallback,
   routePolicy,
+  botSystemPrompt = '',
   botPersona = ''
 }) {
   const selectedClient = normalizeRouteConfig({
@@ -442,7 +453,10 @@ export function createOpenAIProvider({
     fallback,
     routePolicy
   });
-  const instructions = buildBotInstructions(botPersona);
+  const instructions = buildBotInstructions({
+    botSystemPrompt,
+    botPersona
+  });
 
   function buildReplyEnvelope(reply, effectiveRequest) {
     const effectiveApiStyle = effectiveRequest.apiStyle;
@@ -664,6 +678,8 @@ export function createOpenAIProvider({
 }
 
 export const __test__ = Object.freeze({
+  normalizeBotSystemPrompt,
+  buildBotInstructions,
   buildResponsesTools,
   buildEnabledToolKinds
 });

@@ -16,6 +16,7 @@ test('readEnvFileValues migrates legacy allowed group ids and decodes env values
   const cwd = await createTempEnv([
     'OPENAI_API_KEY=test-key',
     'NAPCAT_TOKEN=test-token',
+    'BOT_SYSTEM_PROMPT=base1\\nbase2',
     'BOT_PERSONA=line1\\nline2',
     'ALLOWED_GROUP_IDS=legacy-a,legacy-b'
   ]);
@@ -23,13 +24,14 @@ test('readEnvFileValues migrates legacy allowed group ids and decodes env values
   const result = await readEnvFileValues({ cwd });
   const envText = await fs.readFile(path.join(cwd, '.env'), 'utf8');
 
+  assert.equal(result.values.BOT_SYSTEM_PROMPT, 'base1\nbase2');
   assert.equal(result.values.BOT_PERSONA, 'line1\nline2');
   assert.equal(result.values.ALLOWED_CHAT_IDS, 'legacy-a,legacy-b');
   assert.match(envText, /ALLOWED_CHAT_IDS=legacy-a,legacy-b/);
   assert.doesNotMatch(envText, /ALLOWED_GROUP_IDS=/);
 });
 
-test('updateEnvFileValues preserves unknown keys and encodes multiline BOT_PERSONA', async () => {
+test('updateEnvFileValues preserves unknown keys and encodes multiline bot prompt fields', async () => {
   const cwd = await createTempEnv([
     'OPENAI_API_KEY=test-key',
     'NAPCAT_TOKEN=test-token',
@@ -40,6 +42,7 @@ test('updateEnvFileValues preserves unknown keys and encodes multiline BOT_PERSO
     cwd,
     mapValues: (existingValues) => ({
       ...existingValues,
+      BOT_SYSTEM_PROMPT: 'base1\nbase2',
       BOT_PERSONA: 'line1\nline2',
       ALLOWED_CHAT_IDS: 'chat-a,chat-b'
     })
@@ -47,8 +50,10 @@ test('updateEnvFileValues preserves unknown keys and encodes multiline BOT_PERSO
   const envText = await fs.readFile(path.join(cwd, '.env'), 'utf8');
 
   assert.equal(result.nextValues.CUSTOM_FLAG, 'enabled');
+  assert.equal(result.nextValues.BOT_SYSTEM_PROMPT, 'base1\nbase2');
   assert.equal(result.nextValues.BOT_PERSONA, 'line1\nline2');
   assert.match(envText, /CUSTOM_FLAG=enabled/);
+  assert.match(envText, /BOT_SYSTEM_PROMPT=base1\\nbase2/);
   assert.match(envText, /BOT_PERSONA=line1\\nline2/);
   assert.match(envText, /ALLOWED_CHAT_IDS=chat-a,chat-b/);
 });

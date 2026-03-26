@@ -83,6 +83,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _wechatBridgeToken = string.Empty;
     private string _wechatBotPrefix = "/ai";
     private string _botPrefix = "/ai";
+    private string _botSystemPrompt = DefaultBotInstructionsTextValue;
     private string _botPersona = string.Empty;
     private string _maxOutputChars = "800";
     private string _allowedChatIds = string.Empty;
@@ -91,18 +92,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _lastSavedAtText = "Not saved";
     private string _logText = string.Empty;
     private bool _logDirty;
-    private int? _lastWorkerProcessId;
-    private int? _lastWechatWorkerProcessId;
-    private bool? _lastRuntimeActive;
-    private bool? _lastRuntimeReady;
-    private bool? _lastWechatConfigured;
-    private bool? _lastWechatRuntimeActive;
-    private bool? _lastWechatRuntimeReady;
-    private bool? _lastWechatBridgeConnected;
-    private bool? _lastControlApiReachable;
-    private int _consecutiveControlApiFailures;
-    private bool _controlApiOutageNotified;
-    private bool _controlApiUnauthorizedNotified;
+    private BackendRuntimeSnapshotViewState _runtimeSnapshot = new();
+    private BackendControlApiPollState _controlApiPollState = new();
     private bool _controlApiRecoveryInProgress;
     private bool _restoringActivityState;
     private bool _disposed;
@@ -113,13 +104,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _lastQqRequestEventKey = string.Empty;
     private string _lastQqFailureEventKey = string.Empty;
     private BackendRecentActivityItem? _selectedQqRecentActivity;
-    private BackendLlmRequestStatus? _lastQqLlmRequest;
-    private BackendLlmFailureStatus? _lastQqLlmFailure;
     private string _lastWechatRequestEventKey = string.Empty;
     private string _lastWechatFailureEventKey = string.Empty;
     private BackendRecentActivityItem? _selectedWechatRecentActivity;
-    private BackendLlmRequestStatus? _lastWechatLlmRequest;
-    private BackendLlmFailureStatus? _lastWechatLlmFailure;
 
     public event EventHandler<TrayNotification>? NotificationRequested;
 
@@ -388,6 +375,23 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         set => SetTrackedProperty(ref _botPrefix, value);
     }
 
+    public string BotSystemPrompt
+    {
+        get => _botSystemPrompt;
+        set
+        {
+            if (SetProperty(ref _botSystemPrompt, value))
+            {
+                if (!_suspendDirtyTracking)
+                {
+                    HasUnsavedChanges = true;
+                }
+
+                OnPropertyChanged(nameof(EffectiveBotInstructionsText));
+            }
+        }
+    }
+
     public string BotPersona
     {
         get => _botPersona;
@@ -407,7 +411,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string DefaultBotInstructionsText => DefaultBotInstructionsTextValue;
 
-    public string EffectiveBotInstructionsText => BuildEffectiveBotInstructions(BotPersona);
+    public string EffectiveBotInstructionsText => BuildEffectiveBotInstructions(BotSystemPrompt, BotPersona);
 
     public string MaxOutputChars
     {
@@ -443,39 +447,39 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string ProcessStateText => IsProcessRunning ? "Running" : "Stopped";
 
     public string WechatRuntimeStateText =>
-        _lastWechatConfigured != true
+        _runtimeSnapshot.WechatConfigured != true
             ? "Wechat disabled"
-            : _lastWechatRuntimeActive == true
+            : _runtimeSnapshot.WechatRuntimeActive == true
                 ? "Wechat runtime active"
                 : "Wechat runtime stopped";
 
     public string RuntimeReadyText =>
-        _lastRuntimeReady == true ? "QQ channel ready" : "QQ channel not ready";
+        _runtimeSnapshot.RuntimeReady == true ? "QQ channel ready" : "QQ channel not ready";
 
     public string WechatRuntimeReadyText =>
-        _lastWechatConfigured != true
+        _runtimeSnapshot.WechatConfigured != true
             ? "Wechat channel disabled"
-            : _lastWechatRuntimeReady == true
+            : _runtimeSnapshot.WechatRuntimeReady == true
                 ? "Wechat channel ready"
                 : "Wechat channel not ready";
 
     public string WechatBridgeStateText =>
-        _lastWechatBridgeConnected == true ? "Wechat bridge connected" : "Wechat bridge disconnected";
+        _runtimeSnapshot.WechatBridgeConnected == true ? "Wechat bridge connected" : "Wechat bridge disconnected";
 
     public string WechatWorkerProcessText =>
-        _lastWechatWorkerProcessId is int workerPid ? $"Wechat worker PID {workerPid}" : "Wechat worker not running";
+        _runtimeSnapshot.WechatWorkerProcessId is int workerPid ? $"Wechat worker PID {workerPid}" : "Wechat worker not running";
 
     public string LatestQqLlmSummaryText =>
-        FormatLlmRequestSummary(_lastQqLlmRequest, "No QQ requests captured yet");
+        BackendActivityProjectionFormatter.FormatRequestSummary(_runtimeSnapshot.LastQqLlmRequest, "No QQ requests captured yet");
 
     public string LatestQqLlmDetailText =>
-        FormatLlmRequestDetail(_lastQqLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDetail(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqActivitySummaryText =>
-        FormatActivitySummary(_lastQqLlmRequest, _lastQqLlmFailure, "No QQ activity captured yet");
+        BackendActivityProjectionFormatter.FormatActivitySummary(_runtimeSnapshot.LastQqLlmRequest, _runtimeSnapshot.LastQqLlmFailure, "No QQ activity captured yet");
 
     public string LatestQqRecentActivityText =>
-        FormatRecentActivity(QqRecentActivities, "No recent QQ activity yet");
+        BackendActivityProjectionFormatter.FormatRecentActivity(QqRecentActivities, "No recent QQ activity yet");
 
     public bool PinSelectedQqActivity
     {
@@ -497,10 +501,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             if (SetProperty(ref _showOnlyQqFailures, value))
             {
                 QqRecentActivitiesView.Refresh();
-                EnsureSelectedActivityVisible(
-                    QqRecentActivitiesView,
-                    () => SelectedQqRecentActivity,
-                    (item) => SelectedQqRecentActivity = item);
+                SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
+                    QqRecentActivities,
+                    SelectedQqRecentActivity,
+                    ShowOnlyQqFailures);
                 PersistActivityStateIfPossible();
             }
         }
@@ -531,43 +535,43 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _selectedQqRecentActivity?.Detail ?? "Select a QQ activity event";
 
     public string LatestQqActivityStateText =>
-        FormatActivityState(_lastQqLlmRequest, _lastQqLlmFailure);
+        BackendActivityProjectionFormatter.FormatActivityState(_runtimeSnapshot.LastQqLlmRequest, _runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqLatestSuccessText =>
-        FormatLatestSuccess(_lastQqLlmRequest);
+        BackendActivityProjectionFormatter.FormatLatestSuccess(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqLatestFailureText =>
-        FormatLatestFailure(_lastQqLlmFailure);
+        BackendActivityProjectionFormatter.FormatLatestFailure(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqRecoveryText =>
-        FormatRecoveryState(_lastQqLlmRequest, _lastQqLlmFailure);
+        BackendActivityProjectionFormatter.FormatRecoveryState(_runtimeSnapshot.LastQqLlmRequest, _runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqRequestTimelineText =>
-        FormatRequestTimeline(_lastQqLlmRequest);
+        BackendActivityProjectionFormatter.FormatRequestTimeline(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqDecisionTriggerText =>
-        FormatLlmDecisionTrigger(_lastQqLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionTrigger(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqDecisionCapabilityText =>
-        FormatLlmDecisionCapability(_lastQqLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionCapability(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqDecisionUpgradeText =>
-        FormatLlmDecisionUpgrade(_lastQqLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionUpgrade(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestQqRequestedCapabilitiesText =>
-        FormatLlmRequestedCapabilities(_lastQqLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestedCapabilities(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestWechatLlmSummaryText =>
-        FormatLlmRequestSummary(_lastWechatLlmRequest, "No Wechat requests captured yet");
+        BackendActivityProjectionFormatter.FormatRequestSummary(_runtimeSnapshot.LastWechatLlmRequest, "No Wechat requests captured yet");
 
     public string LatestWechatLlmDetailText =>
-        FormatLlmRequestDetail(_lastWechatLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDetail(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatActivitySummaryText =>
-        FormatActivitySummary(_lastWechatLlmRequest, _lastWechatLlmFailure, "No Wechat activity captured yet");
+        BackendActivityProjectionFormatter.FormatActivitySummary(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure, "No Wechat activity captured yet");
 
     public string LatestWechatRecentActivityText =>
-        FormatRecentActivity(WechatRecentActivities, "No recent Wechat activity yet");
+        BackendActivityProjectionFormatter.FormatRecentActivity(WechatRecentActivities, "No recent Wechat activity yet");
 
     public bool PinSelectedWechatActivity
     {
@@ -589,10 +593,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             if (SetProperty(ref _showOnlyWechatFailures, value))
             {
                 WechatRecentActivitiesView.Refresh();
-                EnsureSelectedActivityVisible(
-                    WechatRecentActivitiesView,
-                    () => SelectedWechatRecentActivity,
-                    (item) => SelectedWechatRecentActivity = item);
+                SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
+                    WechatRecentActivities,
+                    SelectedWechatRecentActivity,
+                    ShowOnlyWechatFailures);
                 PersistActivityStateIfPossible();
             }
         }
@@ -623,69 +627,69 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _selectedWechatRecentActivity?.Detail ?? "Select a Wechat activity event";
 
     public string LatestWechatActivityStateText =>
-        FormatActivityState(_lastWechatLlmRequest, _lastWechatLlmFailure);
+        BackendActivityProjectionFormatter.FormatActivityState(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatLatestSuccessText =>
-        FormatLatestSuccess(_lastWechatLlmRequest);
+        BackendActivityProjectionFormatter.FormatLatestSuccess(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatLatestFailureText =>
-        FormatLatestFailure(_lastWechatLlmFailure);
+        BackendActivityProjectionFormatter.FormatLatestFailure(_runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatRecoveryText =>
-        FormatRecoveryState(_lastWechatLlmRequest, _lastWechatLlmFailure);
+        BackendActivityProjectionFormatter.FormatRecoveryState(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatRequestTimelineText =>
-        FormatRequestTimeline(_lastWechatLlmRequest);
+        BackendActivityProjectionFormatter.FormatRequestTimeline(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatDecisionTriggerText =>
-        FormatLlmDecisionTrigger(_lastWechatLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionTrigger(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatDecisionCapabilityText =>
-        FormatLlmDecisionCapability(_lastWechatLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionCapability(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatDecisionUpgradeText =>
-        FormatLlmDecisionUpgrade(_lastWechatLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestDecisionUpgrade(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatRequestedCapabilitiesText =>
-        FormatLlmRequestedCapabilities(_lastWechatLlmRequest);
+        BackendLlmProjectionFormatter.FormatRequestedCapabilities(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestQqFailureSummaryText =>
-        FormatLlmFailureSummary(_lastQqLlmFailure, "No QQ failures captured yet");
+        BackendActivityProjectionFormatter.FormatFailureSummary(_runtimeSnapshot.LastQqLlmFailure, "No QQ failures captured yet");
 
     public string LatestQqFailureTimelineText =>
-        FormatFailureTimeline(_lastQqLlmFailure);
+        BackendActivityProjectionFormatter.FormatFailureTimeline(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqFailureTriggerText =>
-        FormatLlmFailureTrigger(_lastQqLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureTrigger(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqFailureCapabilityText =>
-        FormatLlmFailureCapability(_lastQqLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureCapability(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqFailureUpgradeText =>
-        FormatLlmFailureUpgrade(_lastQqLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureUpgrade(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestQqFailureErrorText =>
-        FormatLlmFailureError(_lastQqLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureError(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestWechatFailureSummaryText =>
-        FormatLlmFailureSummary(_lastWechatLlmFailure, "No Wechat failures captured yet");
+        BackendActivityProjectionFormatter.FormatFailureSummary(_runtimeSnapshot.LastWechatLlmFailure, "No Wechat failures captured yet");
 
     public string LatestWechatFailureTimelineText =>
-        FormatFailureTimeline(_lastWechatLlmFailure);
+        BackendActivityProjectionFormatter.FormatFailureTimeline(_runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatFailureTriggerText =>
-        FormatLlmFailureTrigger(_lastWechatLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureTrigger(_runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatFailureCapabilityText =>
-        FormatLlmFailureCapability(_lastWechatLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureCapability(_runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatFailureUpgradeText =>
-        FormatLlmFailureUpgrade(_lastWechatLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureUpgrade(_runtimeSnapshot.LastWechatLlmFailure);
 
     public string LatestWechatFailureErrorText =>
-        FormatLlmFailureError(_lastWechatLlmFailure);
+        BackendLlmProjectionFormatter.FormatFailureError(_runtimeSnapshot.LastWechatLlmFailure);
 
-    public bool IsControlApiReachable => _lastControlApiReachable == true;
+    public bool IsControlApiReachable => _runtimeSnapshot.ControlApiReachable == true;
 
     public bool AutoStartEnabled
     {
@@ -799,8 +803,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!IsBackendRootValid)
         {
-            StatusText = "Backend root is invalid";
-            AddLog("Cannot load config because backend root is invalid.");
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot load config because backend root is invalid."],
+                notifications: [],
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: null);
             return;
         }
 
@@ -831,18 +840,32 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
             LastLoadedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             HasUnsavedChanges = false;
-            StatusText = apiConfig?.RestartRequired == true
-                ? "Config loaded (restart required)"
-                : "Config loaded";
-            AddLog(apiConfig is not null
-                ? $"Loaded config via control API: {apiConfig.EnvPath}"
-                : $"Loaded config from file: {EnvFilePath}");
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: apiConfig?.RestartRequired == true
+                    ? "Config loaded (restart required)"
+                    : "Config loaded",
+                logMessages:
+                [
+                    apiConfig is not null
+                        ? $"Loaded config via control API: {apiConfig.EnvPath}"
+                        : $"Loaded config from file: {EnvFilePath}"
+                ],
+                notifications: [],
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: null);
         }
         catch (Exception ex)
         {
-            StatusText = "Load failed";
-            AddLog($"Load config failed: {ex.Message}");
-            System.Windows.MessageBox.Show($"Load config failed:\n{ex.Message}", "Load failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            DesktopControlPlaneFeedback.ApplyError(
+                statusText: "Load failed",
+                logMessage: $"Load config failed: {ex.Message}",
+                showDialog: true,
+                dialogTitle: "Load failed",
+                dialogMessage: $"Load config failed:\n{ex.Message}",
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                showErrorDialog: (title, message) => System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error));
         }
         finally
         {
@@ -853,36 +876,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<(BackendControlConfigResponse? ApiConfig, BackendRuntimeStatus? ApiStatus)> LoadConfigFromAuthoritativeSourceAsync()
     {
-        var apiConfig = await _backendControlApiService.TryGetConfigAsync();
-        var configFailure = _backendControlApiService.LastFailure;
-        var apiStatus = await _backendControlApiService.TryGetStatusAsync();
-
-        if (apiConfig is not null)
-        {
-            return (apiConfig, apiStatus);
-        }
-
-        if (IsImmediateControlApiFailure(configFailure))
-        {
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(configFailure.Message)
-                    ? "Control API rejected the config request."
-                    : configFailure.Message);
-        }
-
-        if (configFailure.Kind == BackendControlApiFailureKind.Unreachable)
-        {
-            await TryRecoverControlApiAsync("load-config");
-            apiConfig = await _backendControlApiService.TryGetConfigAsync();
-            apiStatus = await _backendControlApiService.TryGetStatusAsync();
-
-            if (apiConfig is not null)
-            {
-                return (apiConfig, apiStatus);
-            }
-        }
-
-        return (null, apiStatus);
+        return await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
+            tryGetConfigAsync: (cancellationToken) => _backendControlApiService.TryGetConfigAsync(cancellationToken),
+            getLastFailure: () => _backendControlApiService.LastFailure,
+            tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
+            isImmediateFailure: IsImmediateControlApiFailure,
+            tryRecoverControlApiAsync: () => TryRecoverControlApiAsync("load-config"));
     }
 
     private async Task SaveConfigAsync()
@@ -894,20 +893,31 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!IsBackendRootValid)
         {
-            StatusText = "Backend root is invalid";
-            AddLog("Cannot save config because backend root is invalid.");
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot save config because backend root is invalid."],
+                notifications: [],
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: null);
             return false;
         }
 
         try
         {
             StatusText = "Saving config...";
-            _envDocument.Config = BuildConfig();
-            var apiResult = await SaveConfigThroughControlApiAsync(_envDocument.Config);
-            _envDocument.Config = BuildConfigCopy(apiResult);
+            var submittedConfig = BuildConfig();
+            _envDocument.Config = submittedConfig;
+            var apiResult = await SaveConfigThroughControlApiAsync(submittedConfig);
+            _envDocument.Config = MergeSavedConfig(submittedConfig, apiResult);
             ApplyConfigToView(_envDocument.Config);
-            StatusText = apiResult.RestartRequired ? "Config saved (restart required)" : "Config saved";
-            AddLog($"Saved config via control API: {apiResult.EnvPath}");
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: apiResult.RestartRequired ? "Config saved (restart required)" : "Config saved",
+                logMessages: [$"Saved config via control API: {apiResult.EnvPath}"],
+                notifications: [],
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: null);
 
             LastSavedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             HasUnsavedChanges = false;
@@ -915,13 +925,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            StatusText = "Save failed";
-            AddLog($"Save config failed: {ex.Message}");
-
-            if (showUiErrors)
-            {
-                System.Windows.MessageBox.Show($"Save config failed:\n{ex.Message}", "Save failed", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            DesktopControlPlaneFeedback.ApplyError(
+                statusText: "Save failed",
+                logMessage: $"Save config failed: {ex.Message}",
+                showDialog: showUiErrors,
+                dialogTitle: "Save failed",
+                dialogMessage: $"Save config failed:\n{ex.Message}",
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                showErrorDialog: (title, message) => System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error));
 
             return false;
         }
@@ -940,57 +952,52 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
             StatusText = "Starting backend...";
-            await LoadLocalEnvDocumentAsync(suppressErrors: true);
+            var outcome = await BackendControlPlaneFacade.StartBackendAsync(
+                prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
+                tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
+                getLastFailure: () => _backendControlApiService.LastFailure,
+                isImmediateFailure: IsImmediateControlApiFailure,
+                startProcess: () => _botProcessService.Start(BackendRootPath),
+                waitForStatusAsync: (cancellationToken) => BackendControlApiStatusWaiter.WaitForStatusAsync(
+                    (innerCancellationToken) => _backendControlApiService.TryGetStatusAsync(innerCancellationToken),
+                    () => _backendControlApiService.LastFailure,
+                    cancellationToken: cancellationToken),
+                tryStartAsync: (cancellationToken) => _backendControlApiService.TryStartAsync(cancellationToken));
 
-            var existingStatus = await _backendControlApiService.TryGetStatusAsync();
-            if (existingStatus is not null)
+            if (outcome.AppliedStatus is not null || !outcome.ControlApiReachable)
             {
-                var attachStatus = await _backendControlApiService.TryStartAsync() ?? existingStatus;
-                ApplyBackendRuntimeStatus(attachStatus, true);
-                _botProcessService.Detach();
-                StatusText = IsProcessRunning ? "Backend is running" : "Backend start command was ignored";
-                AddLog($"Attached to existing backend host: {attachStatus.ControlApiUrl}");
-                await LoadConfigAsync();
-                return;
+                ApplyBackendRuntimeStatus(outcome.AppliedStatus, outcome.ControlApiReachable);
             }
 
-            var existingStatusFailure = _backendControlApiService.LastFailure;
-            if (IsImmediateControlApiFailure(existingStatusFailure))
-            {
-                throw new InvalidOperationException(existingStatusFailure.Message);
-            }
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: outcome.StatusText,
+                logMessages: outcome.LogMessages,
+                notifications: outcome.Notifications,
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: (notification) => NotificationRequested?.Invoke(this, notification));
 
-            _botProcessService.Start(BackendRootPath);
-
-            var status = await WaitForBackendControlStatusAsync();
-            if (status is null)
-            {
-                var waitFailure = _backendControlApiService.LastFailure;
-                if (IsImmediateControlApiFailure(waitFailure))
-                {
-                    throw new InvalidOperationException(waitFailure.Message);
-                }
-
-                StatusText = "Backend started, waiting for control API";
-                return;
-            }
-
-            var startedStatus = await _backendControlApiService.TryStartAsync();
-            ApplyBackendRuntimeStatus(startedStatus, startedStatus is not null);
-            StatusText = IsProcessRunning ? "Backend is running" : "Backend start command was ignored";
-
-            if (startedStatus is not null)
+            if (outcome.ShouldDetachProcess)
             {
                 _botProcessService.Detach();
-                AddLog($"Control API ready: {startedStatus.ControlApiUrl}");
+            }
+
+            if (outcome.ShouldReloadConfig)
+            {
                 await LoadConfigAsync();
             }
         }
         catch (Exception ex)
         {
-            StatusText = "Start failed";
-            AddLog($"Start backend failed: {ex.Message}");
-            System.Windows.MessageBox.Show($"Start backend failed:\n{ex.Message}", "Start failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            DesktopControlPlaneFeedback.ApplyError(
+                statusText: "Start failed",
+                logMessage: $"Start backend failed: {ex.Message}",
+                showDialog: true,
+                dialogTitle: "Start failed",
+                dialogMessage: $"Start backend failed:\n{ex.Message}",
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                showErrorDialog: (title, message) => System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error));
         }
         finally
         {
@@ -1003,63 +1010,34 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             StatusText = "Stopping backend...";
-            await LoadLocalEnvDocumentAsync(suppressErrors: true);
-            var stoppedStatus = await _backendControlApiService.TryStopAsync();
+            var outcome = await BackendControlPlaneFacade.StopBackendAsync(
+                prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
+                tryStopAsync: (cancellationToken) => _backendControlApiService.TryStopAsync(cancellationToken),
+                getLastFailure: () => _backendControlApiService.LastFailure,
+                isImmediateFailure: IsImmediateControlApiFailure,
+                isProcessRunning: () => _botProcessService.IsRunning,
+                stopProcessAsync: () => _botProcessService.StopAsync());
 
-            if (stoppedStatus is not null)
-            {
-                ApplyBackendRuntimeStatus(stoppedStatus, true);
-                StatusText = stoppedStatus.RuntimeActive ? "Backend is still running" : "Backend stopped";
-                AddLog($"Sent stop command via control API: {stoppedStatus.ControlApiUrl}");
-                NotificationRequested?.Invoke(
-                    this,
-                    new TrayNotification
-                    {
-                        Title = "QQ AI Bot",
-                        Message = stoppedStatus.RuntimeActive
-                            ? "Stop command was ignored because runtime is still active."
-                            : "Runtime stopped by user.",
-                        Icon = stoppedStatus.RuntimeActive
-                            ? System.Windows.Forms.ToolTipIcon.Warning
-                            : System.Windows.Forms.ToolTipIcon.Info
-                    }
-                );
-                return;
-            }
-
-            var stopFailure = _backendControlApiService.LastFailure;
-            if (IsImmediateControlApiFailure(stopFailure))
-            {
-                throw new InvalidOperationException(stopFailure.Message);
-            }
-
-            if (_botProcessService.IsRunning)
-            {
-                await _botProcessService.StopAsync();
-                ApplyBackendRuntimeStatus(null, false);
-                StatusText = "Backend host stopped";
-                NotificationRequested?.Invoke(
-                    this,
-                    new TrayNotification
-                    {
-                        Title = "QQ AI Bot",
-                        Message = "Backend host stopped by user.",
-                        Icon = System.Windows.Forms.ToolTipIcon.Info
-                    }
-                );
-            }
-            else
-            {
-                ApplyBackendRuntimeStatus(null, false);
-                StatusText = "Backend is not reachable";
-                AddLog("Control API is unavailable and no local backend host process is attached.");
-            }
+            ApplyBackendRuntimeStatus(outcome.AppliedStatus, outcome.ControlApiReachable);
+            DesktopControlPlaneFeedback.ApplyOutcome(
+                statusText: outcome.StatusText,
+                logMessages: outcome.LogMessages,
+                notifications: outcome.Notifications,
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                notify: (notification) => NotificationRequested?.Invoke(this, notification));
         }
         catch (Exception ex)
         {
-            StatusText = "Stop failed";
-            AddLog($"Stop backend failed: {ex.Message}");
-            System.Windows.MessageBox.Show($"Stop backend failed:\n{ex.Message}", "Stop failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            DesktopControlPlaneFeedback.ApplyError(
+                statusText: "Stop failed",
+                logMessage: $"Stop backend failed: {ex.Message}",
+                showDialog: true,
+                dialogTitle: "Stop failed",
+                dialogMessage: $"Stop backend failed:\n{ex.Message}",
+                setStatusText: (statusText) => StatusText = statusText,
+                addLog: AddLog,
+                showErrorDialog: (title, message) => System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error));
         }
         finally
         {
@@ -1178,6 +1156,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             WechatBridgeToken = WechatBridgeToken.Trim(),
             WechatBotPrefix = WechatBotPrefix.Trim(),
             BotPrefix = BotPrefix.Trim(),
+            BotSystemPrompt = NormalizeBotSystemPrompt(BotSystemPrompt),
             BotPersona = BotPersona.Trim(),
             MaxOutputChars = MaxOutputChars.Trim(),
             AllowedChatIds = AllowedChatIds.Trim(),
@@ -1210,11 +1189,24 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             WechatBridgeToken = config.WechatBridgeToken,
             WechatBotPrefix = config.WechatBotPrefix,
             BotPrefix = config.BotPrefix,
+            BotSystemPrompt = NormalizeBotSystemPrompt(config.BotSystemPrompt),
             BotPersona = config.BotPersona,
             MaxOutputChars = config.MaxOutputChars,
             AllowedChatIds = config.AllowedChatIds,
             AllowedUserIds = config.AllowedUserIds
         };
+    }
+
+    private static BotConfig MergeSavedConfig(BotConfig submittedConfig, BotConfig savedConfig)
+    {
+        var mergedConfig = BuildConfigCopy(savedConfig);
+
+        if (string.IsNullOrWhiteSpace(savedConfig.BotSystemPrompt))
+        {
+            mergedConfig.BotSystemPrompt = NormalizeBotSystemPrompt(submittedConfig.BotSystemPrompt);
+        }
+
+        return mergedConfig;
     }
 
     private void ApplyConfigToView(BotConfig config)
@@ -1240,32 +1232,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         WechatBridgeToken = config.WechatBridgeToken;
         WechatBotPrefix = config.WechatBotPrefix;
         BotPrefix = config.BotPrefix;
+        BotSystemPrompt = NormalizeBotSystemPrompt(config.BotSystemPrompt);
         BotPersona = config.BotPersona;
         MaxOutputChars = config.MaxOutputChars;
         AllowedChatIds = config.AllowedChatIds;
         AllowedUserIds = config.AllowedUserIds;
-    }
-
-    private async Task<BackendRuntimeStatus?> WaitForBackendControlStatusAsync()
-    {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            var status = await _backendControlApiService.TryGetStatusAsync();
-
-            if (status is not null)
-            {
-                return status;
-            }
-
-            if (_backendControlApiService.LastFailure.Kind != BackendControlApiFailureKind.Unreachable)
-            {
-                return null;
-            }
-
-            await Task.Delay(300);
-        }
-
-        return null;
     }
 
     private void AddLog(string message)
@@ -1289,117 +1260,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         await LoadLocalEnvDocumentAsync(suppressErrors: true);
         var status = await _backendControlApiService.TryGetStatusAsync();
         var statusFailure = _backendControlApiService.LastFailure;
+        var pollOutcome = BackendControlApiStatusPollCoordinator.Evaluate(
+            _runtimeSnapshot,
+            _controlApiPollState,
+            status,
+            statusFailure,
+            ControlApiRecoveryAttemptThreshold,
+            ControlApiOutageNotificationThreshold);
+        _controlApiPollState = pollOutcome.NextPollState;
 
-        if (status is null)
+        foreach (var logMessage in pollOutcome.LogMessages)
         {
-            if (statusFailure.Kind != BackendControlApiFailureKind.Unreachable)
-            {
-                _lastControlApiReachable = true;
-                OnPropertyChanged(nameof(IsControlApiReachable));
+            AddLog(logMessage);
+        }
 
-                if (statusFailure.Kind == BackendControlApiFailureKind.Unauthorized &&
-                    !_controlApiUnauthorizedNotified)
-                {
-                    AddLog("Control API authentication failed. Update QQ_AI_BOT_CONTROL_API_TOKEN in the local .env.");
-                    _controlApiUnauthorizedNotified = true;
-                }
+        foreach (var notification in pollOutcome.Notifications)
+        {
+            NotificationRequested?.Invoke(this, notification);
+        }
 
-                return;
-            }
-
-            _controlApiUnauthorizedNotified = false;
-            _consecutiveControlApiFailures += 1;
-            _lastControlApiReachable = false;
+        if (!pollOutcome.ShouldApplyRuntimeStatus)
+        {
+            _runtimeSnapshot = pollOutcome.NextRuntimeSnapshot;
             OnPropertyChanged(nameof(IsControlApiReachable));
-            _lastWechatBridgeConnected = false;
             NotifyRuntimeSnapshotChanged();
 
-            if (_consecutiveControlApiFailures == ControlApiRecoveryAttemptThreshold)
+            if (pollOutcome.ShouldAttemptRecovery)
             {
                 _ = TryRecoverControlApiAsync("status-poll");
             }
 
-            if (!_controlApiOutageNotified &&
-                _consecutiveControlApiFailures >= ControlApiOutageNotificationThreshold)
-            {
-                AddLog("Control API became unreachable.");
-                NotificationRequested?.Invoke(
-                    this,
-                    new TrayNotification
-                    {
-                        Title = "QQ AI Bot",
-                        Message = "Control API is unreachable. The supervisor may be stopped or restarting.",
-                        Icon = System.Windows.Forms.ToolTipIcon.Warning
-                    }
-                );
-                _controlApiOutageNotified = true;
-            }
-
             return;
-        }
-
-        _controlApiUnauthorizedNotified = false;
-        if (_lastControlApiReachable == false && _controlApiOutageNotified)
-        {
-            AddLog("Control API became reachable again.");
-            NotificationRequested?.Invoke(
-                this,
-                new TrayNotification
-                {
-                    Title = "QQ AI Bot",
-                    Message = "Control API is reachable again.",
-                    Icon = System.Windows.Forms.ToolTipIcon.Info
-                }
-            );
-        }
-
-        _lastControlApiReachable = true;
-        IsProcessRunning = status.RuntimeActive;
-
-        if (_lastWorkerProcessId is int previousWorkerPid &&
-            status.WorkerProcessId is int currentWorkerPid &&
-            previousWorkerPid != currentWorkerPid)
-        {
-            AddLog($"Worker restarted: {previousWorkerPid} -> {currentWorkerPid}");
-            NotificationRequested?.Invoke(
-                this,
-                new TrayNotification
-                {
-                    Title = "QQ AI Bot",
-                    Message = $"Worker restarted automatically ({previousWorkerPid} -> {currentWorkerPid}).",
-                    Icon = System.Windows.Forms.ToolTipIcon.Info
-                }
-            );
-        }
-
-        if (_lastWechatWorkerProcessId is int previousWechatWorkerPid &&
-            status.WechatWorkerProcessId is int currentWechatWorkerPid &&
-            previousWechatWorkerPid != currentWechatWorkerPid)
-        {
-            AddLog($"Wechat worker restarted: {previousWechatWorkerPid} -> {currentWechatWorkerPid}");
-            NotificationRequested?.Invoke(
-                this,
-                new TrayNotification
-                {
-                    Title = "QQ AI Bot",
-                    Message = $"Wechat worker restarted automatically ({previousWechatWorkerPid} -> {currentWechatWorkerPid}).",
-                    Icon = System.Windows.Forms.ToolTipIcon.Info
-                }
-            );
-        }
-
-        if (_lastRuntimeActive == true && !status.RuntimeActive)
-        {
-            AddLog("Runtime became inactive.");
-            NotificationRequested?.Invoke(
-                this,
-                new TrayNotification
-                {
-                    Title = "QQ AI Bot",
-                    Message = "Runtime is stopped.",
-                    Icon = System.Windows.Forms.ToolTipIcon.Warning
-                }
-            );
         }
 
         ApplyBackendRuntimeStatus(status, true);
@@ -1408,97 +1299,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void NotifyRuntimeSnapshotChanged()
     {
-        OnPropertyChanged(nameof(WechatRuntimeStateText));
-        OnPropertyChanged(nameof(RuntimeReadyText));
-        OnPropertyChanged(nameof(WechatRuntimeReadyText));
-        OnPropertyChanged(nameof(WechatBridgeStateText));
-        OnPropertyChanged(nameof(WechatWorkerProcessText));
-        OnPropertyChanged(nameof(ShowOnlyQqFailures));
-        OnPropertyChanged(nameof(ShowOnlyWechatFailures));
-        OnPropertyChanged(nameof(PinSelectedQqActivity));
-        OnPropertyChanged(nameof(PinSelectedWechatActivity));
-        OnPropertyChanged(nameof(LatestQqActivitySummaryText));
-        OnPropertyChanged(nameof(LatestQqRecentActivityText));
-        OnPropertyChanged(nameof(SelectedQqRecentActivity));
-        OnPropertyChanged(nameof(SelectedQqRecentActivitySummaryText));
-        OnPropertyChanged(nameof(SelectedQqRecentActivityMetaText));
-        OnPropertyChanged(nameof(SelectedQqRecentActivityDetailText));
-        OnPropertyChanged(nameof(LatestQqActivityStateText));
-        OnPropertyChanged(nameof(LatestQqLatestSuccessText));
-        OnPropertyChanged(nameof(LatestQqLatestFailureText));
-        OnPropertyChanged(nameof(LatestQqRecoveryText));
-        OnPropertyChanged(nameof(LatestQqLlmSummaryText));
-        OnPropertyChanged(nameof(LatestQqLlmDetailText));
-        OnPropertyChanged(nameof(LatestQqRequestTimelineText));
-        OnPropertyChanged(nameof(LatestQqDecisionTriggerText));
-        OnPropertyChanged(nameof(LatestQqDecisionCapabilityText));
-        OnPropertyChanged(nameof(LatestQqDecisionUpgradeText));
-        OnPropertyChanged(nameof(LatestQqRequestedCapabilitiesText));
-        OnPropertyChanged(nameof(LatestQqFailureSummaryText));
-        OnPropertyChanged(nameof(LatestQqFailureTimelineText));
-        OnPropertyChanged(nameof(LatestQqFailureTriggerText));
-        OnPropertyChanged(nameof(LatestQqFailureCapabilityText));
-        OnPropertyChanged(nameof(LatestQqFailureUpgradeText));
-        OnPropertyChanged(nameof(LatestQqFailureErrorText));
-        OnPropertyChanged(nameof(LatestWechatActivitySummaryText));
-        OnPropertyChanged(nameof(LatestWechatRecentActivityText));
-        OnPropertyChanged(nameof(SelectedWechatRecentActivity));
-        OnPropertyChanged(nameof(SelectedWechatRecentActivitySummaryText));
-        OnPropertyChanged(nameof(SelectedWechatRecentActivityMetaText));
-        OnPropertyChanged(nameof(SelectedWechatRecentActivityDetailText));
-        OnPropertyChanged(nameof(LatestWechatActivityStateText));
-        OnPropertyChanged(nameof(LatestWechatLatestSuccessText));
-        OnPropertyChanged(nameof(LatestWechatLatestFailureText));
-        OnPropertyChanged(nameof(LatestWechatRecoveryText));
-        OnPropertyChanged(nameof(LatestWechatLlmSummaryText));
-        OnPropertyChanged(nameof(LatestWechatLlmDetailText));
-        OnPropertyChanged(nameof(LatestWechatRequestTimelineText));
-        OnPropertyChanged(nameof(LatestWechatDecisionTriggerText));
-        OnPropertyChanged(nameof(LatestWechatDecisionCapabilityText));
-        OnPropertyChanged(nameof(LatestWechatDecisionUpgradeText));
-        OnPropertyChanged(nameof(LatestWechatRequestedCapabilitiesText));
-        OnPropertyChanged(nameof(LatestWechatFailureSummaryText));
-        OnPropertyChanged(nameof(LatestWechatFailureTimelineText));
-        OnPropertyChanged(nameof(LatestWechatFailureTriggerText));
-        OnPropertyChanged(nameof(LatestWechatFailureCapabilityText));
-        OnPropertyChanged(nameof(LatestWechatFailureUpgradeText));
-        OnPropertyChanged(nameof(LatestWechatFailureErrorText));
+        BackendRuntimeSnapshotViewHelper.NotifyRuntimeSnapshotChanged(OnPropertyChanged);
     }
 
     private void ApplyBackendRuntimeStatus(BackendRuntimeStatus? status, bool controlApiReachable)
     {
-        TrackRecentActivity(
-            status?.LastQqLlmRequest,
-            status?.LastQqLlmFailure,
-            QqRecentActivities,
-            ref _lastQqRequestEventKey,
-            ref _lastQqFailureEventKey,
-            () => PinSelectedQqActivity,
-            () => SelectedQqRecentActivity,
-            (item) => SelectedQqRecentActivity = item);
-        TrackRecentActivity(
-            status?.LastWechatLlmRequest,
-            status?.LastWechatLlmFailure,
-            WechatRecentActivities,
-            ref _lastWechatRequestEventKey,
-            ref _lastWechatFailureEventKey,
-            () => PinSelectedWechatActivity,
-            () => SelectedWechatRecentActivity,
-            (item) => SelectedWechatRecentActivity = item);
-        IsProcessRunning = status?.RuntimeActive == true;
-        _lastWorkerProcessId = status?.WorkerProcessId;
-        _lastWechatWorkerProcessId = status?.WechatWorkerProcessId;
-        _lastRuntimeActive = status?.RuntimeActive;
-        _lastRuntimeReady = status?.RuntimeReady;
-        _lastWechatConfigured = status?.WechatConfigured;
-        _lastWechatRuntimeActive = status?.WechatRuntimeActive;
-        _lastWechatRuntimeReady = status?.WechatRuntimeReady;
-        _lastWechatBridgeConnected = status?.WechatBridgeConnected;
-        _lastQqLlmRequest = status?.LastQqLlmRequest;
-        _lastQqLlmFailure = status?.LastQqLlmFailure;
-        _lastWechatLlmRequest = status?.LastWechatLlmRequest;
-        _lastWechatLlmFailure = status?.LastWechatLlmFailure;
-        _lastControlApiReachable = controlApiReachable;
+        var projection = BackendRuntimeSnapshotCoordinator.ProjectRuntimeStatus(
+            status,
+            controlApiReachable,
+            new BackendChannelActivityContext(
+                QqRecentActivities,
+                _lastQqRequestEventKey,
+                _lastQqFailureEventKey,
+                PinSelectedQqActivity,
+                SelectedQqRecentActivity),
+            new BackendChannelActivityContext(
+                WechatRecentActivities,
+                _lastWechatRequestEventKey,
+                _lastWechatFailureEventKey,
+                PinSelectedWechatActivity,
+                SelectedWechatRecentActivity));
+
+        BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(QqRecentActivities, projection.QqActivity.Items);
+        BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(WechatRecentActivities, projection.WechatActivity.Items);
+        _lastQqRequestEventKey = projection.QqActivity.LastRequestEventKey;
+        _lastQqFailureEventKey = projection.QqActivity.LastFailureEventKey;
+        _selectedQqRecentActivity = projection.QqActivity.SelectedItem;
+        _lastWechatRequestEventKey = projection.WechatActivity.LastRequestEventKey;
+        _lastWechatFailureEventKey = projection.WechatActivity.LastFailureEventKey;
+        _selectedWechatRecentActivity = projection.WechatActivity.SelectedItem;
+        IsProcessRunning = projection.SnapshotState.RuntimeActive == true;
+        _runtimeSnapshot = projection.SnapshotState;
         OnPropertyChanged(nameof(IsControlApiReachable));
         NotifyRuntimeSnapshotChanged();
         PersistActivityStateIfPossible();
@@ -1544,23 +1375,21 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyActivityState(DesktopActivityState? state)
     {
-        var normalizedState = _activityStatePolicy.Normalize(state) ?? _activityStatePolicy.CreateDefaultState();
+        var projection = BackendRuntimeSnapshotCoordinator.ProjectActivityRestore(
+            _activityStatePolicy,
+            state);
 
         _restoringActivityState = true;
         try
         {
-            ReplaceRecentActivities(QqRecentActivities, normalizedState.QqRecentActivities);
-            ReplaceRecentActivities(WechatRecentActivities, normalizedState.WechatRecentActivities);
-            _pinSelectedQqActivity = normalizedState.PinSelectedQqActivity;
-            _pinSelectedWechatActivity = normalizedState.PinSelectedWechatActivity;
-            _showOnlyQqFailures = normalizedState.ShowOnlyQqFailures;
-            _showOnlyWechatFailures = normalizedState.ShowOnlyWechatFailures;
-            _selectedQqRecentActivity = _activityStatePolicy.ResolveSelectedItem(
-                QqRecentActivities,
-                normalizedState.SelectedQqEventKey);
-            _selectedWechatRecentActivity = _activityStatePolicy.ResolveSelectedItem(
-                WechatRecentActivities,
-                normalizedState.SelectedWechatEventKey);
+            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(QqRecentActivities, projection.QqRecentActivities);
+            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(WechatRecentActivities, projection.WechatRecentActivities);
+            _pinSelectedQqActivity = projection.PinSelectedQqActivity;
+            _pinSelectedWechatActivity = projection.PinSelectedWechatActivity;
+            _showOnlyQqFailures = projection.ShowOnlyQqFailures;
+            _showOnlyWechatFailures = projection.ShowOnlyWechatFailures;
+            _selectedQqRecentActivity = projection.SelectedQqRecentActivity;
+            _selectedWechatRecentActivity = projection.SelectedWechatRecentActivity;
         }
         finally
         {
@@ -1569,44 +1398,20 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         QqRecentActivitiesView.Refresh();
         WechatRecentActivitiesView.Refresh();
-        EnsureSelectedActivityVisible(
-            QqRecentActivitiesView,
-            () => SelectedQqRecentActivity,
-            (item) => SelectedQqRecentActivity = item);
-        EnsureSelectedActivityVisible(
-            WechatRecentActivitiesView,
-            () => SelectedWechatRecentActivity,
-            (item) => SelectedWechatRecentActivity = item);
+        SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
+            QqRecentActivities,
+            SelectedQqRecentActivity,
+            ShowOnlyQqFailures);
+        SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
+            WechatRecentActivities,
+            SelectedWechatRecentActivity,
+            ShowOnlyWechatFailures);
         NotifyRuntimeSnapshotChanged();
-    }
-
-    private static void ReplaceRecentActivities(
-        ObservableCollection<BackendRecentActivityItem> target,
-        IEnumerable<BackendRecentActivityItem>? source)
-    {
-        target.Clear();
-
-        if (source is null)
-        {
-            return;
-        }
-
-        foreach (var item in source)
-        {
-            if (item is null || string.IsNullOrWhiteSpace(item.EventKey))
-            {
-                continue;
-            }
-
-            target.Add(item);
-        }
     }
 
     private void ResetControlApiFailureState()
     {
-        _consecutiveControlApiFailures = 0;
-        _controlApiOutageNotified = false;
-        _controlApiUnauthorizedNotified = false;
+        _controlApiPollState = new BackendControlApiPollState();
         _controlApiRecoveryInProgress = false;
     }
 
@@ -1621,63 +1426,31 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            await LoadLocalEnvDocumentAsync(suppressErrors: true);
-            AddLog($"Control API unreachable; attempting backend recovery ({reason}).");
+            var outcome = await BackendControlApiRecoveryCoordinator.TryRecoverAsync(
+                reason,
+                prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
+                tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
+                getLastFailure: () => _backendControlApiService.LastFailure,
+                isImmediateFailure: IsImmediateControlApiFailure,
+                isProcessRunning: () => _botProcessService.IsRunning,
+                startProcess: () => _botProcessService.Start(BackendRootPath),
+                tryStartAsync: (cancellationToken) => _backendControlApiService.TryStartAsync(cancellationToken),
+                waitForStatusAsync: (cancellationToken) => BackendControlApiStatusWaiter.WaitForStatusAsync(
+                    (innerCancellationToken) => _backendControlApiService.TryGetStatusAsync(innerCancellationToken),
+                    () => _backendControlApiService.LastFailure,
+                    cancellationToken: cancellationToken),
+                detachProcess: () => _botProcessService.Detach());
 
-            var existingStatus = await _backendControlApiService.TryGetStatusAsync();
-            if (existingStatus is not null)
+            foreach (var logMessage in outcome.LogMessages)
             {
-                ApplyBackendRuntimeStatus(existingStatus, true);
+                AddLog(logMessage);
+            }
+
+            if (outcome.RecoveredStatus is not null)
+            {
+                ApplyBackendRuntimeStatus(outcome.RecoveredStatus, true);
                 ResetControlApiFailureState();
-                AddLog("Control API recovered before local restart was needed.");
-                return;
             }
-
-            var existingStatusFailure = _backendControlApiService.LastFailure;
-            if (IsImmediateControlApiFailure(existingStatusFailure))
-            {
-                AddLog($"Control API recovery aborted: {existingStatusFailure.Message}");
-                return;
-            }
-
-            if (!_botProcessService.IsRunning)
-            {
-                _botProcessService.Start(BackendRootPath);
-                AddLog("Started local backend host for control API recovery.");
-            }
-
-            var startStatus = await _backendControlApiService.TryStartAsync();
-            if (startStatus is not null)
-            {
-                ApplyBackendRuntimeStatus(startStatus, true);
-                _botProcessService.Detach();
-                ResetControlApiFailureState();
-                AddLog($"Control API recovery succeeded: {startStatus.ControlApiUrl}");
-                return;
-            }
-
-            var startFailure = _backendControlApiService.LastFailure;
-            if (IsImmediateControlApiFailure(startFailure))
-            {
-                AddLog($"Control API recovery aborted: {startFailure.Message}");
-                return;
-            }
-
-            var recoveredStatus = await WaitForBackendControlStatusAsync();
-            if (recoveredStatus is not null)
-            {
-                ApplyBackendRuntimeStatus(recoveredStatus, true);
-                _botProcessService.Detach();
-                ResetControlApiFailureState();
-                AddLog($"Control API recovery succeeded: {recoveredStatus.ControlApiUrl}");
-                return;
-            }
-
-            AddLog("Control API recovery attempt did not restore connectivity.");
-        }
-        catch (Exception ex)
-        {
-            AddLog($"Control API recovery failed: {ex.Message}");
         }
         finally
         {
@@ -1687,46 +1460,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<BackendControlConfigResponse> SaveConfigThroughControlApiAsync(BotConfig config)
     {
-        await LoadLocalEnvDocumentAsync(suppressErrors: true);
-        var apiResult = await _backendControlApiService.TrySaveConfigAsync(config);
-
-        if (apiResult is not null)
-        {
-            return apiResult;
-        }
-
-        var initialFailure = _backendControlApiService.LastFailure;
-
-        if (IsImmediateControlApiFailure(initialFailure))
-        {
-            throw new InvalidOperationException(initialFailure.Message);
-        }
-
-        var currentStatus = await _backendControlApiService.TryGetStatusAsync();
-
-        if (currentStatus is null)
-        {
-            var currentStatusFailure = _backendControlApiService.LastFailure;
-            if (IsImmediateControlApiFailure(currentStatusFailure))
-            {
-                throw new InvalidOperationException(currentStatusFailure.Message);
-            }
-
-            await TryRecoverControlApiAsync("save-config");
-            apiResult = await _backendControlApiService.TrySaveConfigAsync(config);
-
-            if (apiResult is not null)
-            {
-                return apiResult;
-            }
-        }
-
-        var finalFailure = _backendControlApiService.LastFailure;
-        var failureMessage = string.IsNullOrWhiteSpace(finalFailure.Message)
-            ? "Control API is unavailable or rejected the config update."
-            : finalFailure.Message;
-
-        throw new InvalidOperationException(failureMessage);
+        return await BackendControlPlaneFacade.SaveConfigAsync(
+            prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
+            config,
+            trySaveConfigAsync: (submittedConfig, cancellationToken) => _backendControlApiService.TrySaveConfigAsync(submittedConfig, cancellationToken),
+            getLastFailure: () => _backendControlApiService.LastFailure,
+            tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
+            isImmediateFailure: IsImmediateControlApiFailure,
+            tryRecoverControlApiAsync: () => TryRecoverControlApiAsync("save-config"));
     }
 
     private async Task<EnvDocument> LoadLocalEnvDocumentAsync(bool suppressErrors = false)
@@ -1787,456 +1528,38 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             BackendControlApiFailureKind.Unknown;
     }
 
-    private static string FormatLlmRequestSummary(BackendLlmRequestStatus? request, string emptyText)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route) || string.IsNullOrWhiteSpace(request.Model))
-        {
-            return emptyText;
-        }
-
-        var apiStyle = string.IsNullOrWhiteSpace(request.EffectiveApiStyle) ? "unknown" : request.EffectiveApiStyle;
-        return $"{request.Route} / {request.Model} / {apiStyle}";
-    }
-
-    private static string FormatActivitySummary(
-        BackendLlmRequestStatus? request,
-        BackendLlmFailureStatus? failure,
-        string emptyText)
-    {
-        if (request is null && failure is null)
-        {
-            return emptyText;
-        }
-
-        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
-        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
-
-        if (failureCapturedAt is not null &&
-            (requestCapturedAt is null || failureCapturedAt >= requestCapturedAt))
-        {
-            return $"Latest event: failure at {FormatCapturedAt(failure!.CapturedAt)}";
-        }
-
-        if (requestCapturedAt is not null)
-        {
-            return $"Latest event: request at {FormatCapturedAt(request!.CapturedAt)}";
-        }
-
-        return emptyText;
-    }
-
-    private static string FormatRecentActivity(IEnumerable<BackendRecentActivityItem> items, string emptyText)
-    {
-        var visibleLines = items
-            .Where(static item => item is not null && !string.IsNullOrWhiteSpace(item.Summary))
-            .Select(static item => $"{item.EventType} | {item.Summary}")
-            .ToArray();
-        return visibleLines.Length > 0 ? string.Join(Environment.NewLine, visibleLines) : emptyText;
-    }
-
     private bool FilterQqRecentActivity(object item)
     {
-        return FilterRecentActivity(item, ShowOnlyQqFailures);
+        return BackendRecentActivityViewStateHelper.ShouldInclude(item, ShowOnlyQqFailures);
     }
 
     private bool FilterWechatRecentActivity(object item)
     {
-        return FilterRecentActivity(item, ShowOnlyWechatFailures);
+        return BackendRecentActivityViewStateHelper.ShouldInclude(item, ShowOnlyWechatFailures);
     }
 
-    private static bool FilterRecentActivity(object item, bool failuresOnly)
+    private static string NormalizeBotSystemPrompt(string? botSystemPrompt)
     {
-        if (item is not BackendRecentActivityItem activityItem)
-        {
-            return false;
-        }
+        var normalizedSystemPrompt = string.IsNullOrWhiteSpace(botSystemPrompt)
+            ? string.Empty
+            : botSystemPrompt.Trim();
 
-        return !failuresOnly || activityItem.IsFailure;
+        return string.IsNullOrWhiteSpace(normalizedSystemPrompt)
+            ? DefaultBotInstructionsTextValue
+            : normalizedSystemPrompt;
     }
 
-    private static void EnsureSelectedActivityVisible(
-        ICollectionView activityView,
-        Func<BackendRecentActivityItem?> getSelectedItem,
-        Action<BackendRecentActivityItem?> setSelectedItem)
+    private static string BuildEffectiveBotInstructions(string? botSystemPrompt, string? botPersona)
     {
-        var selectedItem = getSelectedItem();
-
-        if (selectedItem is not null && activityView.Cast<object>().Contains(selectedItem))
-        {
-            return;
-        }
-
-        setSelectedItem(activityView.Cast<BackendRecentActivityItem>().FirstOrDefault());
-    }
-
-    private static string FormatActivityState(
-        BackendLlmRequestStatus? request,
-        BackendLlmFailureStatus? failure)
-    {
-        if (request is null && failure is null)
-        {
-            return "No activity";
-        }
-
-        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
-        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
-
-        if (requestCapturedAt is not null && failureCapturedAt is not null)
-        {
-            if (requestCapturedAt > failureCapturedAt)
-            {
-                return "Recovered after failure";
-            }
-
-            if (failureCapturedAt > requestCapturedAt)
-            {
-                return "Failure is latest event";
-            }
-
-            return "Request and failure captured";
-        }
-
-        if (requestCapturedAt is not null)
-        {
-            return "Latest event is successful request";
-        }
-
-        return "Latest event is failure";
-    }
-
-    private static string FormatLatestSuccess(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "Success | not captured";
-        }
-
-        return $"Success | {FormatCapturedAt(request.CapturedAt)}";
-    }
-
-    private static string FormatLatestFailure(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "Failure | not captured";
-        }
-
-        return $"Failure | {FormatCapturedAt(failure.CapturedAt)}";
-    }
-
-    private static string FormatRecoveryState(
-        BackendLlmRequestStatus? request,
-        BackendLlmFailureStatus? failure)
-    {
-        var requestCapturedAt = ParseCapturedAt(request?.CapturedAt);
-        var failureCapturedAt = ParseCapturedAt(failure?.CapturedAt);
-
-        if (requestCapturedAt is null || failureCapturedAt is null)
-        {
-            return "Recovery | not observed";
-        }
-
-        if (requestCapturedAt > failureCapturedAt)
-        {
-            return $"Recovery | {FormatCapturedAt(request!.CapturedAt)}";
-        }
-
-        return "Recovery | pending";
-    }
-
-    private static string FormatRequestTimeline(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "Request | n/a | not captured";
-        }
-
-        return $"Request | {FormatCapturedAt(request.CapturedAt)} | completed";
-    }
-
-    private static string FormatLlmRequestDetail(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "No completed requests captured yet.";
-        }
-
-        var capturedAt = FormatCapturedAt(request.CapturedAt);
-        var reasoning = string.IsNullOrWhiteSpace(request.EffectiveReasoningEffort) ? "none" : request.EffectiveReasoningEffort;
-        var verbosity = string.IsNullOrWhiteSpace(request.EffectiveTextVerbosity) ? "none" : request.EffectiveTextVerbosity;
-        var tools = request.EffectiveTools is { Length: > 0 }
-            ? string.Join("+", request.EffectiveTools)
-            : "none";
-        var decisionSummary = FormatDecisionSummary(request);
-
-        return $"At {capturedAt} | {decisionSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
-    }
-
-    private static string FormatDecisionSummary(BackendLlmRequestStatus request)
-    {
-        var summary = request.DecisionSummary;
-
-        if (summary is null)
-        {
-            var routeReason = string.IsNullOrWhiteSpace(request.RouteReason) ? "default" : request.RouteReason;
-            return $"reason={routeReason}";
-        }
-
-        var trigger = FormatDecisionTrigger(summary);
-        var capabilityReasons = FormatDecisionReasonGroup(summary.ReasonGroups?.CapabilityReasons, "default");
-        var upgradeReasons = FormatDecisionReasonGroup(summary.ReasonGroups?.UpgradeReasons, "none");
-
-        return $"trigger={trigger} | capability={capabilityReasons} | upgrade={upgradeReasons}";
-    }
-
-    private static string FormatDecisionTrigger(BackendDecisionSummary summary)
-    {
-        var triggerKind = string.IsNullOrWhiteSpace(summary.Trigger?.Kind)
-            ? "default"
-            : summary.Trigger.Kind;
-        var matchedPrefix = string.IsNullOrWhiteSpace(summary.Trigger?.MatchedPrefix)
-            ? summary.MatchedPrefix
-            : summary.Trigger!.MatchedPrefix;
-
-        return triggerKind == "directive" && !string.IsNullOrWhiteSpace(matchedPrefix)
-            ? $"directive:{matchedPrefix}"
-            : triggerKind;
-    }
-
-    private static string FormatDecisionReasonGroup(string[]? reasons, string emptyValue)
-    {
-        return reasons is { Length: > 0 }
-            ? string.Join("+", reasons)
-            : emptyValue;
-    }
-
-    private static string FormatLlmFailureSummary(BackendLlmFailureStatus? failure, string emptyText)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return emptyText;
-        }
-
-        return $"{failure.Route} / {FormatCapturedAt(failure.CapturedAt)}";
-    }
-
-    private static string FormatFailureTimeline(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "Failure | n/a | not captured";
-        }
-
-        return $"Failure | {FormatCapturedAt(failure.CapturedAt)} | failed";
-    }
-
-    private static string FormatLlmFailureTrigger(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "n/a";
-        }
-
-        var summary = failure.DecisionSummary;
-
-        if (summary is not null)
-        {
-            return FormatDecisionTrigger(summary);
-        }
-
-        if (!string.IsNullOrWhiteSpace(failure.MatchedPrefix))
-        {
-            return $"directive:{failure.MatchedPrefix}";
-        }
-
-        return "default";
-    }
-
-    private static string FormatLlmFailureCapability(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "n/a";
-        }
-
-        return FormatDecisionReasonGroup(failure.DecisionSummary?.ReasonGroups?.CapabilityReasons, "default");
-    }
-
-    private static string FormatLlmFailureUpgrade(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "n/a";
-        }
-
-        return FormatDecisionReasonGroup(failure.DecisionSummary?.ReasonGroups?.UpgradeReasons, "none");
-    }
-
-    private static string FormatLlmFailureError(BackendLlmFailureStatus? failure)
-    {
-        if (failure is null || string.IsNullOrWhiteSpace(failure.Route))
-        {
-            return "n/a";
-        }
-
-        return string.IsNullOrWhiteSpace(failure.Error) ? "unknown" : failure.Error;
-    }
-
-    private static string FormatLlmDecisionTrigger(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "n/a";
-        }
-
-        var summary = request.DecisionSummary;
-
-        if (summary is not null)
-        {
-            return FormatDecisionTrigger(summary);
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.MatchedPrefix))
-        {
-            return $"directive:{request.MatchedPrefix}";
-        }
-
-        return "default";
-    }
-
-    private static string FormatLlmDecisionCapability(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "n/a";
-        }
-
-        return FormatDecisionReasonGroup(request.DecisionSummary?.ReasonGroups?.CapabilityReasons, "default");
-    }
-
-    private static string FormatLlmDecisionUpgrade(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "n/a";
-        }
-
-        return FormatDecisionReasonGroup(request.DecisionSummary?.ReasonGroups?.UpgradeReasons, "none");
-    }
-
-    private static string FormatLlmRequestedCapabilities(BackendLlmRequestStatus? request)
-    {
-        if (request is null || string.IsNullOrWhiteSpace(request.Route))
-        {
-            return "n/a";
-        }
-
-        var requested = request.DecisionSummary?.RequestedCapabilities;
-
-        if (requested is not null)
-        {
-            return $"reasoning={DefaultIfBlank(requested.ReasoningEffort, "none")} | verbosity={DefaultIfBlank(requested.TextVerbosity, "none")} | web={(requested.EnableWebSearch ? "on" : "off")} | code={(requested.EnableCodeInterpreter ? "on" : "off")}";
-        }
-
-        return $"reasoning={DefaultIfBlank(request.EffectiveReasoningEffort, "none")} | verbosity={DefaultIfBlank(request.EffectiveTextVerbosity, "none")} | web={(request.EffectiveTools?.Contains("web_search") == true ? "on" : "off")} | code={(request.EffectiveTools?.Contains("code_interpreter") == true ? "on" : "off")}";
-    }
-
-    private static string DefaultIfBlank(string? value, string fallback)
-    {
-        return string.IsNullOrWhiteSpace(value) ? fallback : value;
-    }
-
-    private static string BuildEffectiveBotInstructions(string? botPersona)
-    {
+        var normalizedSystemPrompt = NormalizeBotSystemPrompt(botSystemPrompt);
         var normalizedPersona = string.IsNullOrWhiteSpace(botPersona) ? string.Empty : botPersona.Trim();
 
         if (string.IsNullOrWhiteSpace(normalizedPersona))
         {
-            return DefaultBotInstructionsTextValue;
+            return normalizedSystemPrompt;
         }
 
-        return $"{DefaultBotInstructionsTextValue}{Environment.NewLine}{Environment.NewLine}附加人格设定:{Environment.NewLine}{normalizedPersona}";
-    }
-
-    private static void TrackRecentActivity(
-        BackendLlmRequestStatus? request,
-        BackendLlmFailureStatus? failure,
-        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
-        ref string lastRequestEventKey,
-        ref string lastFailureEventKey,
-        Func<bool> getIsPinned,
-        Func<BackendRecentActivityItem?> getSelectedItem,
-        Action<BackendRecentActivityItem?> setSelectedItem)
-    {
-        var entries = new List<(DateTimeOffset? CapturedAt, string Key, BackendRecentActivityItem Item, bool IsRequest)>();
-        var hadSelection = getSelectedItem() is not null;
-        BackendRecentActivityItem? newestInserted = null;
-
-        if (request is not null && !string.IsNullOrWhiteSpace(request.Route))
-        {
-            var key = BuildRequestEventKey(request);
-            if (!string.Equals(key, lastRequestEventKey, StringComparison.Ordinal))
-            {
-                entries.Add((ParseCapturedAt(request.CapturedAt), key, BuildRequestActivityItem(request), true));
-            }
-        }
-
-        if (failure is not null && !string.IsNullOrWhiteSpace(failure.Route))
-        {
-            var key = BuildFailureEventKey(failure);
-            if (!string.Equals(key, lastFailureEventKey, StringComparison.Ordinal))
-            {
-                entries.Add((ParseCapturedAt(failure.CapturedAt), key, BuildFailureActivityItem(failure), false));
-            }
-        }
-
-        foreach (var entry in entries.OrderBy(static entry => entry.CapturedAt ?? DateTimeOffset.MinValue))
-        {
-            InsertRecentActivity(recentActivityItems, entry.Item);
-            newestInserted = entry.Item;
-
-            if (entry.IsRequest)
-            {
-                lastRequestEventKey = entry.Key;
-            }
-            else
-            {
-                lastFailureEventKey = entry.Key;
-            }
-        }
-
-        if (!hadSelection && newestInserted is not null)
-        {
-            setSelectedItem(newestInserted);
-        }
-        else if (hadSelection && newestInserted is not null && !getIsPinned())
-        {
-            setSelectedItem(newestInserted);
-        }
-
-        var selectedItem = getSelectedItem();
-
-        if (selectedItem is not null && !recentActivityItems.Contains(selectedItem))
-        {
-            setSelectedItem(recentActivityItems.FirstOrDefault());
-        }
-    }
-
-    private static void InsertRecentActivity(
-        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
-        BackendRecentActivityItem item)
-    {
-        if (item is null || string.IsNullOrWhiteSpace(item.Summary))
-        {
-            return;
-        }
-
-        recentActivityItems.Insert(0, item);
-
-        while (recentActivityItems.Count > 6)
-        {
-            recentActivityItems.RemoveAt(recentActivityItems.Count - 1);
-        }
+        return $"{normalizedSystemPrompt}{Environment.NewLine}{Environment.NewLine}附加人格设定:{Environment.NewLine}{normalizedPersona}";
     }
 
     private void ClearActivityHistory(
@@ -2249,64 +1572,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         clearPinnedState();
         UpdateCommandStates();
         NotifyRuntimeSnapshotChanged();
-    }
-
-    private static string BuildRequestEventKey(BackendLlmRequestStatus request)
-    {
-        return $"request|{request.CapturedAt}|{request.Route}|{request.ResponseId}|{request.Model}";
-    }
-
-    private static string BuildFailureEventKey(BackendLlmFailureStatus failure)
-    {
-        return $"failure|{failure.CapturedAt}|{failure.Route}|{failure.Error}";
-    }
-
-    private static BackendRecentActivityItem BuildRequestActivityItem(BackendLlmRequestStatus request)
-    {
-        return new BackendRecentActivityItem
-        {
-            EventKey = BuildRequestEventKey(request),
-            CapturedAt = request.CapturedAt,
-            EventType = "Request",
-            Summary = $"{request.Route} / {DefaultIfBlank(request.Model, "unknown-model")} / {DefaultIfBlank(request.EffectiveApiStyle, "unknown-api")}",
-            Meta = FormatCapturedAt(request.CapturedAt),
-            Detail = FormatLlmRequestDetail(request),
-            IsFailure = false
-        };
-    }
-
-    private static BackendRecentActivityItem BuildFailureActivityItem(BackendLlmFailureStatus failure)
-    {
-        return new BackendRecentActivityItem
-        {
-            EventKey = BuildFailureEventKey(failure),
-            CapturedAt = failure.CapturedAt,
-            EventType = "Failure",
-            Summary = $"{failure.Route} / {DefaultIfBlank(failure.Error, "unknown")}",
-            Meta = FormatCapturedAt(failure.CapturedAt),
-            Detail = $"At {FormatCapturedAt(failure.CapturedAt)} | trigger={FormatLlmFailureTrigger(failure)} | capability={FormatLlmFailureCapability(failure)} | upgrade={FormatLlmFailureUpgrade(failure)} | error={FormatLlmFailureError(failure)}",
-            IsFailure = true
-        };
-    }
-
-    private static DateTimeOffset? ParseCapturedAt(string? capturedAt)
-    {
-        if (DateTimeOffset.TryParse(capturedAt, out var parsed))
-        {
-            return parsed;
-        }
-
-        return null;
-    }
-
-    private static string FormatCapturedAt(string capturedAt)
-    {
-        if (DateTimeOffset.TryParse(capturedAt, out var parsed))
-        {
-            return parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
-        }
-
-        return string.IsNullOrWhiteSpace(capturedAt) ? "unknown" : capturedAt;
     }
 
     private void OnLogFlushTimerTick(object? sender, EventArgs e)

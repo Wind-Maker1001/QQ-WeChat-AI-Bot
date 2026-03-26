@@ -33,6 +33,7 @@ function createRuntimeConfig() {
       WECHAT_BRIDGE_TOKEN: 'wechat-token',
       WECHAT_BOT_PREFIX: '/wx',
       BOT_PREFIX: '/ai',
+      BOT_SYSTEM_PROMPT: 'system line 1\nsystem line 2',
       BOT_PERSONA: 'persona',
       MAX_OUTPUT_CHARS: '1200',
       ALLOWED_CHAT_IDS: 'chat-a',
@@ -54,6 +55,7 @@ test('buildControlConfigFromEnvValues falls back to runtime config defaults', ()
 
   assert.equal(config.openAiDefaultApiKey, 'default-key');
   assert.equal(config.wechatBotPrefix, '/wx');
+  assert.equal(config.botSystemPrompt, 'system line 1\nsystem line 2');
   assert.equal(config.allowedChatIds, 'chat-a');
   assert.equal(config.maxOutputChars, '1200');
 });
@@ -76,6 +78,7 @@ test('buildControlEnvValues preserves explicit API styles and unknown keys', () 
       openAiBaseUrl: ' https://advanced.example/v1 ',
       openAiDefaultBaseUrl: ' https://default-next.example/v1 ',
       wechatBotPrefix: ' /bot ',
+      botSystemPrompt: ' system prompt next ',
       napCatToken: ' next-token ',
       allowedChatIds: ' chat-x,chat-y ',
       allowedUserIds: ' user-x '
@@ -88,5 +91,6 @@ test('buildControlEnvValues preserves explicit API styles and unknown keys', () 
   assert.equal(nextValues.OPENAI_ADVANCED_API_STYLE, 'responses');
   assert.equal(nextValues.CUSTOM_FLAG, 'enabled');
   assert.equal(nextValues.WECHAT_BOT_PREFIX, '/bot');
+  assert.equal(nextValues.BOT_SYSTEM_PROMPT, ' system prompt next ');
   assert.equal(nextValues.ALLOWED_CHAT_IDS, 'chat-x,chat-y');
 });

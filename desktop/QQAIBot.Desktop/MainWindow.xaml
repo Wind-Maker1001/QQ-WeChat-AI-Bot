@@ -462,17 +462,16 @@
                 </Grid>
                 <TextBlock Margin="0,0,0,8"
                            Style="{StaticResource FieldLabelStyle}"
-                           Text="默认系统提示词（只读）" />
+                           Text="BOT_SYSTEM_PROMPT（基础系统提示词）" />
                 <TextBox x:Name="DefaultBotInstructionsTextBox"
-                         Text="{Binding DefaultBotInstructionsText}"
-                         IsReadOnly="True"
+                         Text="{Binding BotSystemPrompt, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
-                         MinHeight="120" />
+                         MinHeight="160" />
                 <TextBlock Margin="0,12,0,8"
                            Style="{StaticResource SectionSubtitleStyle}"
-                           Text="BOT_PERSONA 会追加在默认系统提示词后面，不会覆盖默认提示词。" />
+                           Text="留空会恢复内置默认提示词；BOT_PERSONA 会追加在基础系统提示词后面，不会覆盖它。" />
                 <TextBlock Style="{StaticResource FieldLabelStyle}" Text="BOT_PERSONA（附加人格）" />
                 <TextBox x:Name="BotPersonaTextBox"
                          Text="{Binding BotPersona, UpdateSourceTrigger=PropertyChanged}"
@@ -484,7 +483,7 @@
                            Style="{StaticResource FieldLabelStyle}"
                            Text="最终系统提示词预览（只读）" />
                 <TextBox x:Name="EffectiveBotInstructionsTextBox"
-                         Text="{Binding EffectiveBotInstructionsText}"
+                         Text="{Binding EffectiveBotInstructionsText, Mode=OneWay}"
                          IsReadOnly="True"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"

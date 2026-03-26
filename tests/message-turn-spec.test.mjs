@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 
 import { createRouteDecision } from '../src/domain/route-decision.mjs';
 import {
+  createExecutionProjection,
+  DELIBERATION_EXECUTION_STAGES,
+  EXECUTION_KIND_DELIBERATION,
+  EXECUTION_KIND_DIRECT,
+  EXECUTION_STAGE_DRAFT,
+  EXECUTION_STAGE_DIRECT,
+  EXECUTION_STAGE_PLANNER,
+  getExecutionSummary
+} from '../src/domain/execution-projection.mjs';
+import {
   buildMessageTurnSpec,
   buildNextConversationState,
   buildTurnFailureTelemetry,
@@ -60,6 +70,12 @@ test('turn spec builds reply telemetry around route decision and execution plan'
       effectiveTextVerbosity: 'high',
       configuredTools: [],
       effectiveTools: ['web_search'],
+      executionKind: EXECUTION_KIND_DIRECT,
+      executionSummary: getExecutionSummary(EXECUTION_KIND_DIRECT),
+      executionProjection: createExecutionProjection({
+        kind: EXECUTION_KIND_DIRECT,
+        completedStages: [EXECUTION_STAGE_DIRECT]
+      }),
       responseId: 'resp_123'
     }
   });
@@ -96,6 +112,15 @@ test('turn spec builds reply telemetry around route decision and execution plan'
     matchedPrefix: '/ai'
   });
   assert.equal(telemetry.imageCount, 1);
+  assert.equal(telemetry.executionKind, EXECUTION_KIND_DIRECT);
+  assert.equal(telemetry.executionSummary, getExecutionSummary(EXECUTION_KIND_DIRECT));
+  assert.deepEqual(
+    telemetry.executionProjection,
+    createExecutionProjection({
+      kind: EXECUTION_KIND_DIRECT,
+      completedStages: [EXECUTION_STAGE_DIRECT]
+    })
+  );
   assert.equal(telemetry.chatId, 'chat_1');
   assert.equal(telemetry.userId, 'user_1');
   assert.equal(telemetry.responseId, 'resp_123');
@@ -181,11 +206,22 @@ test('turn spec builds next conversation state from execution plan session conte
   });
 
   assert.equal(nextState.routes.advanced.previousResponseId, 'resp_next');
+  assert.equal(nextState.routes.default.previousResponseId, null);
   assert.deepEqual(turnSpec.reasonGroups, {
     triggerReasons: ['image'],
     capabilityReasons: [],
     upgradeReasons: []
   });
+  assert.deepEqual(nextState.routes.default.messages, [
+    {
+      role: 'user',
+      content: 'Analyze image.'
+    },
+    {
+      role: 'assistant',
+      content: 'done'
+    }
+  ]);
   assert.deepEqual(nextState.routes.advanced.messages, [
     {
       role: 'user',
@@ -218,6 +254,14 @@ test('turn spec failure telemetry falls back to route info when turn spec is una
     channelId: 'wechat',
     chatId: 'chat_2',
     userId: 'user_2',
+    executionKind: EXECUTION_KIND_DELIBERATION,
+    executionSummary: getExecutionSummary(EXECUTION_KIND_DELIBERATION),
+    executionProjection: createExecutionProjection({
+      kind: EXECUTION_KIND_DELIBERATION,
+      stages: DELIBERATION_EXECUTION_STAGES,
+      failedStage: EXECUTION_STAGE_DRAFT,
+      completedStages: [EXECUTION_STAGE_PLANNER]
+    }),
     error: new Error('boom')
   });
 
@@ -245,6 +289,17 @@ test('turn spec failure telemetry falls back to route info when turn spec is una
     routeReason: 'default',
     matchedPrefix: ''
   });
+  assert.equal(telemetry.executionKind, EXECUTION_KIND_DELIBERATION);
+  assert.equal(telemetry.executionSummary, getExecutionSummary(EXECUTION_KIND_DELIBERATION));
+  assert.deepEqual(
+    telemetry.executionProjection,
+    createExecutionProjection({
+      kind: EXECUTION_KIND_DELIBERATION,
+      stages: DELIBERATION_EXECUTION_STAGES,
+      failedStage: EXECUTION_STAGE_DRAFT,
+      completedStages: [EXECUTION_STAGE_PLANNER]
+    })
+  );
   assert.equal(telemetry.chatId, 'chat_2');
   assert.equal(telemetry.userId, 'user_2');
   assert.match(telemetry.error, /boom/);

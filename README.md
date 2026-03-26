@@ -1,540 +1,107 @@
 # QQ AI Bot
 
-一个运行在 Windows 本机上的 QQ 群聊 AI 机器人项目。
+本项目当前应被理解为：
 
-它现在不是单一 Node 脚本，而是完整的本地控制架构：
+`单机多进程 AI runtime + 本地 desktop control plane`
 
-- `desktop/QQAIBot.Desktop`
-  WPF 桌面控制台，支持单实例、托盘常驻、开机启动、配置编辑
-- `src/index.mjs`
-  supervisor，负责 control API、worker 生命周期和本地控制面
-- `src/app/runtime-worker.mjs`
-  runtime worker，负责 NapCat、消息处理、LLM 调用、会话存储
-- `data/sessions.json`
-  本地 conversation v2 持久化
+不要把它当成“只有一个 QQ bot 脚本”的仓库，也不要只依赖历史 README 心智模型。
 
-## 当前能力
+## Start Here
 
-- QQ 群消息机器人
-- `/ai` 前缀触发和 `@机器人` 触发
-- 默认模型 / 高级模型路由
-- 图片输入、回复取图、图片上下文延续
-- supervisor + worker 运行模型
-- 本地 control API
-- 配置热重载
-- `.env` watcher
-- 桌面端托盘常驻
-- 单实例桌面端
-- 当前用户级开机启动
-- worker 自动恢复通知
+当前推荐阅读顺序：
 
-## 架构概览
+1. [docs/current-architecture.md](docs/current-architecture.md)
+2. `tests/`
+3. `desktop/QQAIBot.Desktop.Tests/Program.cs`
+4. `src/` 和 `desktop/QQAIBot.Desktop/`
 
-```text
-Desktop Shell (WPF tray app)
-        |
-        v
-Control API / Supervisor
-        |
-        v
-Runtime Worker
-        |
-        +-- NapCat adapter
-        +-- LLM router / provider
-        +-- session store
-        +-- config hot reload
-```
+当 README、代码、测试不一致时：
 
+- 以代码和测试为准
+- 以 [docs/current-architecture.md](docs/current-architecture.md) 为当前架构说明入口
 
-## 目录结构
+## Quick Start
 
-```text
-.
-├─ desktop/
-│  └─ QQAIBot.Desktop/
-├─ src/
-│  ├─ adapters/
-│  ├─ app/
-│  ├─ domain/
-│  ├─ index.mjs
-│  ├─ napcat.mjs
-│  ├─ openai.mjs
-│  └─ session.mjs
-├─ data/
-├─ .env.example
-├─ package.json
-└─ README.md
-```
-
-## 环境要求
-
-- Windows
-- Node.js 18+
-- 已安装并登录 NapCat
-- NapCat 已启用正向 WebSocket / WebSocket Server
-- 如果要编译桌面端，需要 .NET 8 SDK
-
-默认 NapCat 地址：
-
-```text
-ws://127.0.0.1:3001
-```
-
-## 安装
+安装依赖并准备配置：
 
 ```powershell
 npm install
 Copy-Item .env.example .env
 ```
 
-然后填写 `.env`。
-
-## 安装到本机
-
-如果你想把当前源码仓库或 `npm run release:source` 生成的源码包安装到当前 Windows 用户目录，可以直接运行：
+运行完整回归：
 
 ```powershell
-npm run setup:install
+npm test
 ```
 
-默认安装目录：
-
-```text
-%LOCALAPPDATA%\QQAIBot
-```
-
-安装脚本会：
-
-- 复制后端源码、桌面端源码和脚本到安装目录下的 `app/`
-- 如果 `.env` 不存在，就用 `.env.example` 初始化
-- 执行 `npm ci --omit=dev`
-- 执行桌面端 `dotnet publish`
-- 创建桌面和开始菜单快捷方式
-
-只做环境和路径校验，不真正安装：
-
-```powershell
-npm run setup:validate
-```
-
-安装完成后，桌面程序会发布到：
-
-```text
-%LOCALAPPDATA%\QQAIBot\app\desktop-publish\QQAIBot.Desktop.exe
-```
-
-升级方式：
-
-- 解压新的源码发布包或切到新的源码版本
-- 再次运行 `npm run setup:install`
-- 安装脚本会复用现有安装目录，并保留已有 `.env` 和 `data/`
-
-## 卸载
-
-完全卸载当前用户目录下的安装：
-
-```powershell
-npm run setup:uninstall
-```
-
-只卸载程序文件，但保留 `.env` 和 `data/` 以便后续重装：
-
-```powershell
-npm run setup:uninstall:keep-state
-```
-
-如果桌面程序还在运行，可以先手动关闭，或者直接执行：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1 -ForceStop
-```
-
-说明：
-
-- 卸载脚本会同时清理桌面快捷方式、开始菜单快捷方式和当前用户的开机启动项
-- `-KeepState` 模式会保留安装目录下 `app\.env` 和 `app\data`
-- 之后重新执行 `npm run setup:install` 会继续复用这些状态文件
-
-## 关键配置
-
-```env
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.4
-OPENAI_BASE_URL=
-
-OPENAI_DEFAULT_API_KEY=
-OPENAI_DEFAULT_MODEL=gpt-5.4
-OPENAI_DEFAULT_BASE_URL=
-OPENAI_DEFAULT_API_STYLE=responses
-
-OPENAI_ADVANCED_API_KEY=
-OPENAI_ADVANCED_MODEL=gpt-5.4
-OPENAI_ADVANCED_BASE_URL=
-OPENAI_ADVANCED_API_STYLE=responses
-OPENAI_ADVANCED_TRIGGER_PREFIXES=/5.4,/gpt,/vision,/高级,/多模态,/看图,/图片分析
-
-NAPCAT_WS_URL=ws://127.0.0.1:3001
-NAPCAT_TOKEN=
-
-BOT_PREFIX=/ai
-BOT_PERSONA=
-MAX_OUTPUT_CHARS=800
-ALLOWED_CHAT_IDS=
-ALLOWED_USER_IDS=
-QQ_AI_BOT_CONTROL_API_TOKEN=
-```
-
-- `OPENAI_DEFAULT_API_KEY` / `OPENAI_DEFAULT_BASE_URL` can be left blank to inherit the shared route.
-
-说明：
-
-- `OPENAI_DEFAULT_*`
-  默认文本路由
-- `OPENAI_ADVANCED_*`
-  高级路由，通常用于 GPT-5.4 / 图片 / 多模态
-- `OPENAI_ADVANCED_TRIGGER_PREFIXES`
-  命中这些前缀时切到高级路由
-- `BOT_PERSONA`
-  支持多行，保存时会自动转义为 `\n`
-- `ALLOWED_CHAT_IDS` / `ALLOWED_USER_IDS`
-  留空表示不过滤
-- `QQ_AI_BOT_CONTROL_API_TOKEN`
-  留空表示不启用本地 control API Bearer 鉴权；设置后客户端需要发送 `Authorization: Bearer <token>`
-
-## 启动方式
-
-### 启动 supervisor
+启动 supervisor：
 
 ```powershell
 npm start
 ```
 
-默认 control API：
-
-```text
-http://127.0.0.1:3199
-```
-
-### 启动桌面端
+启动桌面控制台：
 
 ```powershell
 dotnet run --project .\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj
 ```
 
-桌面端特性：
+## Current Entry Points
 
-- 单实例
-- 最小化到托盘
-- 关闭默认隐藏到托盘
-- 可以附着已有 supervisor
-- 可配置开机启动
-- 开机启动时默认 `--minimized --ensure-runtime`
+核心入口：
 
-### Desktop 验收脚本
+- `src/index.mjs`
+- `src/app/runtime-worker.mjs`
+- `src/app/wechat-runtime-worker.mjs`
+- `src/app/control-api.mjs`
+- `desktop/QQAIBot.Desktop/ViewModels/MainViewModel.cs`
 
-跨进程 desktop 验收与剩余人工检查步骤：
+## Key Scripts
+
+最常用命令：
 
 ```powershell
+npm test
+npm start
+npm run test:node
+npm run test:desktop
 npm run desktop:acceptance
-```
-
-只跑脚本里的自动化部分：
-
-```powershell
-npm run desktop:acceptance:auto
-```
-
-只校验路径和文件，不启动任何 GUI 进程：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\desktop-acceptance.ps1 -ValidateOnly
-```
-
-### 启动微信桥模拟器
-
-如果你还没有真实个人微信 bridge，可以先跑本地模拟器：
-
-```powershell
 npm run wechat:bridge:sim
-```
-
-默认地址：
-
-```text
-ws://127.0.0.1:3198
-```
-
-然后把 `.env` 里的这些值填上：
-
-```env
-WECHAT_BRIDGE_URL=ws://127.0.0.1:3198
-WECHAT_BRIDGE_TOKEN=
-WECHAT_BOT_PREFIX=/ai
-```
-
-模拟器还提供两个本地 HTTP 入口：
-
-- `GET /health`
-- `POST /emit-test-message`
-- `GET /actions`
-
-测试消息注入示例：
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3198/emit-test-message
-```
-
-也可以传 JSON 自定义消息内容：
-
-```powershell
-$body = @{
-  chatId = "wx_group_demo"
-  userId = "wx_user_demo"
-  text = "/ai 帮我总结一下今天的任务"
-  mentioned = $false
-  replyToMessageIds = @()
-  images = @()
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:3198/emit-test-message `
-  -ContentType "application/json" `
-  -Body $body
-```
-
-支持字段：
-
-- `chatId`
-- `userId`
-- `selfId`
-- `text`
-- `rawText`
-- `mentioned`
-- `replyToMessageIds`
-- `images`
-
-bridge 收到的 action 会写入当前工作目录下的：
-
-```text
-wechat-actions.json
-```
-
-你也可以用环境变量改路径：
-
-```env
-WECHAT_BRIDGE_SIM_ACTION_LOG=D:\path\to\wechat-actions.json
-```
-
-## 发布打包
-
-生成一份干净的源码发布目录和 zip：
-
-```powershell
+npm run setup:install
+npm run setup:uninstall
 npm run release:source
-```
-
-如果你想生成一份已经带好 `node_modules` 和 `desktop-publish` 的预构建安装包：
-
-```powershell
 npm run release:installable
-```
-
-如果你想顺手验证 installable 包的安装/卸载链路：
-
-```powershell
-npm run release:installable:smoke
-```
-
-如果你想进一步生成 Windows 安装器：
-
-```powershell
 npm run release:installer
 ```
 
-只校验安装器脚本和预构建包结构，不真正编译：
+## Key Config
 
-```powershell
-npm run release:installer:validate
-```
+最关键的环境变量见 `.env.example`。
 
-输出位置：
+通常至少需要关注：
 
-```text
-dist/qq-ai-bot-<version>-<timestamp>/
-dist/qq-ai-bot-<version>-<timestamp>.zip
-```
+- `OPENAI_API_KEY`
+- `OPENAI_DEFAULT_MODEL`
+- `OPENAI_ADVANCED_MODEL`
+- `NAPCAT_WS_URL`
+- `NAPCAT_TOKEN`
+- `WECHAT_BRIDGE_URL`
+- `WECHAT_BRIDGE_TOKEN`
+- `BOT_PREFIX`
+- `WECHAT_BOT_PREFIX`
+- `QQ_AI_BOT_CONTROL_API_TOKEN`
 
-打包内容会包含：
+## Docs
 
-- `src`
-- `desktop`
-- `.env.example`
-- `README.md`
-- `package.json`
-- `package-lock.json`
-- `installer`
-- `scripts`
+当前文档入口：
 
-不会包含：
+- [docs/current-architecture.md](docs/current-architecture.md)
+- [docs/operations.md](docs/operations.md)
+- [docs/testing.md](docs/testing.md)
+- [docs/review-checklist.md](docs/review-checklist.md)
 
-- `.env`
-- `node_modules`
-- `data`
-- `dist`
-- `NapCat.Shell.Windows.Node`
-- 桌面端 `bin/obj`
-- 临时日志
+## Legacy Note
 
-从发布包安装：
-
-1. 解压 `dist/qq-ai-bot-<version>-<timestamp>.zip`
-2. 进入解压目录
-3. 运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1`
-
-`release:installable` 生成的包会额外包含：
-
-- `node_modules`
-- `desktop-publish`
-
-这样目标机器安装时可以直接复用这些预构建资产，不再需要 `npm` 或 `.NET SDK`。
-
-目标机器仍然需要：
-
-- Node.js 18+
-- `.NET Desktop Runtime 8`
-
-安装器构建机额外需要：
-
-- Inno Setup 6
-
-## Control API
-
-### `GET /status`
-
-返回当前 supervisor / runtime 状态，包含：
-
-- `runtimeActive`
-- `napcatConnected`
-- `workerProcessId`
-- `activeLockCount`
-- `controlApiUrl`
-
-如果设置了 `QQ_AI_BOT_CONTROL_API_TOKEN`，所有 control API 请求都必须携带：
-
-```text
-Authorization: Bearer <token>
-```
-
-说明：
-- 桌面端会从本地 `.env` 读取这个 token 并自动附带
-- 修改这个 token 后需要重启 supervisor 才会生效
-
-### `GET /config`
-
-读取当前配置视图。
-
-### `PUT /config`
-
-保存配置并立即热生效。
-
-### `POST /start`
-
-启动 runtime worker。
-
-### `POST /stop`
-
-停止 runtime worker，但 supervisor 保持存活。
-
-## 消息路由
-
-当前规则：
-
-- 普通文本：走 `default`
-- 命中升级前缀：走 `advanced`
-- 有图片输入：强制走 `advanced`
-
-会话按 `channel=<id>|chat=<id>|user=<id>` 隔离。
-不同 route 的上下文和 `previousResponseId` 分开保存。
-
-## 会话存储
-
-文件：
-
-```text
-data/sessions.json
-```
-
-当前 schema：
-
-- `version: 2`
-- `conversationId`
-- `routes.default`
-- `routes.advanced`
-- `shared.lastImageRefs`
-- `updatedAt`
-
-旧的 `group:user:default` / `group:user:advanced` key 已在 store 层迁移合并。
-
-## 配置热重载
-
-支持两种方式：
-
-- 通过 control API / 桌面端保存配置
-- 直接编辑 `.env`
-
-两种方式都会触发运行时配置刷新。
-
-如果 NapCat 连接参数变化，worker 会自动重连。
-
-## 桌面端行为
-
-- 托盘菜单支持打开窗口、启动 runtime、停止 runtime、退出应用
-- 轮询 control API，检测 worker 重启和控制面异常
-- worker 自动恢复时弹托盘通知
-- control API 不可达 / 恢复可达时弹托盘通知
-
-## 日志分类
-
-- `[startup]`
-- `[control]`
-- `[supervisor]`
-- `[runtime]`
-- `[napcat]`
-- `[message]`
-- `[openai]`
-- `[session]`
-- `[filter]`
-- `[lock]`
-
-桌面端会显示后端输出日志。
-
-## 仓库说明
-
-建议不要提交这些内容：
-
-- `.env`
-- `node_modules`
-- `data`
-- `tmp-backend-*.log`
-- `desktop/QQAIBot.Desktop/bin`
-- `desktop/QQAIBot.Desktop/obj`
-- NapCat 运行时数据库和日志
-
-对应忽略规则已经写进 `.gitignore`。
-
-## 当前边界
-
-- control API 默认只监听 `127.0.0.1`
-- 开机启动使用的是当前用户 `HKCU\...\Run`
-- 桌面端通知依赖桌面壳在运行
-- 还没有做安装器 / Windows Service 包装
-
-## 后续优先级
-
-如果继续产品化，建议优先做：
-
-1. 安装包 / 发布脚本
-2. Windows Service 或任务计划
-3. control API 本地鉴权
-4. 发布版托盘图标和资源
+旧 README 曾经同时承担产品介绍、安装手册、运行手册和架构说明。
+现在这些内容应逐步下沉到 `docs/`，README 仅保留当前入口作用。

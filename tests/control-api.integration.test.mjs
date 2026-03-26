@@ -18,6 +18,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
   const cwd = await createTempWorkspace([
     'OPENAI_API_KEY=test-key',
     'NAPCAT_TOKEN=test-token',
+    'BOT_SYSTEM_PROMPT=base prompt',
     'ALLOWED_CHAT_IDS=chat-a,chat-b',
     'ALLOWED_USER_IDS=user-a'
   ]);
@@ -91,6 +92,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
 
     assert.equal(configPayload.allowedChatIds, 'chat-a,chat-b');
     assert.equal(configPayload.allowedUserIds, 'user-a');
+    assert.equal(configPayload.botSystemPrompt, 'base prompt');
     assert.equal('allowedGroupIds' in configPayload, false);
 
     const updateResponse = await fetch(`${baseUrl}/config`, {
@@ -100,6 +102,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
       },
       body: JSON.stringify({
         ...configPayload,
+        botSystemPrompt: 'updated base prompt',
         allowedChatIds: 'chat-x,chat-y'
       })
     });
@@ -107,9 +110,11 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(updateResponse.status, 200);
     const updatedPayload = await updateResponse.json();
     assert.equal(updatedPayload.allowedChatIds, 'chat-x,chat-y');
+    assert.equal(updatedPayload.botSystemPrompt, 'updated base prompt');
     assert.equal('allowedGroupIds' in updatedPayload, false);
 
     const envText = await fs.readFile(path.join(cwd, '.env'), 'utf8');
+    assert.match(envText, /BOT_SYSTEM_PROMPT=updated base prompt/);
     assert.match(envText, /ALLOWED_CHAT_IDS=chat-x,chat-y/);
     assert.doesNotMatch(envText, /ALLOWED_GROUP_IDS=/);
 

@@ -114,6 +114,9 @@ public sealed class LocalEnvConfigFallbackReader : ILocalConfigFallbackReader
                 case "BOT_PREFIX":
                     document.Config.BotPrefix = value;
                     break;
+                case "BOT_SYSTEM_PROMPT":
+                    document.Config.BotSystemPrompt = value;
+                    break;
                 case "BOT_PERSONA":
                     document.Config.BotPersona = value;
                     break;

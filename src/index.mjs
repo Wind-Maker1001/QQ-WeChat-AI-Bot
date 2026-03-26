@@ -124,6 +124,9 @@ function normalizeLlmRequestStatus(status) {
     effectiveTools: Array.isArray(status.effectiveTools)
       ? status.effectiveTools.filter((tool) => typeof tool === 'string')
       : [],
+    executionKind: typeof status.executionKind === 'string' ? status.executionKind : '',
+    executionSummary: typeof status.executionSummary === 'string' ? status.executionSummary : '',
+    executionProjection: normalizeExecutionProjection(status.executionProjection),
     imageCount: typeof status.imageCount === 'number' ? status.imageCount : 0,
     decisionSummary: normalizeDecisionSummary(status.decisionSummary),
     chatId: typeof status.chatId === 'string' ? status.chatId : '',
@@ -144,9 +147,34 @@ function normalizeLlmFailureStatus(status) {
     routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
     matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
     decisionSummary: normalizeDecisionSummary(status.decisionSummary),
+    executionKind: typeof status.executionKind === 'string' ? status.executionKind : '',
+    executionSummary: typeof status.executionSummary === 'string' ? status.executionSummary : '',
+    executionProjection: normalizeExecutionProjection(status.executionProjection),
     chatId: typeof status.chatId === 'string' ? status.chatId : '',
     userId: typeof status.userId === 'string' ? status.userId : '',
     error: typeof status.error === 'string' ? status.error : ''
+  };
+}
+
+function normalizeExecutionProjection(projection) {
+  if (!projection || typeof projection !== 'object') {
+    return null;
+  }
+
+  return {
+    kind: typeof projection.kind === 'string' ? projection.kind : '',
+    summary: typeof projection.summary === 'string' ? projection.summary : '',
+    stages: Array.isArray(projection.stages)
+      ? projection.stages.filter((stage) => typeof stage === 'string')
+      : [],
+    failedStage: typeof projection.failedStage === 'string' ? projection.failedStage : '',
+    completedStages: Array.isArray(projection.completedStages)
+      ? projection.completedStages.filter((stage) => typeof stage === 'string')
+      : [],
+    degraded: projection.degraded === true,
+    recoveries: Array.isArray(projection.recoveries)
+      ? projection.recoveries.filter((recovery) => typeof recovery === 'string')
+      : []
   };
 }
 

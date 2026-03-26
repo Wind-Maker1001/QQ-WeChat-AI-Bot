@@ -1,6 +1,6 @@
 import { normalizeConversationMessages } from './conversation-state.mjs';
 
-const MAX_CONVERSATION_MESSAGES = 24;
+const MAX_CONVERSATION_MESSAGES = 40;
 
 function normalizePreviousResponseId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;

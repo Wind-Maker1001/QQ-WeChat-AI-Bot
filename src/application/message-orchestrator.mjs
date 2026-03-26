@@ -3,12 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  buildMessageTurnSpec,
   buildNextConversationState,
   buildTurnFailureTelemetry,
   buildTurnReplyTelemetry
 } from './message-turn-spec.mjs';
-import { runDeliberationPipeline } from './deliberation-executor.mjs';
+import {
+  buildMessageTurnStrategy,
+  executeMessageTurnStrategy
+} from './message-turn-strategy.mjs';
 import { assertChannelPort } from '../domain/channel-port.mjs';
 import { buildConversationId } from '../domain/conversation-state.mjs';
 import {
@@ -242,6 +244,7 @@ export async function orchestrateIncomingMessage({
   const userId = message?.userId;
   let effectiveRouteInfo = null;
   let finalRouteInfo = null;
+  let turnStrategy = null;
   let turnSpec = null;
 
   if (chatId === null || chatId === undefined || userId === null || userId === undefined) {
@@ -309,32 +312,39 @@ export async function orchestrateIncomingMessage({
     }
 
     const routeState = conversationState.routes[finalRouteInfo.route];
-    turnSpec = buildMessageTurnSpec({
+    turnStrategy = buildMessageTurnStrategy({
       channelId: channelPort.channelId,
       chatId,
       userId,
       routeInfo: finalRouteInfo,
       routeState,
-      preparedImageInputs
+      conversationState,
+      preparedImageInputs,
+      llmRouter
     });
-    const reply = turnSpec.executionPlan.mode === 'deliberation'
-      ? await runDeliberationPipeline({
-          llmRouter,
-          executionPlan: turnSpec.executionPlan,
-          logger
-        })
-      : await llmRouter.generateReply(turnSpec.executionPlan.directRequest);
+    turnSpec = turnStrategy.turnSpec;
+    const reply = await executeMessageTurnStrategy({
+      strategy: turnStrategy,
+      llmRouter,
+      logger
+    });
 
-    logger.info(
-      `[openai] Reply generated: channel=${channelPort.channelId}, route=${reply.route}, configured_api=${reply.configuredApiStyle || reply.apiStyle}, effective_api=${reply.effectiveApiStyle || reply.apiStyle}, model=${reply.model}, configured_reasoning=${reply.configuredReasoningEffort || 'none'}, effective_reasoning=${reply.effectiveReasoningEffort || 'none'}, configured_verbosity=${reply.configuredTextVerbosity || 'none'}, effective_verbosity=${reply.effectiveTextVerbosity || 'none'}, configured_tools=${formatToolList(reply.configuredTools)}, effective_tools=${formatToolList(reply.effectiveTools)}, images=${preparedImageInputs.length}, chat_id=${chatId}, user_id=${userId}, response_id=${reply.responseId || 'none'}`
-    );
+    if (turnStrategy.executionKind === 'local-capability-reply') {
+      logger.info(
+        `[message] Capability introspection answered locally: channel=${channelPort.channelId}, route=${reply.route}, api=${reply.effectiveApiStyle || reply.configuredApiStyle || 'unknown'}, tools=${formatToolList(reply.effectiveTools)}, chat_id=${chatId}, user_id=${userId}`
+      );
+    } else {
+      logger.info(
+        `[openai] Reply generated: channel=${channelPort.channelId}, route=${reply.route}, configured_api=${reply.configuredApiStyle || reply.apiStyle}, effective_api=${reply.effectiveApiStyle || reply.apiStyle}, model=${reply.model}, configured_reasoning=${reply.configuredReasoningEffort || 'none'}, effective_reasoning=${reply.effectiveReasoningEffort || 'none'}, configured_verbosity=${reply.configuredTextVerbosity || 'none'}, effective_verbosity=${reply.effectiveTextVerbosity || 'none'}, configured_tools=${formatToolList(reply.configuredTools)}, effective_tools=${formatToolList(reply.effectiveTools)}, images=${preparedImageInputs.length}, chat_id=${chatId}, user_id=${userId}, response_id=${reply.responseId || 'none'}`
+      );
+    }
 
     if (typeof onReplyTelemetry === 'function') {
       onReplyTelemetry(buildTurnReplyTelemetry({ turnSpec, reply }));
     }
 
     const cachedImageRefs =
-      preparedImageInputs.length > 0
+      turnStrategy.executionKind !== 'local-capability-reply' && preparedImageInputs.length > 0
         ? await cachePreparedImageInputs(preparedImageInputs, imageCacheDir)
         : conversationState.shared.lastImageRefs;
 
@@ -348,20 +358,28 @@ export async function orchestrateIncomingMessage({
       })
     );
 
-    const replyText = reply.text || EMPTY_REPLY_TEXT;
     await sendReplySegments({
       chatId,
-      text: replyText,
+      text: reply.text || EMPTY_REPLY_TEXT,
       maxOutputChars,
       channelPort,
       logger
     });
   } catch (error) {
+    const failureExecutionProjection =
+      error?.executionFailureProjection ??
+      turnStrategy?.executionProjection ??
+      null;
+
     if (typeof onReplyFailureTelemetry === 'function') {
       onReplyFailureTelemetry(
         buildTurnFailureTelemetry({
           turnSpec,
           routeInfo: finalRouteInfo ?? effectiveRouteInfo,
+          executionKind: failureExecutionProjection?.kind || turnStrategy?.executionKind || '',
+          executionSummary:
+            failureExecutionProjection?.summary || turnStrategy?.executionSummary || '',
+          executionProjection: failureExecutionProjection,
           channelId: channelPort.channelId,
           chatId,
           userId,

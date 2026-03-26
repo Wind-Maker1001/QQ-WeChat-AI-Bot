@@ -1,5 +1,9 @@
 function buildControlConfigFromEnvValues(envValues, runtimeConfig) {
   const allowedChatIds = envValues.ALLOWED_CHAT_IDS ?? runtimeConfig.access.allowedChatIds.join(',');
+  const botSystemPrompt = normalizeBotSystemPromptValue(
+    envValues.BOT_SYSTEM_PROMPT,
+    runtimeConfig.bot.systemPrompt ?? ''
+  );
 
   return {
     openAiApiKey:
@@ -60,12 +64,19 @@ function buildControlConfigFromEnvValues(envValues, runtimeConfig) {
     wechatBridgeToken: envValues.WECHAT_BRIDGE_TOKEN ?? runtimeConfig.wechat.token ?? '',
     wechatBotPrefix: envValues.WECHAT_BOT_PREFIX ?? runtimeConfig.wechat.botPrefix ?? '',
     botPrefix: envValues.BOT_PREFIX ?? runtimeConfig.bot.prefix ?? '',
+    botSystemPrompt,
     botPersona: envValues.BOT_PERSONA ?? runtimeConfig.bot.persona ?? '',
     maxOutputChars:
       envValues.MAX_OUTPUT_CHARS ?? String(runtimeConfig.bot.maxOutputChars ?? 800),
     allowedChatIds,
     allowedUserIds: envValues.ALLOWED_USER_IDS ?? runtimeConfig.access.allowedUserIds.join(',')
   };
+}
+
+function normalizeBotSystemPromptValue(value, fallbackValue = '') {
+  const normalizedValue = typeof value === 'string' ? value : '';
+
+  return normalizedValue.trim() ? normalizedValue : fallbackValue;
 }
 
 function normalizeControlConfigInput(config, fallbackConfig) {
@@ -118,6 +129,10 @@ function normalizeControlConfigInput(config, fallbackConfig) {
     wechatBridgeToken: String(source.wechatBridgeToken ?? fallback.wechatBridgeToken ?? '').trim(),
     wechatBotPrefix: String(source.wechatBotPrefix ?? fallback.wechatBotPrefix ?? '').trim(),
     botPrefix: String(source.botPrefix ?? fallback.botPrefix ?? '').trim(),
+    botSystemPrompt: normalizeBotSystemPromptValue(
+      source.botSystemPrompt,
+      fallback.botSystemPrompt ?? ''
+    ),
     botPersona: String(source.botPersona ?? fallback.botPersona ?? ''),
     maxOutputChars: String(source.maxOutputChars ?? fallback.maxOutputChars ?? '800').trim(),
     allowedChatIds: String(source.allowedChatIds ?? fallback.allowedChatIds ?? '').trim(),
@@ -159,6 +174,7 @@ function buildControlEnvValues({
     WECHAT_BRIDGE_TOKEN: normalizedConfig.wechatBridgeToken,
     WECHAT_BOT_PREFIX: normalizedConfig.wechatBotPrefix,
     BOT_PREFIX: normalizedConfig.botPrefix,
+    BOT_SYSTEM_PROMPT: normalizedConfig.botSystemPrompt,
     BOT_PERSONA: normalizedConfig.botPersona,
     MAX_OUTPUT_CHARS: normalizedConfig.maxOutputChars,
     ALLOWED_CHAT_IDS: normalizedConfig.allowedChatIds,

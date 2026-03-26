@@ -30,6 +30,12 @@ public sealed class BackendLlmRequestStatus
 
     public string[] EffectiveTools { get; set; } = [];
 
+    public string ExecutionKind { get; set; } = string.Empty;
+
+    public string ExecutionSummary { get; set; } = string.Empty;
+
+    public BackendExecutionProjection? ExecutionProjection { get; set; }
+
     public int ImageCount { get; set; }
 
     public BackendDecisionSummary? DecisionSummary { get; set; }

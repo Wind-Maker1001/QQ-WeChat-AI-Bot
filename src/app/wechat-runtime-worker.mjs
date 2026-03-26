@@ -36,12 +36,13 @@ async function main() {
     info: logInfo,
     error: logError
   };
-  let llmRouter = createLlmRouter({
-    defaultRoute: runtimeConfig.openai.defaultRoute,
-    advancedRoute: runtimeConfig.openai.advancedRoute,
-    advancedTriggerPrefixes: runtimeConfig.openai.advancedTriggerPrefixes,
-    botPersona: runtimeConfig.bot.persona
-  });
+let llmRouter = createLlmRouter({
+  defaultRoute: runtimeConfig.openai.defaultRoute,
+  advancedRoute: runtimeConfig.openai.advancedRoute,
+  advancedTriggerPrefixes: runtimeConfig.openai.advancedTriggerPrefixes,
+  botSystemPrompt: runtimeConfig.bot.systemPrompt,
+  botPersona: runtimeConfig.bot.persona
+});
 
   function serializeRuntimeConfig(config) {
     return JSON.stringify({
@@ -121,12 +122,13 @@ async function main() {
   }
 
   function rebuildDerivedRuntimeState(nextRuntimeConfig) {
-    llmRouter = createLlmRouter({
-      defaultRoute: nextRuntimeConfig.openai.defaultRoute,
-      advancedRoute: nextRuntimeConfig.openai.advancedRoute,
-      advancedTriggerPrefixes: nextRuntimeConfig.openai.advancedTriggerPrefixes,
-      botPersona: nextRuntimeConfig.bot.persona
-    });
+  llmRouter = createLlmRouter({
+    defaultRoute: nextRuntimeConfig.openai.defaultRoute,
+    advancedRoute: nextRuntimeConfig.openai.advancedRoute,
+    advancedTriggerPrefixes: nextRuntimeConfig.openai.advancedTriggerPrefixes,
+    botSystemPrompt: nextRuntimeConfig.bot.systemPrompt,
+    botPersona: nextRuntimeConfig.bot.persona
+  });
     runtimeConfig = nextRuntimeConfig;
     runtimeConfigSignature = serializeRuntimeConfig(nextRuntimeConfig);
     allowedChatIds = new Set(nextRuntimeConfig.access.allowedChatIds);

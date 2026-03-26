@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node ./src/index.mjs",
+    "check:changes": "node ./scripts/check-change-requirements.mjs",
     "test": "npm run test:node && npm run test:desktop",
     "test:node": "node --test",
     "test:desktop": "dotnet build ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj -nologo && dotnet run --no-build --project ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj",

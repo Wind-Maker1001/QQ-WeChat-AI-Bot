@@ -72,6 +72,7 @@ test('default OpenAI route inherits shared key and base URL when default-specifi
   assert.equal(runtimeConfig.openai.defaultRoute.baseURL, 'https://gateway.example/v1');
   assert.equal(runtimeConfig.openai.defaultRoute.model, 'gpt-5.4');
   assert.equal(runtimeConfig.openai.defaultRoute.apiStyle, 'responses');
+  assert.match(runtimeConfig.bot.systemPrompt, /QQ 群助手/);
 });
 
 test('writeControlConfig removes stale env lock before saving', async () => {

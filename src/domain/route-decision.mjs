@@ -3,6 +3,9 @@ import { normalizeApiStyle } from './llm-request-policy.mjs';
 export const DEFAULT_ADVANCED_TRIGGER_PREFIXES = [
   '/5.4',
   '/gpt',
+  '/think',
+  '/analyze',
+  '/\u5206\u6790',
   '/vision',
   '/\u9ad8\u7ea7',
   '/\u591a\u6a21\u6001',
@@ -40,7 +43,7 @@ function looksLikeGreeting(text) {
     return false;
   }
 
-  return /^(hi|hello|hey|yo|你好|您好|在吗|早上好|中午好|晚上好|哈喽)[!,.?？。]*$/i.test(
+  return /^(hi|hello|hey|yo|\u4f60\u597d|\u60a8\u597d|\u5728\u5417|\u65e9\u4e0a\u597d|\u4e2d\u5348\u597d|\u665a\u4e0a\u597d|\u54c8\u55bd)[!,.?\u3002\uFF01\uFF1F]*$/i.test(
     normalizedText
   );
 }
@@ -52,9 +55,9 @@ function shouldBoostThinking(text) {
 
   const normalizedText = text.trim();
   const lineCount = normalizedText.split(/\r?\n/).filter(Boolean).length;
-  const questionCount = (normalizedText.match(/[?？]/g) || []).length;
-  const listLike = /(^|\n)\s*(?:\d+[.)]|[-*•])/m.test(normalizedText);
-  const punctuationCount = (normalizedText.match(/[,:：;；]/g) || []).length;
+  const questionCount = (normalizedText.match(/[?\uFF1F]/g) || []).length;
+  const listLike = /(^|\n)\s*(?:\d+[.)\u3001]|[-*])/m.test(normalizedText);
+  const punctuationCount = (normalizedText.match(/[,:，：]/g) || []).length;
 
   if (hasAnyPattern(normalizedText, COMPLEX_REASONING_PATTERNS)) {
     return true;
@@ -100,7 +103,8 @@ function normalizeRequestedCapabilityBoolean(value) {
 }
 
 function normalizeRouteDecisionTrigger(trigger, { imageCount = 0 } = {}) {
-  const kind = typeof trigger?.kind === 'string' && trigger.kind ? trigger.kind : imageCount > 0 ? 'image' : 'default';
+  const kind =
+    typeof trigger?.kind === 'string' && trigger.kind ? trigger.kind : imageCount > 0 ? 'image' : 'default';
   const matchedPrefix =
     typeof trigger?.matchedPrefix === 'string' && trigger.matchedPrefix ? trigger.matchedPrefix : '';
 
@@ -234,9 +238,10 @@ export function createRouteDecision({
     ...categorizeReasonTags(fallbackReasonTags),
     ...inputReasonGroups
   };
+
   if (
-    (!Array.isArray(normalizedReasonGroups.triggerReasons) ||
-      normalizedReasonGroups.triggerReasons.length === 0)
+    !Array.isArray(normalizedReasonGroups.triggerReasons) ||
+    normalizedReasonGroups.triggerReasons.length === 0
   ) {
     if (normalizedTrigger.kind === 'image') {
       normalizedReasonGroups.triggerReasons = ['image'];
@@ -244,6 +249,7 @@ export function createRouteDecision({
       normalizedReasonGroups.triggerReasons = [`directive:${normalizedTrigger.matchedPrefix}`];
     }
   }
+
   const normalizedRequestedCapabilities =
     normalizeRouteDecisionRequestedCapabilities(requestedCapabilities);
   const reasonTags = flattenReasonGroups(normalizedReasonGroups);
@@ -300,7 +306,9 @@ export function getRouteDecisionReasonGroups(routeInfo) {
   }
 
   const reasonGroups = categorizeReasonTags(
-    Array.isArray(decisionMetadata?.reasonTags) ? decisionMetadata.reasonTags : getRouteDecisionReasonTags(routeInfo)
+    Array.isArray(decisionMetadata?.reasonTags)
+      ? decisionMetadata.reasonTags
+      : getRouteDecisionReasonTags(routeInfo)
   );
   const trigger = getRouteDecisionTrigger(routeInfo);
 
@@ -454,7 +462,12 @@ export function resolveRouteDecision({
       requestedEnableCodeInterpreter === true
   );
 
-  if (route === 'default' && needsResponsesCapabilities && !defaultSupportsResponses && advancedSupportsResponses) {
+  if (
+    route === 'default' &&
+    needsResponsesCapabilities &&
+    !defaultSupportsResponses &&
+    advancedSupportsResponses
+  ) {
     route = 'advanced';
     reasonTags.push('capability_upgrade');
 
@@ -488,6 +501,6 @@ export function resolveRouteDecision({
       matchedPrefix
     },
     reasonGroups,
-    requestedCapabilities,
+    requestedCapabilities
   });
 }

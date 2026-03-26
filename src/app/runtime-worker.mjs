@@ -18,6 +18,7 @@ let llmRouter = createLlmRouter({
   defaultRoute: runtimeConfig.openai.defaultRoute,
   advancedRoute: runtimeConfig.openai.advancedRoute,
   advancedTriggerPrefixes: runtimeConfig.openai.advancedTriggerPrefixes,
+  botSystemPrompt: runtimeConfig.bot.systemPrompt,
   botPersona: runtimeConfig.bot.persona
 });
 let runtimeConfigSignature = '';
@@ -65,6 +66,7 @@ function rebuildDerivedRuntimeState(nextRuntimeConfig) {
     defaultRoute: nextRuntimeConfig.openai.defaultRoute,
     advancedRoute: nextRuntimeConfig.openai.advancedRoute,
     advancedTriggerPrefixes: nextRuntimeConfig.openai.advancedTriggerPrefixes,
+    botSystemPrompt: nextRuntimeConfig.bot.systemPrompt,
     botPersona: nextRuntimeConfig.bot.persona
   });
 

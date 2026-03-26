@@ -3,6 +3,7 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 
 import {
+  DEFAULT_BOT_SYSTEM_PROMPT,
   DEFAULT_ADVANCED_MODEL,
   DEFAULT_DEFAULT_MODEL
 } from '../llm/openai-provider.mjs';
@@ -12,7 +13,7 @@ import { parseBoolean, parseCsvList, parsePositiveInt } from '../../utils.mjs';
 
 const DEFAULT_NAPCAT_WS_URL = 'ws://127.0.0.1:3001';
 const DEFAULT_BOT_PREFIX = '/ai';
-const DEFAULT_MAX_OUTPUT_CHARS = 800;
+const DEFAULT_MAX_OUTPUT_CHARS = 1600;
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
 const DEFAULT_WECHAT_BOT_PREFIX = '/ai';
 
@@ -51,6 +52,10 @@ export function loadRuntimeConfig({
     env.OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER,
     false
   );
+  const botSystemPrompt =
+    typeof env.BOT_SYSTEM_PROMPT === 'string' && env.BOT_SYSTEM_PROMPT.trim()
+      ? env.BOT_SYSTEM_PROMPT
+      : DEFAULT_BOT_SYSTEM_PROMPT;
   const advancedTriggerPrefixes = parseCsvList(
     env.OPENAI_ADVANCED_TRIGGER_PREFIXES || DEFAULT_ADVANCED_TRIGGER_PREFIXES.join(',')
   );
@@ -90,6 +95,7 @@ export function loadRuntimeConfig({
     },
     bot: {
       prefix: env.BOT_PREFIX || DEFAULT_BOT_PREFIX,
+      systemPrompt: botSystemPrompt,
       persona: env.BOT_PERSONA ?? '',
       maxOutputChars: parsePositiveInt(env.MAX_OUTPUT_CHARS, DEFAULT_MAX_OUTPUT_CHARS)
     },

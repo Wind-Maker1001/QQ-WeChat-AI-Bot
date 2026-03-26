@@ -17,6 +17,7 @@ export function buildMessageTurnSpec({
   userId,
   routeInfo,
   routeState,
+  conversationState,
   preparedImageInputs = []
 }) {
   return {
@@ -37,6 +38,7 @@ export function buildMessageTurnSpec({
     executionPlan: buildLlmExecutionPlan({
       routeInfo,
       routeState,
+      conversationState,
       preparedImageInputs
     })
   };
@@ -61,6 +63,12 @@ export function buildTurnReplyTelemetry({
     effectiveTextVerbosity: reply.effectiveTextVerbosity || '',
     configuredTools: Array.isArray(reply.configuredTools) ? reply.configuredTools : [],
     effectiveTools: Array.isArray(reply.effectiveTools) ? reply.effectiveTools : [],
+    executionKind: typeof reply.executionKind === 'string' ? reply.executionKind : '',
+    executionSummary: typeof reply.executionSummary === 'string' ? reply.executionSummary : '',
+    executionProjection:
+      reply.executionProjection && typeof reply.executionProjection === 'object'
+        ? reply.executionProjection
+        : null,
     imageCount: turnSpec.imageCount,
     decisionSummary: buildRouteDecisionSummary(turnSpec.routeInfo),
     chatId: String(turnSpec.chatId),
@@ -72,6 +80,9 @@ export function buildTurnReplyTelemetry({
 export function buildTurnFailureTelemetry({
   turnSpec = null,
   routeInfo = null,
+  executionKind = '',
+  executionSummary = '',
+  executionProjection = null,
   channelId,
   chatId,
   userId,
@@ -86,6 +97,10 @@ export function buildTurnFailureTelemetry({
     routeReason: formatRouteDecisionReason(effectiveRouteInfo),
     matchedPrefix: getRouteDecisionMatchedPrefix(effectiveRouteInfo),
     decisionSummary: buildRouteDecisionSummary(effectiveRouteInfo),
+    executionKind: typeof executionKind === 'string' ? executionKind : '',
+    executionSummary: typeof executionSummary === 'string' ? executionSummary : '',
+    executionProjection:
+      executionProjection && typeof executionProjection === 'object' ? executionProjection : null,
     chatId: chatId === null || chatId === undefined ? '' : String(chatId),
     userId: userId === null || userId === undefined ? '' : String(userId),
     error: formatError(error)
@@ -108,8 +123,14 @@ export function buildNextConversationState({
     ...conversationState,
     routes: {
       ...conversationState.routes,
-      [turnSpec.route]: {
-        previousResponseId: nextRouteState.previousResponseId,
+      default: {
+        previousResponseId:
+          turnSpec.route === 'default' ? nextRouteState.previousResponseId : null,
+        messages: nextRouteState.sharedMessages
+      },
+      advanced: {
+        previousResponseId:
+          turnSpec.route === 'advanced' ? nextRouteState.previousResponseId : null,
         messages: nextRouteState.sharedMessages
       }
     },

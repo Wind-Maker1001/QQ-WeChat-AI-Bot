@@ -39,6 +39,31 @@ function Resolve-InstallRootPath {
     return Resolve-AbsolutePath (Join-Path $env:LOCALAPPDATA "QQAIBot")
 }
 
+function Get-DesktopActivityStateStoreRootPath {
+    return Join-Path $env:LOCALAPPDATA "QQAIBot.Desktop\activity-state"
+}
+
+function Resolve-DesktopActivityStateFilePath {
+    param([string]$BackendRootPath)
+
+    $normalizedPath = if ([string]::IsNullOrWhiteSpace($BackendRootPath)) {
+        "default"
+    }
+    else {
+        $BackendRootPath.Trim().ToLowerInvariant()
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalizedPath))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    $hash = ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
+    return Join-Path (Get-DesktopActivityStateStoreRootPath) "$hash.json"
+}
+
 function Remove-IfExists {
     param([string]$Path)
 
@@ -117,7 +142,7 @@ function Ensure-DesktopProcessesStopped {
 
     if (-not $ForceStopProcesses) {
         $processSummary = ($ownedProcesses | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join ", "
-        throw "QQ AI Bot desktop is still running: $processSummary. Close it first or rerun uninstall with -ForceStop."
+        throw "Local AI Runtime desktop is still running: $processSummary. Close it first or rerun uninstall with -ForceStop."
     }
 
     foreach ($process in $ownedProcesses) {
@@ -132,14 +157,26 @@ $installRootPath = Resolve-InstallRootPath -RequestedInstallRoot $InstallRoot
 $appRootPath = Join-Path $installRootPath "app"
 $envPath = Join-Path $appRootPath ".env"
 $dataPath = Join-Path $appRootPath "data"
+$sessionStorePath = Join-Path $dataPath "sessions.json"
+$imageCachePath = Join-Path $dataPath "image-cache"
+$snapshotRootPath = Join-Path $appRootPath "artifacts\state-snapshots"
+$desktopActivityStatePath = Resolve-DesktopActivityStateFilePath -BackendRootPath $appRootPath
 $installInfoPath = Join-Path $installRootPath "install-info.json"
-$desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "QQ AI Bot.lnk"
-$startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
+$desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "Local AI Runtime.lnk"
+$startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "Local AI Runtime.lnk"
+$legacyDesktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "QQ AI Bot.lnk"
+$legacyStartMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
 
 Write-Step "Install root: $installRootPath"
 
 if ($ValidateOnly) {
     Write-Step "Validation succeeded."
+    Write-Host "Expected app root:              $appRootPath"
+    Write-Host "Expected config file (.env):    $envPath"
+    Write-Host "Expected sessions store:        $sessionStorePath"
+    Write-Host "Expected image cache:           $imageCachePath"
+    Write-Host "Expected state snapshots:       $snapshotRootPath"
+    Write-Host "Expected desktop activity state:$desktopActivityStatePath"
     exit 0
 }
 
@@ -149,6 +186,8 @@ if (-not $NoShortcuts) {
     Write-Step "Removing shortcuts"
     Remove-ShortcutIfExists -ShortcutPath $desktopShortcutPath
     Remove-ShortcutIfExists -ShortcutPath $startMenuShortcutPath
+    Remove-ShortcutIfExists -ShortcutPath $legacyDesktopShortcutPath
+    Remove-ShortcutIfExists -ShortcutPath $legacyStartMenuShortcutPath
 }
 
 Write-Step "Removing current-user auto-start entry"
@@ -161,16 +200,16 @@ if (-not (Test-Path $installRootPath)) {
 }
 
 if ($KeepState) {
-    Write-Step "Removing installed application files and keeping .env/data"
+    Write-Step "Removing installed application files and keeping .env/data/snapshots"
 
     if (Test-Path $appRootPath) {
-        $preservedNames = @(".env", "data")
+        $preservedNames = @(".env", "data", "artifacts")
 
         Get-ChildItem -Force $appRootPath |
             Where-Object { $preservedNames -notcontains $_.Name } |
             ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
 
-        if (-not (Test-Path $envPath) -and -not (Test-Path $dataPath)) {
+        if (-not (Test-Path $envPath) -and -not (Test-Path $dataPath) -and -not (Test-Path $snapshotRootPath)) {
             Remove-IfExists -Path $appRootPath
         }
     }
@@ -180,8 +219,29 @@ if ($KeepState) {
 
     Write-Host ""
     Write-Host "Uninstall completed."
-    if ((Test-Path $envPath) -or (Test-Path $dataPath)) {
-        Write-Host "Preserved state under: $appRootPath"
+    $preservedStateLines = @()
+    if (Test-Path $envPath) {
+        $preservedStateLines += "Config file (.env):          $envPath"
+    }
+    if (Test-Path $sessionStorePath) {
+        $preservedStateLines += "Sessions store:              $sessionStorePath"
+    }
+    if (Test-Path $imageCachePath) {
+        $preservedStateLines += "Image cache:                 $imageCachePath"
+    }
+    if (Test-Path $snapshotRootPath) {
+        $preservedStateLines += "State snapshots:             $snapshotRootPath"
+    }
+    if (Test-Path $desktopActivityStatePath) {
+        $preservedStateLines += "Desktop activity state:      $desktopActivityStatePath"
+    }
+
+    if ($preservedStateLines.Count -gt 0) {
+        Write-Host "Preserved state:"
+        foreach ($line in $preservedStateLines) {
+            Write-Host $line
+        }
+        Write-Host "Reinstall with npm run setup:install to attach to the same preserved state."
     }
     else {
         Write-Host "No preserved state was found."
@@ -192,10 +252,15 @@ if ($KeepState) {
 Write-Step "Removing installed application files"
 Remove-IfExists -Path $installInfoPath
 Remove-IfExists -Path $appRootPath
+Write-Step "Removing desktop activity state for this install"
+Remove-IfExists -Path $desktopActivityStatePath
+Remove-DirectoryIfEmpty -Path (Split-Path -Parent $desktopActivityStatePath)
+Remove-DirectoryIfEmpty -Path (Split-Path -Parent (Get-DesktopActivityStateStoreRootPath))
 Remove-DirectoryIfEmpty -Path $installRootPath
 
 Write-Host ""
 Write-Host "Uninstall completed."
+Write-Host "Removed config, data, state snapshots, and desktop activity state for this install."
 if (Test-Path $installRootPath) {
     Write-Host "Install root still exists because it contains extra files: $installRootPath"
 }

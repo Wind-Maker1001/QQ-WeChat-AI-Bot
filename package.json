@@ -2,7 +2,7 @@
   "name": "qq-group-ai-bot",
   "version": "1.0.0",
   "private": true,
-  "description": "QQ group AI bot with supervisor/worker runtime, control API, and desktop console",
+  "description": "Local multi-process AI runtime with QQ/WeChat workers, control API, and desktop console",
   "type": "module",
   "scripts": {
     "start": "node ./src/index.mjs",

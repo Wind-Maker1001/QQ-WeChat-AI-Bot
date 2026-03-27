@@ -96,7 +96,7 @@ public static class BackendRuntimeControlCoordinator
                 [
                     new TrayNotification
                     {
-                        Title = "QQ AI Bot",
+                        Title = "Local AI Runtime",
                         Message = stoppedStatus.RuntimeActive
                             ? "Stop command was ignored because runtime is still active."
                             : "Runtime stopped by user.",
@@ -127,7 +127,7 @@ public static class BackendRuntimeControlCoordinator
                 [
                     new TrayNotification
                     {
-                        Title = "QQ AI Bot",
+                        Title = "Local AI Runtime",
                         Message = "Backend host stopped by user.",
                         Icon = Forms.ToolTipIcon.Info
                     }

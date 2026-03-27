@@ -29,6 +29,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
   const server = createControlApiServer({
     host: '127.0.0.1',
     port: 0,
+    accessToken: '',
     logger: {
       error() {}
     },
@@ -145,6 +146,7 @@ test('control API returns 400 for rejected config updates', async () => {
   const server = createControlApiServer({
     host: '127.0.0.1',
     port: 0,
+    accessToken: '',
     logger: {
       error() {}
     },
@@ -216,6 +218,7 @@ test('control API returns 400 for invalid JSON request bodies', async () => {
   const server = createControlApiServer({
     host: '127.0.0.1',
     port: 0,
+    accessToken: '',
     logger: {
       error() {}
     },

@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json;
 using System.IO;
+using System.IO.Compression;
 using System.Windows.Input;
 using System.Windows;
 using System.Windows.Controls;
@@ -24,8 +25,18 @@ QQAIBot.Desktop.App? uiApp = null;
 TaskCompletionSource uiDispatcherReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
 TaskCompletionSource uiThreadStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+KillStaleDesktopTestProcesses();
+
 await RunTestAsync("LocalEnvConfigFallbackReader reads ALLOWED_GROUP_IDS without mutating env files", TestEnvConfigSnapshotStoreReadsLegacyAllowedGroupIdsWithoutMutationAsync);
 await RunTestAsync("LocalEnvConfigFallbackReader load does not create env files when missing", TestEnvConfigSnapshotStoreLoadDoesNotCreateMissingEnvAsync);
+await RunTestAsync("LocalEnvBootstrapConfigStore updates local-only control plane values", TestLocalEnvBootstrapConfigStoreAsync);
+await RunTestAsync("LocalPathOperationsService clears cache directories without removing the root", TestLocalPathOperationsServiceAsync);
+await RunTestAsync("LocalStateSnapshotService exports env, data, and desktop activity state", TestLocalStateSnapshotServiceAsync);
+await RunTestAsync("LocalStateSnapshotService restores the latest exported state snapshot", TestLocalStateSnapshotRestoreAsync);
+await RunTestAsync("LocalStateSnapshotService exports a safe snapshot without .env", TestLocalStateSnapshotSafeExportAsync);
+await RunTestAsync("LocalStateSnapshotService lists snapshots and restores a selected archive", TestLocalStateSnapshotListAndRestoreAsync);
+await RunTestAsync("LocalStateSnapshotService deletes a selected archive and updates the list", TestLocalStateSnapshotDeleteAsync);
+await RunTestAsync("LocalStateSnapshotService previews current-vs-snapshot differences", TestLocalStateSnapshotPreviewAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter saves ALLOWED_CHAT_IDS only", TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter + fallback reader round-trip OpenAI reasoning, verbosity, and tool flags", TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync);
 await RunTestAsync("PathDiscoveryService identifies backend root", TestPathDiscoveryServiceBackendRootAsync);
@@ -37,6 +48,7 @@ await RunTestAsync("BackendControlApiService uses camelCase control API contract
 await RunTestAsync("BackendExecutionProjectionFormatter formats direct and degraded deliberation projections", TestBackendExecutionProjectionFormatterAsync);
 await RunTestAsync("BackendLlmProjectionFormatter formats request and failure details", TestBackendLlmProjectionFormatterAsync);
 await RunTestAsync("BackendActivityProjectionFormatter formats summaries and timelines", TestBackendActivityProjectionFormatterAsync);
+await RunTestAsync("DesktopHealthReportBuilder surfaces setup blockers and ready-to-start guidance", TestDesktopHealthReportBuilderAsync);
 await RunTestAsync("BackendRecentActivityProjector updates order, selection, and de-duplicates replayed events", TestBackendRecentActivityProjectorAsync);
 await RunTestAsync("BackendRecentActivityViewStateHelper filters items and resolves visible selection", TestBackendRecentActivityViewStateHelperAsync);
 await RunTestAsync("BackendRecentActivityCoordinator composes runtime update, restore, and filter selection", TestBackendRecentActivityCoordinatorAsync);
@@ -49,6 +61,7 @@ await RunTestAsync("BackendControlPlaneCoordinator handles load and save recover
 await RunTestAsync("BackendRuntimeControlCoordinator handles start and stop branches", TestBackendRuntimeControlCoordinatorAsync);
 await RunTestAsync("BackendControlPlaneFacade composes load, save, start, and stop entry points", TestBackendControlPlaneFacadeAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
+await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
@@ -74,11 +87,19 @@ await RunTestAsync("MainViewModel loads through recovered control API before fil
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel keeps edited BOT_SYSTEM_PROMPT when save response omits it", TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsItAsync);
 await RunTestAsync("MainViewModel surfaces rejected control API saves without env fallback or recovery", TestMainViewModelSurfacesRejectedControlApiSaveAsync);
+await RunTestAsync("MainViewModel publishes resident-mode notifications when startup is toggled", TestMainViewModelPublishesResidentModeNotificationsAsync);
+await RunTestAsync("MainViewModel exposes completed homepage guide states when runtime and startup are ready", TestMainViewModelGuideCompletionStatesAsync);
 await RunTestAsync("MainViewModel restores local activity state for recent events and pin/filter preferences", TestMainViewModelRestoresLocalActivityStateAsync);
+await RunTestAsync("MainViewModel explains restore token mismatch with a local-token-first action", TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync);
+await RunTestAsync("MainViewModel explains restore QQ readiness blockers with NapCat-first guidance", TestMainViewModelRestoreGuidancePrioritizesNapCatReviewAsync);
 await RunTestAsync("MainWindow auto-starts backend when control API is unreachable on load", TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync);
 await RunTestAsync("MainWindow external activation restores minimized window and triggers ensure-runtime", TestMainWindowExternalActivationAsync);
+await RunTestAsync("MainWindow health actions focus relevant controls and route primary action", TestMainWindowHealthActionsAsync);
 await RunTestAsync("MainWindow hides to tray when minimized and shows tray balloon", TestMainWindowTrayMinimizeBehaviorAsync);
+await RunTestAsync("MainWindow tray balloon explains when backend keeps running", TestMainWindowTrayBalloonExplainsRunningBackendAsync);
 await RunTestAsync("MainWindow close hides to tray and shows balloon tip when tray is enabled", TestMainWindowTrayCloseBehaviorAsync);
+await RunTestAsync("MainWindow tray exit confirms when backend is still running", TestMainWindowTrayExitConfirmsRunningBackendAsync);
+await RunTestAsync("MainWindow toolbar exit confirms when backend is still running", TestMainWindowToolbarExitConfirmsRunningBackendAsync);
 await RunTestAsync("MainWindow tray menu exposes expected actions and routes open/start/stop", TestMainWindowTrayMenuActionsAsync);
 
 if (testFailures.Count > 0)
@@ -149,6 +170,244 @@ async Task TestEnvConfigSnapshotStoreLoadDoesNotCreateMissingEnvAsync()
 
     AssertEqual(string.Empty, document.Config.OpenAiApiKey, "Missing env load should return an empty document.");
     AssertFalse(File.Exists(envPath), "LoadAsync should not create .env when the file is missing.");
+}
+
+async Task TestLocalEnvBootstrapConfigStoreAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-env-bootstrap-");
+    var envPath = Path.Combine(rootPath, ".env");
+    await File.WriteAllTextAsync(
+        envPath,
+        string.Join(
+            Environment.NewLine,
+            [
+                "OPENAI_API_KEY=test-key",
+                "QQ_AI_BOT_CONTROL_API_TOKEN=old-token",
+                "NAPCAT_TOKEN=napcat-token"
+            ]) + Environment.NewLine,
+        Encoding.UTF8);
+
+    var store = new LocalEnvBootstrapConfigStore();
+    await store.SaveExtraValueAsync(rootPath, "QQ_AI_BOT_CONTROL_API_TOKEN", "new-token");
+
+    var savedText = await File.ReadAllTextAsync(envPath, Encoding.UTF8);
+    AssertContains(savedText, "QQ_AI_BOT_CONTROL_API_TOKEN=new-token", "Bootstrap store should replace the local token value.");
+    AssertContains(savedText, "OPENAI_API_KEY=test-key", "Bootstrap store should preserve unrelated env lines.");
+    AssertContains(savedText, "NAPCAT_TOKEN=napcat-token", "Bootstrap store should preserve unrelated runtime values.");
+
+    await store.SaveExtraValueAsync(rootPath, "QQ_AI_BOT_CONTROL_API_TOKEN", "");
+    var clearedText = await File.ReadAllTextAsync(envPath, Encoding.UTF8);
+    AssertDoesNotContain(clearedText, "QQ_AI_BOT_CONTROL_API_TOKEN=", "Bootstrap store should remove the local token when the value is blank.");
+}
+
+async Task TestLocalPathOperationsServiceAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-local-paths-");
+    var cachePath = Path.Combine(rootPath, "image-cache");
+    Directory.CreateDirectory(Path.Combine(cachePath, "nested"));
+    await File.WriteAllTextAsync(Path.Combine(cachePath, "one.txt"), "one", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(cachePath, "nested", "two.txt"), "two", Encoding.UTF8);
+
+    var service = new LocalPathOperationsService();
+    var removedEntries = service.ClearDirectoryContents(cachePath);
+
+    AssertTrue(removedEntries >= 3, "Path operations should report removed cache entries.");
+    AssertTrue(Directory.Exists(cachePath), "Path operations should preserve the cache root directory.");
+    AssertEqual(0, Directory.GetFileSystemEntries(cachePath).Length, "Path operations should clear the cache contents.");
+}
+
+async Task TestLocalStateSnapshotServiceAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-snapshot-");
+    var envPath = Path.Combine(rootPath, ".env");
+    var dataPath = Path.Combine(rootPath, "data");
+    Directory.CreateDirectory(dataPath);
+    await File.WriteAllTextAsync(envPath, "OPENAI_API_KEY=test-key", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(dataPath, "sessions.json"), "{}", Encoding.UTF8);
+
+    var activityStateRoot = await CreateTempDirectoryAsync("desktop-activity-export-");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(activityStateRoot);
+    var activityStatePath = storagePolicy.ResolveStateFilePath(rootPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(activityStatePath)!);
+    await File.WriteAllTextAsync(activityStatePath, "{\"version\":1}", Encoding.UTF8);
+
+    var service = new LocalStateSnapshotService(storagePolicy);
+    var result = await service.ExportAsync(rootPath);
+
+    AssertTrue(File.Exists(result.ArchivePath), "State snapshot service should create an archive.");
+    AssertTrue(result.IncludedEntries.Contains("app/.env"), "State snapshot service should include .env.");
+    AssertTrue(result.IncludedEntries.Contains("app/data/sessions.json"), "State snapshot service should include data files.");
+    AssertTrue(result.IncludedEntries.Contains("desktop/activity-state.json"), "State snapshot service should include desktop activity state.");
+
+    using var archive = ZipFile.OpenRead(result.ArchivePath);
+    AssertTrue(archive.Entries.Any(static entry => entry.FullName == "manifest.json"), "State snapshot archive should include a manifest.");
+    AssertTrue(archive.Entries.Any(static entry => entry.FullName == "app/.env"), "State snapshot archive should contain the env entry.");
+    AssertTrue(archive.Entries.Any(static entry => entry.FullName == "app/data/sessions.json"), "State snapshot archive should contain the data entry.");
+}
+
+async Task TestLocalStateSnapshotRestoreAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-restore-");
+    var envPath = Path.Combine(rootPath, ".env");
+    var dataPath = Path.Combine(rootPath, "data");
+    Directory.CreateDirectory(dataPath);
+    await File.WriteAllTextAsync(envPath, "OPENAI_API_KEY=before-restore", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(dataPath, "sessions.json"), "{\"before\":true}", Encoding.UTF8);
+
+    var activityStateRoot = await CreateTempDirectoryAsync("desktop-activity-restore-");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(activityStateRoot);
+    var activityStatePath = storagePolicy.ResolveStateFilePath(rootPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(activityStatePath)!);
+    await File.WriteAllTextAsync(activityStatePath, "{\"version\":1,\"qqRecentActivities\":[]}", Encoding.UTF8);
+
+    var service = new LocalStateSnapshotService(storagePolicy);
+    var exportResult = await service.ExportAsync(rootPath);
+
+    await File.WriteAllTextAsync(envPath, "OPENAI_API_KEY=after-export", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(dataPath, "sessions.json"), "{\"after\":true}", Encoding.UTF8);
+    await File.WriteAllTextAsync(activityStatePath, "{\"version\":2}", Encoding.UTF8);
+    await Task.Delay(25);
+    File.SetLastWriteTimeUtc(exportResult.ArchivePath, DateTime.UtcNow);
+
+    var restoreResult = await service.RestoreLatestAsync(rootPath);
+
+    AssertEqual(exportResult.ArchivePath, restoreResult.ArchivePath, "Restore should use the latest archive.");
+    AssertContains(await File.ReadAllTextAsync(envPath, Encoding.UTF8), "before-restore", "Restore should overwrite .env from the snapshot.");
+    AssertContains(await File.ReadAllTextAsync(Path.Combine(dataPath, "sessions.json"), Encoding.UTF8), "\"before\":true", "Restore should overwrite session data from the snapshot.");
+    AssertContains(await File.ReadAllTextAsync(activityStatePath, Encoding.UTF8), "\"version\":1", "Restore should overwrite desktop activity state from the snapshot.");
+    AssertTrue(restoreResult.RestoredEntries.Contains("app/.env"), "Restore result should report the env entry.");
+    AssertTrue(restoreResult.RestoredEntries.Contains("desktop/activity-state.json"), "Restore result should report the desktop state entry.");
+}
+
+async Task TestLocalStateSnapshotSafeExportAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-snapshot-safe-");
+    var envPath = Path.Combine(rootPath, ".env");
+    var dataPath = Path.Combine(rootPath, "data");
+    Directory.CreateDirectory(dataPath);
+    await File.WriteAllTextAsync(envPath, "OPENAI_API_KEY=test-key", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(dataPath, "sessions.json"), "{}", Encoding.UTF8);
+
+    var activityStateRoot = await CreateTempDirectoryAsync("desktop-activity-safe-export-");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(activityStateRoot);
+    var activityStatePath = storagePolicy.ResolveStateFilePath(rootPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(activityStatePath)!);
+    await File.WriteAllTextAsync(activityStatePath, "{\"version\":1}", Encoding.UTF8);
+
+    var service = new LocalStateSnapshotService(storagePolicy);
+    var result = await service.ExportSafeAsync(rootPath);
+
+    AssertFalse(result.IncludesSecrets, "Safe snapshot export should not mark secrets as included.");
+    AssertFalse(result.IncludedEntries.Contains("app/.env"), "Safe snapshot export should not include .env.");
+    AssertTrue(result.IncludedEntries.Contains("app/data/sessions.json"), "Safe snapshot export should still include data.");
+
+    using var archive = ZipFile.OpenRead(result.ArchivePath);
+    AssertFalse(archive.Entries.Any(static entry => entry.FullName == "app/.env"), "Safe snapshot archive should omit the env entry.");
+    var manifestEntry = archive.GetEntry("manifest.json") ?? throw new InvalidOperationException("manifest.json missing");
+    using var reader = new StreamReader(manifestEntry.Open(), Encoding.UTF8);
+    var manifestText = await reader.ReadToEndAsync();
+    AssertContains(manifestText, "\"includesSecrets\": false", "Safe snapshot manifest should record that secrets were omitted.");
+}
+
+async Task TestLocalStateSnapshotListAndRestoreAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-list-restore-");
+    var activityStateRoot = await CreateTempDirectoryAsync("desktop-activity-list-restore-");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(activityStateRoot);
+    var service = new LocalStateSnapshotService(storagePolicy);
+
+    Directory.CreateDirectory(Path.Combine(rootPath, "data"));
+    await File.WriteAllTextAsync(Path.Combine(rootPath, ".env"), "OPENAI_API_KEY=first", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(rootPath, "data", "sessions.json"), "{\"snapshot\":1}", Encoding.UTF8);
+    var firstExport = await service.ExportAsync(rootPath);
+    await Task.Delay(30);
+
+    await File.WriteAllTextAsync(Path.Combine(rootPath, ".env"), "OPENAI_API_KEY=second", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(rootPath, "data", "sessions.json"), "{\"snapshot\":2}", Encoding.UTF8);
+    var secondExport = await service.ExportAsync(rootPath);
+
+    var snapshots = await service.ListAsync(rootPath);
+
+    AssertEqual(2, snapshots.Count, "Snapshot listing should return both exported archives.");
+    AssertEqual(Path.GetFileName(secondExport.ArchivePath), snapshots[0].FileName, "Snapshot listing should order newest archives first.");
+    AssertContains(snapshots[0].Summary, "entries", "Snapshot listing should expose a summary.");
+    AssertFalse(string.IsNullOrWhiteSpace(snapshots[0].SizeText), "Snapshot listing should expose archive size text.");
+
+    await File.WriteAllTextAsync(Path.Combine(rootPath, ".env"), "OPENAI_API_KEY=mutated", Encoding.UTF8);
+    var restoreResult = await service.RestoreAsync(rootPath, firstExport.ArchivePath);
+
+    AssertEqual(firstExport.ArchivePath, restoreResult.ArchivePath, "Selected restore should use the requested archive path.");
+    AssertContains(await File.ReadAllTextAsync(Path.Combine(rootPath, ".env"), Encoding.UTF8), "OPENAI_API_KEY=first", "Selected restore should restore the requested archive contents.");
+}
+
+async Task TestLocalStateSnapshotDeleteAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-delete-");
+    Directory.CreateDirectory(Path.Combine(rootPath, "data"));
+    await File.WriteAllTextAsync(Path.Combine(rootPath, ".env"), "OPENAI_API_KEY=first", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(rootPath, "data", "sessions.json"), "{\"snapshot\":1}", Encoding.UTF8);
+
+    var service = new LocalStateSnapshotService(new DesktopActivityStateStoragePolicy(await CreateTempDirectoryAsync("desktop-activity-delete-")));
+    var firstExport = await service.ExportAsync(rootPath);
+    await Task.Delay(25);
+    var secondExport = await service.ExportAsync(rootPath);
+
+    var snapshotsBeforeDelete = await service.ListAsync(rootPath);
+    AssertEqual(2, snapshotsBeforeDelete.Count, "Delete test should start with two snapshots.");
+
+    await service.DeleteAsync(firstExport.ArchivePath);
+
+    var snapshotsAfterDelete = await service.ListAsync(rootPath);
+    AssertEqual(1, snapshotsAfterDelete.Count, "Deleting a snapshot should remove it from the list.");
+    AssertEqual(secondExport.ArchivePath, snapshotsAfterDelete[0].ArchivePath, "Deleting one snapshot should keep the remaining archive.");
+    AssertFalse(File.Exists(firstExport.ArchivePath), "Deleting a snapshot should remove the archive file.");
+}
+
+async Task TestLocalStateSnapshotPreviewAsync()
+{
+    var rootPath = await CreateTempDirectoryAsync("desktop-state-preview-");
+    Directory.CreateDirectory(Path.Combine(rootPath, "data"));
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, ".env"),
+        "OPENAI_API_KEY=current-secret-1234\nNAPCAT_TOKEN=old-token-5678",
+        Encoding.UTF8);
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, "data", "sessions.json"),
+        "{\"channel=qq|chat=group-a|user=user-a\":{\"updatedAt\":\"2026-03-25T10:00:00.000Z\"},\"channel=qq|chat=group-b|user=user-b\":{\"updatedAt\":\"2026-03-26T09:00:00.000Z\"}}",
+        Encoding.UTF8);
+
+    var activityStateRoot = await CreateTempDirectoryAsync("desktop-activity-preview-");
+    var storagePolicy = new DesktopActivityStateStoragePolicy(activityStateRoot);
+    var activityStatePath = storagePolicy.ResolveStateFilePath(rootPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(activityStatePath)!);
+    await File.WriteAllTextAsync(activityStatePath, "{\"version\":1}", Encoding.UTF8);
+
+    var service = new LocalStateSnapshotService(storagePolicy);
+    var exportResult = await service.ExportAsync(rootPath);
+
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, ".env"),
+        "OPENAI_API_KEY=mutated-secret-9999\nNAPCAT_TOKEN=old-token-5678",
+        Encoding.UTF8);
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, "data", "sessions.json"),
+        "{\"channel=qq|chat=group-a|user=user-a\":{\"updatedAt\":\"2026-03-25T10:00:00.000Z\"},\"channel=qq|chat=group-b|user=user-b\":{\"updatedAt\":\"2026-03-27T10:00:00.000Z\"},\"channel=qq|chat=group-c|user=user-c\":{\"updatedAt\":\"2026-03-27T11:00:00.000Z\"}}",
+        Encoding.UTF8);
+
+    var preview = await service.PreviewAsync(rootPath, exportResult.ArchivePath);
+
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), ".env: differs", "Snapshot preview should report env differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "OPENAI_API_KEY", "Snapshot preview should list changed tracked env keys.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "********1234", "Snapshot preview should mask snapshot secret values.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "********9999", "Snapshot preview should mask current secret values.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data/: differs", "Snapshot preview should report data differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data files restored: sessions.json (changed)", "Snapshot preview should report changed data files.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data current-only files: none", "Snapshot preview should report whether local-only data files exist.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json conversations: current 3 -> snapshot 2", "Snapshot preview should report current vs snapshot conversation counts.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "Snapshot preview should report latest session activity timestamps.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json changed conversations: qq:group-c/user-c (current-only), qq:group-b/user-b (changed)", "Snapshot preview should report changed conversation keys.");
+    AssertContains(string.Join(Environment.NewLine, preview.Recommendations), "export your current state", "Snapshot preview should include restore advice.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "desktop activity state: matches", "Snapshot preview should report unchanged desktop activity state.");
 }
 
 async Task TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync()
@@ -798,6 +1057,177 @@ Task TestBackendActivityProjectionFormatterAsync()
         BackendActivityProjectionFormatter.FormatFailureTimeline(failure),
         "Failure |",
         "Activity formatter should render failure timeline.");
+    return Task.CompletedTask;
+}
+
+Task TestDesktopHealthReportBuilderAsync()
+{
+    var setupBlockedReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            NapCatWsUrl = "ws://127.0.0.1:3001"
+        },
+        new BackendRuntimeSnapshotViewState(),
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual(DesktopHealthState.Error, setupBlockedReport.State, "Health report should flag missing first-run config as an error.");
+    AssertEqual("Setup needed", setupBlockedReport.StateText, "Health report should surface setup-needed state text.");
+    AssertContains(setupBlockedReport.Summary, "OpenAI-compatible API key", "Health report summary should explain the missing model credential.");
+    AssertContains(setupBlockedReport.ChecklistStatus, "2 required items still need attention", "Health report checklist should count first-run blockers.");
+    AssertContains(setupBlockedReport.ReadyNowText, "not yet", "Health report should clearly say the runtime is not ready during first-run blockers.");
+    AssertContains(setupBlockedReport.PrimaryAction, "OPENAI_API_KEY", "Health report should tell the user how to unblock first run.");
+    AssertEqual("Go to API keys", setupBlockedReport.PrimaryActionLabel, "Health report should expose a primary remediation label.");
+    AssertEqual(DesktopHealthActionKeys.FocusOpenAiDefaultKey, setupBlockedReport.PrimaryActionKey, "Health report should expose a primary remediation action key.");
+    AssertEqual(5, setupBlockedReport.Checks.Count, "Health report should produce the fixed checklist plus resident mode.");
+    AssertEqual("Missing API key", setupBlockedReport.Checks[1].StateText, "OpenAI checklist item should explain the missing key.");
+    AssertEqual("Go to API keys", setupBlockedReport.Checks[1].ActionLabel, "OpenAI checklist item should expose a remediation action.");
+    AssertEqual("Missing token", setupBlockedReport.Checks[2].StateText, "QQ checklist item should explain the missing NapCat token.");
+    AssertEqual(DesktopHealthActionKeys.FocusNapCatToken, setupBlockedReport.Checks[2].ActionKey, "QQ checklist item should expose the token focus action.");
+    AssertEqual(string.Empty, setupBlockedReport.LatestIssueActionLabel, "Health report should not distract first-run setup with a latest-issue action button.");
+    AssertEqual("Enable startup", setupBlockedReport.Checks[4].ActionLabel, "Resident mode should still explain how to enable startup later.");
+
+    var readyToStartReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token",
+            WechatBridgeUrl = string.Empty
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = false,
+            RuntimeReady = false,
+            WechatConfigured = false,
+            WechatRuntimeActive = false,
+            WechatRuntimeReady = false,
+            WechatBridgeConnected = false
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual(DesktopHealthState.Warning, readyToStartReport.State, "Health report should use a warning state when config is ready but the backend is stopped.");
+    AssertEqual("Ready to start", readyToStartReport.StateText, "Health report should expose ready-to-start state text.");
+    AssertContains(readyToStartReport.PrimaryAction, "Start the backend", "Health report should point the user to the next runtime action.");
+    AssertEqual("Start backend", readyToStartReport.PrimaryActionLabel, "Ready-to-start report should expose a start action label.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, readyToStartReport.PrimaryActionKey, "Ready-to-start report should expose a start action key.");
+    AssertContains(readyToStartReport.ChecklistStatus, "required setup is complete", "Health report should separate completed setup from runtime start state.");
+    AssertContains(readyToStartReport.ReadyNowText, "QQ is ready to start", "Health report should tell the user that QQ can be started now.");
+    AssertContains(readyToStartReport.RuntimeExplanation, "QQ worker is stopped", "Health report explanation should make the stopped runtime easy to understand.");
+    AssertContains(readyToStartReport.Checks[3].Detail, "QQ can run without it", "Health report should explain that WeChat is optional when it is disabled.");
+    AssertEqual(string.Empty, readyToStartReport.LatestIssueActionLabel, "Health report should hide latest-issue actions when no runtime failures have been captured.");
+    AssertEqual("Enable startup", readyToStartReport.Checks[4].ActionLabel, "Resident mode should expose a one-click startup action when auto-start is off.");
+    AssertEqual(DesktopHealthActionKeys.ToggleAutoStart, readyToStartReport.Checks[4].ActionKey, "Resident mode should route to the auto-start toggle action.");
+    AssertContains(readyToStartReport.Checks[4].Detail, "Exit Desktop closes only this window", "Resident mode should explain that closing desktop is separate from stopping backend.");
+
+    var qqReadyWechatWaitingReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token",
+            WechatBridgeUrl = "ws://127.0.0.1:3198",
+            WechatBridgeToken = "wechat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = true,
+            RuntimeReady = true,
+            WechatConfigured = true,
+            WechatRuntimeActive = true,
+            WechatRuntimeReady = false,
+            WechatBridgeConnected = false
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertContains(qqReadyWechatWaitingReport.ChecklistStatus, "1 runtime warning", "Health report should count optional runtime follow-up items separately once setup is complete.");
+    AssertContains(qqReadyWechatWaitingReport.ReadyNowText, "QQ is ready for daily use", "Health report should tell the user QQ can still be used when only WeChat is waiting.");
+
+    var unauthorizedIssueReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = false
+        },
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unauthorized,
+            Message = "Control API authentication failed."
+        },
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual("Go to local token", unauthorizedIssueReport.LatestIssueActionLabel, "Unauthorized latest issue should expose a local-token fix action.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, unauthorizedIssueReport.LatestIssueActionKey, "Unauthorized latest issue should route to the local token field.");
+
+    var runtimeFailureIssueReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = true,
+            RuntimeReady = true,
+            LastWechatLlmFailure = new BackendLlmFailureStatus
+            {
+                Error = "provider rejected request",
+                CapturedAt = "2026-03-24T00:00:03.000Z"
+            }
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual("Review WeChat failure", runtimeFailureIssueReport.LatestIssueActionLabel, "Latest runtime failure should expose the failing channel activity action.");
+    AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, runtimeFailureIssueReport.LatestIssueActionKey, "Latest runtime failure should route to the failing WeChat activity.");
+
+    var startupEnabledReport = DesktopHealthReportBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = true,
+            RuntimeReady = true
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: true);
+
+    AssertEqual("Starts with Windows", startupEnabledReport.Checks[4].StateText, "Resident mode should confirm when startup is enabled.");
+    AssertEqual(string.Empty, startupEnabledReport.Checks[4].ActionLabel, "Resident mode should not prompt for startup when it is already enabled.");
+    AssertContains(startupEnabledReport.Checks[4].Detail, "use Stop backend", "Resident mode should explain how to fully stop the runtime when startup is enabled.");
+
     return Task.CompletedTask;
 }
 
@@ -1519,7 +1949,7 @@ Task TestDesktopControlPlaneFeedbackAsync()
         [
             new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = "Runtime stopped by user."
             }
         ],
@@ -1546,6 +1976,59 @@ Task TestDesktopControlPlaneFeedbackAsync()
     AssertEqual(1, dialogs.Count, "Feedback helper should trigger the error dialog when requested.");
     AssertEqual("Save failed", dialogs[0].Title, "Feedback helper should pass dialog title through.");
     AssertContains(dialogs[0].Message, "boom", "Feedback helper should pass dialog message through.");
+    return Task.CompletedTask;
+}
+
+Task TestDesktopOperationErrorFormatterAsync()
+{
+    var unauthorized = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Load config",
+        fallbackStatusText: "Load failed",
+        technicalMessage: "Control API authentication failed.",
+        controlApiFailure: new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unauthorized,
+            Message = "Control API authentication failed."
+        },
+        envPath: @"D:\runtime\.env");
+
+    AssertContains(unauthorized.StatusText, "local control token mismatch", "Unauthorized guidance should explain the local control token mismatch.");
+    AssertEqual("Local control token required", unauthorized.DialogTitle, "Unauthorized guidance should use a focused dialog title.");
+    AssertContains(unauthorized.DialogMessage, "本机连接设置", "Unauthorized guidance should point the user to the local desktop attachment section.");
+    AssertContains(unauthorized.DialogMessage, "QQ_AI_BOT_CONTROL_API_TOKEN", "Unauthorized guidance should mention the exact local token key.");
+    AssertContains(unauthorized.DialogMessage, @"D:\runtime\.env", "Unauthorized guidance should surface the local env path.");
+
+    var rejected = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Save config",
+        fallbackStatusText: "Save failed",
+        technicalMessage: "WECHAT_BRIDGE_URL must be a valid ws:// or wss:// URL",
+        controlApiFailure: new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Rejected,
+            Message = "WECHAT_BRIDGE_URL must be a valid ws:// or wss:// URL"
+        });
+
+    AssertContains(rejected.StatusText, "control API rejected the request", "Rejected guidance should explain that the control API refused the update.");
+    AssertEqual("Save config rejected", rejected.DialogTitle, "Rejected guidance should identify the rejected action.");
+    AssertContains(rejected.DialogMessage, "Check the field mentioned below", "Rejected guidance should tell the user what to do next.");
+    AssertContains(rejected.DialogMessage, "WECHAT_BRIDGE_URL", "Rejected guidance should preserve the specific validation detail.");
+    AssertEqual("Go to WeChat config", rejected.SuggestedActionLabel, "Rejected guidance should suggest the most relevant field to edit.");
+    AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, rejected.SuggestedActionKey, "Rejected guidance should route to the WeChat config field.");
+
+    var localSettingsError = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Save local control settings",
+        fallbackStatusText: "Local control-plane save failed",
+        technicalMessage: "Access to the path is denied.",
+        envPath: @"D:\runtime\.env",
+        localControlSettingsOperation: true);
+
+    AssertEqual("Local control-plane save failed", localSettingsError.StatusText, "Local settings guidance should preserve the existing status text.");
+    AssertEqual("Save local control settings failed", localSettingsError.DialogTitle, "Local settings guidance should identify the local-only save action.");
+    AssertContains(localSettingsError.DialogMessage, "local desktop attachment settings", "Local settings guidance should explain that only local desktop settings are affected.");
+    AssertContains(localSettingsError.DialogMessage, @"D:\runtime\.env", "Local settings guidance should show the target file path.");
+    AssertEqual("Go to local token", localSettingsError.SuggestedActionLabel, "Local settings guidance should suggest the local token field.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, localSettingsError.SuggestedActionKey, "Local settings guidance should route to the local token field.");
+
     return Task.CompletedTask;
 }
 
@@ -2140,6 +2623,8 @@ async Task TestMainWindowSmokeAutomationAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
 
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -2154,7 +2639,9 @@ async Task TestMainWindowSmokeAutomationAsync()
                 fakeLocalFallbackReader,
                 fakeBackend,
                 fakeBotProcess,
-                fakeActivityStateStore);
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -2172,14 +2659,45 @@ async Task TestMainWindowSmokeAutomationAsync()
                     () => (window.FindName("OpenAiAdvancedEnableWebSearchCheckBox") as CheckBox)?.IsChecked == true,
                     "openai advanced web search checkbox binding");
                 await WaitForAsync(
-                    () => ((window.FindName("DefaultBotInstructionsTextBox") as TextBox)?.Text ?? string.Empty).Contains("你是 QQ 群助手。", StringComparison.Ordinal),
+                    () => ((window.FindName("DefaultBotInstructionsTextBox") as TextBox)?.Text ?? string.Empty).Contains("你是本地消息助手，会处理来自 QQ 和微信的消息。", StringComparison.Ordinal),
                     "default bot instructions textbox binding");
                 await WaitForAsync(
                     () => ((window.FindName("LatestQqLlmSummaryTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("default / gpt-5.4 / responses", StringComparison.Ordinal),
                     "latest qq llm summary binding");
+                await WaitForAsync(
+                    () => ((window.FindName("HealthStateTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("Ready to start", StringComparison.Ordinal),
+                    "health state binding");
 
                 var wechatPrefixTextBox = window.FindName("WechatBotPrefixTextBox") as TextBox
                     ?? throw new InvalidOperationException("WechatBotPrefixTextBox not found.");
+                var firstRunGuideTextBlock = window.FindName("FirstRunGuideTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("FirstRunGuideTextBlock not found.");
+                var firstRunGuideProgressTextBlock = window.FindName("FirstRunGuideProgressTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("FirstRunGuideProgressTextBlock not found.");
+                var firstRunGuideCurrentTextBlock = window.FindName("FirstRunGuideCurrentTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("FirstRunGuideCurrentTextBlock not found.");
+                var firstRunGuideCompletionTextBlock = window.FindName("FirstRunGuideCompletionTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("FirstRunGuideCompletionTextBlock not found.");
+                var firstRunGuideStepsItemsControl = window.FindName("FirstRunGuideStepsItemsControl") as ItemsControl
+                    ?? throw new InvalidOperationException("FirstRunGuideStepsItemsControl not found.");
+                var dailyUseGuideTextBlock = window.FindName("DailyUseGuideTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("DailyUseGuideTextBlock not found.");
+                var dailyUseGuideProgressTextBlock = window.FindName("DailyUseGuideProgressTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("DailyUseGuideProgressTextBlock not found.");
+                var dailyUseGuideCurrentTextBlock = window.FindName("DailyUseGuideCurrentTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("DailyUseGuideCurrentTextBlock not found.");
+                var dailyUseGuideCompletionTextBlock = window.FindName("DailyUseGuideCompletionTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("DailyUseGuideCompletionTextBlock not found.");
+                var dailyUseGuideStepsItemsControl = window.FindName("DailyUseGuideStepsItemsControl") as ItemsControl
+                    ?? throw new InvalidOperationException("DailyUseGuideStepsItemsControl not found.");
+                var overallReadinessStateTextBlock = window.FindName("OverallReadinessStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("OverallReadinessStateTextBlock not found.");
+                var overallReadinessSummaryTextBlock = window.FindName("OverallReadinessSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("OverallReadinessSummaryTextBlock not found.");
+                var overallReadinessRecentActivityTextBlock = window.FindName("OverallReadinessRecentActivityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("OverallReadinessRecentActivityTextBlock not found.");
+                var overallReadinessActionButton = window.FindName("OverallReadinessActionButton") as Button
+                    ?? throw new InvalidOperationException("OverallReadinessActionButton not found.");
                 var defaultBotInstructionsTextBox = window.FindName("DefaultBotInstructionsTextBox") as TextBox
                     ?? throw new InvalidOperationException("DefaultBotInstructionsTextBox not found.");
                 var botPersonaTextBox = window.FindName("BotPersonaTextBox") as TextBox
@@ -2292,6 +2810,34 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("LatestWechatFailureUpgradeTextBlock not found.");
                 var latestWechatFailureErrorTextBlock = window.FindName("LatestWechatFailureErrorTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("LatestWechatFailureErrorTextBlock not found.");
+                var healthStateTextBlock = window.FindName("HealthStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthStateTextBlock not found.");
+                var healthSummaryTextBlock = window.FindName("HealthSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthSummaryTextBlock not found.");
+                var healthChecklistStatusTextBlock = window.FindName("HealthChecklistStatusTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthChecklistStatusTextBlock not found.");
+                var healthReadyNowTextBlock = window.FindName("HealthReadyNowTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthReadyNowTextBlock not found.");
+                var healthPrimaryActionTextBlock = window.FindName("HealthPrimaryActionTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthPrimaryActionTextBlock not found.");
+                var residentModeDetailTextBlock = window.FindName("ResidentModeDetailTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("ResidentModeDetailTextBlock not found.");
+                var closeToTrayBehaviorTextBlock = window.FindName("CloseToTrayBehaviorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("CloseToTrayBehaviorTextBlock not found.");
+                var exitDesktopBehaviorTextBlock = window.FindName("ExitDesktopBehaviorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("ExitDesktopBehaviorTextBlock not found.");
+                var stopBackendBehaviorTextBlock = window.FindName("StopBackendBehaviorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("StopBackendBehaviorTextBlock not found.");
+                var reopenDesktopBehaviorTextBlock = window.FindName("ReopenDesktopBehaviorTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("ReopenDesktopBehaviorTextBlock not found.");
+                var healthRuntimeExplanationTextBlock = window.FindName("HealthRuntimeExplanationTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthRuntimeExplanationTextBlock not found.");
+                var healthLatestIssueTextBlock = window.FindName("HealthLatestIssueTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("HealthLatestIssueTextBlock not found.");
+                var healthLatestIssueActionButton = window.FindName("HealthLatestIssueActionButton") as Button
+                    ?? throw new InvalidOperationException("HealthLatestIssueActionButton not found.");
+                var healthChecksItemsControl = window.FindName("HealthChecksItemsControl") as ItemsControl
+                    ?? throw new InvalidOperationException("HealthChecksItemsControl not found.");
                 var runtimeReadyText = viewModel.RuntimeReadyText;
                 var wechatRuntimeReadyText = viewModel.WechatRuntimeReadyText;
                 var saveButton = window.FindName("SaveButton") as Button
@@ -2300,9 +2846,36 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("StartButton not found.");
                 var stopButton = window.FindName("StopButton") as Button
                     ?? throw new InvalidOperationException("StopButton not found.");
+                var exitDesktopButton = window.FindName("ExitDesktopButton") as Button
+                    ?? throw new InvalidOperationException("ExitDesktopButton not found.");
 
                 AssertEqual("/ai", wechatPrefixTextBox.Text, "WechatBotPrefix textbox should reflect loaded config.");
-                AssertContains(defaultBotInstructionsTextBox.Text, "你是 QQ 群助手。", "Default bot instructions textbox should show the backend default system prompt.");
+                AssertContains(firstRunGuideTextBlock.Text, "首次打开", "Hero guide should expose a first-run explanation.");
+                AssertContains(firstRunGuideProgressTextBlock.Text, "已完成 2/3", "First-run guide should surface completion progress.");
+                AssertContains(firstRunGuideCurrentTextBlock.Text, "Bring the runtime online", "First-run guide should surface the current step summary.");
+                AssertEqual(string.Empty, firstRunGuideCompletionTextBlock.Text, "First-run completion text should stay empty until all setup steps are done.");
+                AssertEqual(3, firstRunGuideStepsItemsControl.Items.Count, "First-run guide should expose three clickable setup steps.");
+                AssertEqual("1", viewModel.FirstRunGuideSteps[0].StepNumber, "First-run steps should expose a numeric badge for the first item.");
+                AssertEqual("Attach runtime folder", viewModel.FirstRunGuideSteps[0].Title, "First-run steps should begin with attaching the runtime folder.");
+                AssertEqual("3", viewModel.FirstRunGuideSteps[2].StepNumber, "First-run steps should expose a numeric badge for the runtime-online step.");
+                AssertEqual("Bring the runtime online", viewModel.FirstRunGuideSteps[2].Title, "First-run steps should end with bringing the runtime online.");
+                AssertEqual("Start backend", viewModel.FirstRunGuideSteps[2].ActionLabel, "First-run runtime step should expose a direct start action when setup is complete.");
+                AssertTrue(viewModel.FirstRunGuideSteps[2].IsCurrent, "First-run guide should highlight bringing the runtime online when setup is complete but runtime is offline.");
+                AssertContains(dailyUseGuideTextBlock.Text, "日常常驻", "Daily-use guide should expose an everyday-use summary.");
+                AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 0/3", "Daily-use guide should surface completion progress.");
+                AssertContains(dailyUseGuideCurrentTextBlock.Text, "Keep the runtime reachable", "Daily-use guide should surface the current step summary.");
+                AssertEqual(string.Empty, dailyUseGuideCompletionTextBlock.Text, "Daily-use completion text should stay empty while upkeep is not fully complete.");
+                AssertEqual(3, dailyUseGuideStepsItemsControl.Items.Count, "Daily-use guide should expose three clickable upkeep steps.");
+                AssertEqual("1", viewModel.DailyUseGuideSteps[0].StepNumber, "Daily-use guide should expose a numeric badge for the first item.");
+                AssertEqual("Keep the runtime reachable", viewModel.DailyUseGuideSteps[0].Title, "Daily-use guide should begin with runtime reachability.");
+                AssertEqual("Enable startup", viewModel.DailyUseGuideSteps[1].ActionLabel, "Daily-use guide should expose startup enablement as an optional action.");
+                AssertContains(viewModel.DailyUseGuideSteps[2].Detail, "provider rejected request", "Daily-use guide should surface the latest issue detail when one exists.");
+                AssertTrue(viewModel.DailyUseGuideSteps[0].IsCurrent, "Daily-use guide should highlight runtime reachability first while backend is stopped.");
+                AssertEqual("Setup in progress", overallReadinessStateTextBlock.Text, "Overall readiness should show setup-in-progress before the runtime is online.");
+                AssertContains(overallReadinessSummaryTextBlock.Text, "highlighted first-run step", "Overall readiness should explain that first-run setup is still active.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity: QQ Request", "Overall readiness should summarize the latest captured activity.");
+                AssertEqual("Start backend", overallReadinessActionButton.Content?.ToString(), "Overall readiness should expose the next first-run action while setup is incomplete.");
+                AssertContains(defaultBotInstructionsTextBox.Text, "你是本地消息助手，会处理来自 QQ 和微信的消息。", "Default bot instructions textbox should show the backend default system prompt.");
                 AssertContains(defaultBotInstructionsTextBox.Text, "默认使用简体中文。", "Default bot instructions textbox should show the backend language guidance.");
                 AssertEqual(defaultBotInstructionsTextBox.Text, effectiveBotInstructionsTextBox.Text, "Effective bot instructions should match the default prompt when BOT_PERSONA is empty.");
                 AssertFalse(defaultBotInstructionsTextBox.IsReadOnly, "System prompt textbox should be editable.");
@@ -2356,6 +2929,39 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("default", latestWechatFailureCapabilityTextBlock.Text, "Latest Wechat failure capability should reflect structured failure binding.");
                 AssertEqual("capability_upgrade", latestWechatFailureUpgradeTextBlock.Text, "Latest Wechat failure upgrade should reflect structured failure binding.");
                 AssertEqual("provider rejected request", latestWechatFailureErrorTextBlock.Text, "Latest Wechat failure error should reflect structured failure binding.");
+                AssertEqual("Ready to start", healthStateTextBlock.Text, "Health state should explain that config is usable but the backend is stopped.");
+                AssertContains(healthSummaryTextBlock.Text, "backend host is currently stopped", "Health summary should explain why the runtime is not online yet.");
+                AssertContains(healthChecklistStatusTextBlock.Text, "required setup is complete", "Health checklist should separate setup completion from runtime state.");
+                AssertContains(healthReadyNowTextBlock.Text, "QQ and WeChat settings look usable", "Health readiness text should explain that channels are configured even when the backend is stopped.");
+                AssertContains(healthPrimaryActionTextBlock.Text, "Start the backend", "Health summary should tell the user the next action.");
+                AssertEqual("Exit Desktop", exitDesktopButton.Content?.ToString(), "Toolbar should expose an explicit desktop-exit action.");
+                AssertContains(residentModeDetailTextBlock.Text, "Exit Desktop closes only this window", "Toolbar should explain that tray exit is separate from stopping the backend.");
+                AssertContains(closeToTrayBehaviorTextBlock.Text, "keeps the tray entry available", "Boundary guide should explain the close-to-tray behavior when runtime is stopped.");
+                AssertContains(exitDesktopBehaviorTextBlock.Text, "reopen it later", "Boundary guide should explain desktop-only exit when runtime is stopped.");
+                AssertContains(stopBackendBehaviorTextBlock.Text, "already offline", "Boundary guide should explain the stopped-runtime case on first load.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "desktop shortcut or Start menu", "Boundary guide should explain where to reopen the desktop shell.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "second desktop shell", "Boundary guide should explain that reopening is single-instance.");
+                AssertContains(healthRuntimeExplanationTextBlock.Text, "QQ worker is stopped", "Health runtime explanation should describe the stopped QQ runtime.");
+                AssertContains(healthLatestIssueTextBlock.Text, "provider rejected request", "Health latest issue should surface the newest runtime failure.");
+                AssertEqual("Review WeChat failure", healthLatestIssueActionButton.Content?.ToString(), "Health latest issue should expose the failing channel activity action when a runtime failure is the newest issue.");
+                healthLatestIssueActionButton.Command.Execute(healthLatestIssueActionButton.CommandParameter);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "LatestWechatRecentActivityListBox",
+                    "health latest issue action routes to wechat activity");
+                AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "provider rejected request", "Health latest issue action should select the latest WeChat failure detail.");
+                AssertEqual(5, healthChecksItemsControl.Items.Count, "Health checks should show the fixed checklist plus resident mode.");
+                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "Resident mode" && check.ActionLabel == "Enable startup"), "Health checks should expose resident mode guidance when startup is off.");
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.ToggleAutoStart);
+                await WaitForAsync(() => fakeAutoStart.Enabled, "health action toggle auto-start");
+                await WaitForAsync(
+                    () => residentModeDetailTextBlock.Text.Contains("starts at Windows sign-in", StringComparison.Ordinal),
+                    "resident mode detail updates after startup enable");
+                AssertContains(residentModeDetailTextBlock.Text, "use Stop backend", "Toolbar should explain how to fully stop the runtime when resident mode is enabled.");
+                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "Resident mode" && check.StateText == "Starts with Windows"), "Health checks should reflect startup-enabled resident mode.");
+                AssertEqual("Done", viewModel.FirstRunGuideSteps[1].StatusText, "First-run setup step should mark required setup as done when config is already complete.");
+                AssertEqual(string.Empty, viewModel.DailyUseGuideSteps[1].ActionLabel, "Daily-use startup step should clear its action once resident mode is enabled.");
+                AssertTrue(viewModel.DailyUseGuideSteps[0].IsCurrent, "Daily-use guide should keep runtime reachability current until the backend is started.");
+                AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 1/3", "Daily-use guide should update progress after startup is enabled.");
                 AssertContains(viewModel.LatestQqLlmDetailText, "trigger=default", "Latest QQ LLM detail should prefer structured decision trigger.");
                 AssertContains(viewModel.LatestQqLlmDetailText, "capability=default", "Latest QQ LLM detail should show structured capability reasons.");
                 AssertContains(viewModel.LatestQqLlmDetailText, "upgrade=none", "Latest QQ LLM detail should show structured upgrade reasons.");
@@ -2478,9 +3084,46 @@ async Task TestMainWindowSmokeAutomationAsync()
 
                 startButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.StartCallCount == 1, "start command invocation");
+                await WaitForAsync(
+                    () => closeToTrayBehaviorTextBlock.Text.Contains("leaves the backend running", StringComparison.Ordinal),
+                    "close-to-tray guide after backend start");
+                AssertContains(firstRunGuideCompletionTextBlock.Text, "首次安装已完成", "First-run guide should show an explicit completion message once runtime is online.");
+                AssertEqual("Done", viewModel.DailyUseGuideSteps[0].StatusText, "Daily-use runtime step should mark the runtime as reachable after start.");
+                AssertTrue(viewModel.DailyUseGuideSteps[2].IsCurrent, "Daily-use guide should highlight the latest-issue review step once runtime and startup are already handled.");
+                AssertContains(viewModel.DailyUseGuideSteps[2].Detail, "provider rejected request", "Daily-use issue step should continue to surface the latest issue detail while it exists.");
+                AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 2/3", "Daily-use guide should update progress after runtime becomes reachable.");
+                AssertContains(dailyUseGuideCurrentTextBlock.Text, "Check the latest issue", "Daily-use guide should update the current-step summary after runtime is online.");
+                AssertEqual(string.Empty, dailyUseGuideCompletionTextBlock.Text, "Daily-use completion text should remain empty while a latest issue still needs review.");
+                AssertEqual("Setup complete", overallReadinessStateTextBlock.Text, "Overall readiness should move to setup-complete once first-run steps are done.");
+                AssertContains(overallReadinessSummaryTextBlock.Text, "highlighted daily-use step", "Overall readiness should explain that only daily-use polish remains.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity:", "Overall readiness should continue to summarize the latest activity while setup completes.");
+                AssertEqual("Review WeChat failure", overallReadinessActionButton.Content?.ToString(), "Overall readiness should hand off to the current daily-use issue action.");
+                AssertContains(exitDesktopBehaviorTextBlock.Text, "keeps running until you stop it", "Boundary guide should explain desktop-only exit while runtime is active.");
+                AssertContains(stopBackendBehaviorTextBlock.Text, "takes QQ/WeChat offline", "Boundary guide should explain the full stop action while runtime is active.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "reattaches to the same running runtime", "Boundary guide should explain reconnecting to an already-running runtime.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "desktop shortcut or Start menu", "Boundary guide should keep the reopen entry point visible while runtime is active.");
+
+                fakeBackend.Status!.LastWechatLlmFailure = null;
+                fakeBackend.Status!.LastQqLlmFailure = null;
+                applyStatusMethod.Invoke(viewModel, [fakeBackend.Status, true]);
+                await WaitForAsync(
+                    () => overallReadinessStateTextBlock.Text.Contains("Ready for daily use", StringComparison.Ordinal),
+                    "overall readiness ready state");
+                await WaitForAsync(
+                    () => string.Equals(overallReadinessActionButton.Content?.ToString(), "Review recent activity", StringComparison.Ordinal),
+                    "overall readiness action binding update");
+                AssertEqual("Review recent activity", overallReadinessActionButton.Content?.ToString(), "Overall readiness should offer recent activity review once no urgent issue remains.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity:", "Overall readiness should keep showing the latest activity summary in the ready state.");
+                viewModel.RunHealthActionCommand.Execute(viewModel.OverallReadinessActionKey);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() is "LatestQqRecentActivityListBox" or "LatestWechatRecentActivityListBox",
+                    "overall readiness routes to latest recent activity");
 
                 stopButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.StopCallCount == 1, "stop command invocation");
+                await WaitForAsync(
+                    () => stopBackendBehaviorTextBlock.Text.Contains("already offline", StringComparison.Ordinal),
+                    "stop-backend guide after backend stop");
             }
             finally
             {
@@ -2504,6 +3147,10 @@ async Task TestMainViewModelDisposeDoesNotStopBackendProcessAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
+    var fakeLocalStateSnapshotService = context.FakeLocalStateSnapshotService;
+    var fakeConfirmationDialogService = context.FakeConfirmationDialogService;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     try
@@ -2517,7 +3164,11 @@ async Task TestMainViewModelDisposeDoesNotStopBackendProcessAsync()
                 fakeLocalFallbackReader,
                 fakeBackend,
                 fakeBotProcess,
-                fakeActivityStateStore);
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService,
+                fakeLocalStateSnapshotService,
+                fakeConfirmationDialogService);
 
             fakeBotProcess.Start(rootPath);
             await viewModel.DisposeAsync();
@@ -2541,6 +3192,8 @@ async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
     var notifications = new List<TrayNotification>();
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
@@ -2557,7 +3210,9 @@ async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
                 fakeLocalFallbackReader,
                 fakeBackend,
                 fakeBotProcess,
-                fakeActivityStateStore);
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService);
             viewModel.NotificationRequested += (_, notification) => notifications.Add(notification);
 
             try
@@ -2597,6 +3252,10 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
+    var fakeLocalStateSnapshotService = context.FakeLocalStateSnapshotService;
+    var fakeConfirmationDialogService = context.FakeConfirmationDialogService;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Config = null;
@@ -2614,7 +3273,8 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
                 fakeLocalFallbackReader,
                 fakeBackend,
                 fakeBotProcess,
-                fakeActivityStateStore);
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore);
 
             try
             {
@@ -2654,6 +3314,7 @@ async Task TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync(
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Config = null;
@@ -2711,6 +3372,7 @@ async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -2762,6 +3424,7 @@ async Task TestMainViewModelSavesThroughRecoveredControlApiAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -2814,6 +3477,7 @@ async Task TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsI
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.OmitBotSystemPromptOnSaveResponse = true;
@@ -2875,6 +3539,7 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.SaveFailureKind = BackendControlApiFailureKind.Rejected;
@@ -2892,6 +3557,8 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
                 fakeBackend,
                 fakeBotProcess,
                 fakeActivityStateStore);
+            var lastHealthActionKey = string.Empty;
+            viewModel.HealthActionRequested += (_, actionKey) => lastHealthActionKey = actionKey;
 
             try
             {
@@ -2915,7 +3582,179 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
                 AssertEqual(0, fakeBotProcess.StartCallCount, "Rejected save should not start local backend recovery.");
                 AssertEqual(0, fakeBackend.StartCallCount, "Rejected save should not issue control API start.");
                 AssertEqual(0, fakeLocalFallbackReader.SaveCallCount, "Rejected save should not fall back to env file writes.");
-                AssertContains(viewModel.StatusText, "Save failed", "Rejected save should surface save failure status.");
+                AssertContains(viewModel.StatusText, "control API rejected the request", "Rejected save should surface the control API rejection reason in status text.");
+                AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, lastHealthActionKey, "Rejected save should direct the user to the offending WeChat field.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelPublishesResidentModeNotificationsAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-resident-mode-notify-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var notifications = new List<TrayNotification>();
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+            viewModel.NotificationRequested += (_, notification) => notifications.Add(notification);
+
+            try
+            {
+                viewModel.ToggleAutoStartCommand.Execute(null);
+                await WaitForAsync(() => fakeAutoStart.Enabled, "resident mode enable");
+                await WaitForAsync(() => notifications.Count == 1, "resident mode enable notification");
+
+                AssertContains(notifications[0].Message, "start minimized", "Resident mode enable notification should explain launch behavior.");
+                AssertContains(notifications[0].Message, "ensure the runtime", "Resident mode enable notification should explain runtime recovery behavior.");
+
+                viewModel.ToggleAutoStartCommand.Execute(null);
+                await WaitForAsync(() => !fakeAutoStart.Enabled, "resident mode disable");
+                await WaitForAsync(() => notifications.Count == 2, "resident mode disable notification");
+
+                AssertContains(notifications[1].Message, "Manual launch", "Resident mode disable notification should explain that manual launch still works.");
+                AssertContains(notifications[1].Message, "tray behavior", "Resident mode disable notification should mention tray behavior.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelGuideCompletionStatesAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-guide-complete-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeAutoStart.Enabled = true;
+    fakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = true,
+        LastQqLlmRequest = new BackendLlmRequestStatus
+        {
+            Route = "default",
+            Model = "gpt-5.4",
+            EffectiveApiStyle = "responses",
+            EffectiveReasoningEffort = "medium",
+            EffectiveTextVerbosity = "medium",
+            EffectiveTools = [],
+            ExecutionKind = BackendExecutionProjectionTags.DirectKind,
+            ExecutionSummary = BackendExecutionProjectionTags.DirectKind,
+            ExecutionProjection = new BackendExecutionProjection
+            {
+                Kind = BackendExecutionProjectionTags.DirectKind,
+                Summary = BackendExecutionProjectionTags.DirectKind,
+                Stages = [BackendExecutionProjectionTags.DirectStage],
+                FailedStage = "",
+                CompletedStages = [BackendExecutionProjectionTags.DirectStage],
+                Degraded = false,
+                Recoveries = []
+            },
+            RouteReason = "default",
+            DecisionSummary = new BackendDecisionSummary
+            {
+                Trigger = new BackendDecisionTrigger
+                {
+                    Kind = "default",
+                    MatchedPrefix = string.Empty
+                },
+                ReasonTags = ["default"],
+                ReasonGroups = new BackendDecisionReasonGroups
+                {
+                    TriggerReasons = [],
+                    CapabilityReasons = [],
+                    UpgradeReasons = []
+                },
+                RequestedCapabilities = new BackendRequestedCapabilities
+                {
+                    ReasoningEffort = "medium",
+                    TextVerbosity = "medium",
+                    EnableWebSearch = false,
+                    EnableCodeInterpreter = false,
+                    NeedsResponsesCapabilities = true
+                },
+                RouteReason = "default",
+                MatchedPrefix = string.Empty
+            },
+            ImageCount = 0,
+            CapturedAt = "2026-03-24T00:00:04.000Z"
+        },
+        WechatConfigured = false,
+        WechatRuntimeActive = false,
+        WechatRuntimeReady = false,
+        WechatBridgeConnected = false,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                await viewModel.InitializeAsync();
+
+                AssertTrue(viewModel.IsFirstRunGuideComplete, "First-run guide should report complete when runtime is ready.");
+                AssertContains(viewModel.FirstRunGuideCompletionText, "首次安装已完成", "First-run guide should expose an explicit completion message.");
+                AssertContains(viewModel.FirstRunGuideCurrentStepText, "全部完成", "First-run guide should summarize that all steps are complete.");
+                AssertContains(viewModel.FirstRunGuideProgressText, "已完成 3/3", "First-run guide should report all steps completed.");
+
+                AssertTrue(viewModel.IsDailyUseGuideComplete, "Daily-use guide should report complete when runtime is ready and startup is enabled with no active issue.");
+                AssertContains(viewModel.DailyUseGuideCompletionText, "已进入日常常驻模式", "Daily-use guide should expose an explicit completion message.");
+                AssertContains(viewModel.DailyUseGuideCurrentStepText, "全部完成", "Daily-use guide should summarize that all steps are complete.");
+                AssertContains(viewModel.DailyUseGuideProgressText, "已完成 3/3", "Daily-use guide should report all steps completed.");
+                AssertTrue(viewModel.IsOverallReadinessReady, "Overall readiness should report ready when both homepage guides are complete.");
+                AssertEqual("Ready for daily use", viewModel.OverallReadinessStateText, "Overall readiness should expose the ready state when all guides are complete.");
+                AssertContains(viewModel.OverallReadinessSummaryText, "no urgent issue action is waiting", "Overall readiness summary should confirm that the system is calm once all guides are complete.");
+                AssertContains(viewModel.OverallReadinessRecentActivityText, "Recent activity: QQ Request", "Overall readiness should summarize the latest recent activity in the ready state.");
+                AssertEqual("Review recent activity", viewModel.OverallReadinessActionLabel, "Overall readiness should offer a useful next action even after setup is complete.");
+                AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, viewModel.OverallReadinessActionKey, "Overall readiness should route to the latest activity review action when ready.");
             }
             finally
             {
@@ -3015,6 +3854,163 @@ async Task TestMainViewModelRestoresLocalActivityStateAsync()
     }
 }
 
+async Task TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-restore-token-guidance-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
+    var fakeLocalStateSnapshotService = context.FakeLocalStateSnapshotService;
+    var fakeConfirmationDialogService = context.FakeConfirmationDialogService;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.StatusFailureKind = BackendControlApiFailureKind.Unauthorized;
+    fakeBackend.StatusFailureMessage = "Control API authentication failed.";
+    fakeLocalStateSnapshotService.Result = new LocalStateSnapshotResult
+    {
+        ArchivePath = @"D:\snapshots\runtime-state-token-test.zip",
+        IncludedEntries = ["app/.env"]
+    };
+    fakeLocalStateSnapshotService.PreviewResult = new LocalStateSnapshotPreviewResult
+    {
+        ArchivePath = @"D:\snapshots\runtime-state-token-test.zip",
+        Lines =
+        [
+            ".env: differs from current state",
+            ".env tracked keys changed: QQ_AI_BOT_CONTROL_API_TOKEN",
+            "QQ_AI_BOT_CONTROL_API_TOKEN: ********1111 -> ********2222",
+            "data/: matches current state",
+            "desktop activity state: matches current state"
+        ],
+        Recommendations =
+        [
+            "Recommended: export your current state before restoring so you can roll back if needed.",
+            "Caution: this snapshot includes .env secrets. Avoid sharing the archive outside this device."
+        ]
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService,
+                fakeLocalStateSnapshotService,
+                fakeConfirmationDialogService);
+
+            try
+            {
+                await viewModel.InitializeAsync();
+                await WaitForAsync(() => viewModel.SelectedStateSnapshot is not null, "restore token guidance snapshot load");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                viewModel.RestoreSelectedStateSnapshotCommand.Execute(null);
+
+                await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore token guidance restore");
+
+                AssertContains(viewModel.LastStateRestoreIssueText, "local control token", "Restore guidance should explain the token mismatch.");
+                AssertContains(viewModel.LastStateRestoreControlPlaneText, "QQ_AI_BOT_CONTROL_API_TOKEN", "Restore guidance should explain which local control-plane setting changed.");
+                AssertContains(viewModel.LastStateRestoreRuntimeText, "cannot verify QQ or WeChat readiness", "Restore guidance should avoid pretending live runtime state is current when auth is broken.");
+                AssertEqual("Update local control token", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize fixing the local token first.");
+                AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should route the primary action to the local token field.");
+                AssertEqual("Reload config", viewModel.LastStateRestoreSecondaryActionLabel, "Restore guidance should keep reload as the second step.");
+                AssertContains(viewModel.LastStateRestoreNextStepText, "matches the restored backend .env", "Restore guidance should explain why the local token action comes first.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelRestoreGuidancePrioritizesNapCatReviewAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-restore-napcat-guidance-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
+    var fakeLocalStateSnapshotService = context.FakeLocalStateSnapshotService;
+    var fakeConfirmationDialogService = context.FakeConfirmationDialogService;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = false,
+        WechatConfigured = true,
+        WechatRuntimeActive = true,
+        WechatRuntimeReady = true,
+        WechatBridgeConnected = true
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService,
+                fakeLocalStateSnapshotService,
+                fakeConfirmationDialogService);
+
+            try
+            {
+                await viewModel.InitializeAsync();
+                await WaitForAsync(() => viewModel.SelectedStateSnapshot is not null, "restore napcat guidance snapshot load");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                viewModel.RestoreSelectedStateSnapshotCommand.Execute(null);
+
+                await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore napcat guidance restore");
+
+                AssertContains(viewModel.LastStateRestoreIssueText, "changed NapCat settings", "Restore guidance should explain when the restored snapshot changed NapCat settings.");
+                AssertContains(viewModel.LastStateRestoreRuntimeText, "saved URL and token", "Restore runtime text should explain what to verify in NapCat.");
+                AssertEqual("Review restored NapCat settings", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize NapCat review when QQ is the blocker.");
+                AssertEqual(DesktopHealthActionKeys.FocusNapCatUrl, viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should route the primary action to NapCat config.");
+                AssertContains(viewModel.LastStateRestoreNextStepText, "NapCat URL and token", "Restore next-step guidance should explain the expected NapCat follow-up.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
 async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-ui-auto-start-");
@@ -3024,6 +4020,7 @@ async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
     var fakeAutoStart = context.FakeAutoStart;
     var fakeBotProcess = context.FakeBotProcess;
     var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
     var originalCurrentDirectory = Directory.GetCurrentDirectory();
 
     fakeBackend.Status = null;
@@ -3039,7 +4036,8 @@ async Task TestMainWindowAutoStartsBackendWhenControlApiIsUnavailableAsync()
                 fakeLocalFallbackReader,
                 fakeBackend,
                 fakeBotProcess,
-                fakeActivityStateStore);
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore);
             var window = new MainWindow(
                 launchMinimizedToTray: false,
                 ensureRuntimeOnStartup: false,
@@ -3169,11 +4167,253 @@ async Task TestMainWindowTrayMinimizeBehaviorAsync()
                 AssertTrue(fakeNotifyIcon.Visible, "Tray icon should stay visible while window is hidden.");
 
                 AssertEqual(1, fakeNotifyIcon.ShowBalloonTipCallCount, "First minimize should show one tray balloon.");
-                AssertContains(fakeNotifyIcon.BalloonTipText, "tray", "Minimize-to-tray should set balloon message.");
+                AssertContains(fakeNotifyIcon.BalloonTipText, "start the backend from the tray", "Minimize-to-tray balloon should explain the stopped-backend case.");
             }
             finally
             {
                 window.ExitFromTrayForTests();
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainWindowHealthActionsAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-ui-health-actions-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var fakeLocalPathOperationsService = context.FakeLocalPathOperationsService;
+    var fakeLocalStateSnapshotService = context.FakeLocalStateSnapshotService;
+    var fakeConfirmationDialogService = context.FakeConfirmationDialogService;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore,
+                fakeLocalPathOperationsService,
+                fakeLocalStateSnapshotService,
+                fakeConfirmationDialogService);
+            var window = new MainWindow(
+                launchMinimizedToTray: false,
+                ensureRuntimeOnStartup: false,
+                viewModel: viewModel,
+                enableNotifyIcon: false);
+
+            try
+            {
+                window.Show();
+                await WaitForAsync(() => fakeBackend.GetConfigCallCount > 0, "health action initial load");
+
+                var healthPrimaryActionButton = window.FindName("HealthPrimaryActionButton") as Button
+                    ?? throw new InvalidOperationException("HealthPrimaryActionButton not found.");
+                var residentModeDetailTextBlock = window.FindName("ResidentModeDetailTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("ResidentModeDetailTextBlock not found.");
+                var controlApiTokenTextBox = window.FindName("ControlApiTokenTextBox") as TextBox
+                    ?? throw new InvalidOperationException("ControlApiTokenTextBox not found.");
+                var saveLocalControlPlaneButton = window.FindName("SaveLocalControlPlaneButton") as Button
+                    ?? throw new InvalidOperationException("SaveLocalControlPlaneButton not found.");
+                var openSessionStoreFolderButton = window.FindName("OpenSessionStoreFolderButton") as Button
+                    ?? throw new InvalidOperationException("OpenSessionStoreFolderButton not found.");
+                var openImageCacheFolderButton = window.FindName("OpenImageCacheFolderButton") as Button
+                    ?? throw new InvalidOperationException("OpenImageCacheFolderButton not found.");
+                var clearImageCacheButton = window.FindName("ClearImageCacheButton") as Button
+                    ?? throw new InvalidOperationException("ClearImageCacheButton not found.");
+                var exportStateSnapshotButton = window.FindName("ExportStateSnapshotButton") as Button
+                    ?? throw new InvalidOperationException("ExportStateSnapshotButton not found.");
+                var exportSafeStateSnapshotButton = window.FindName("ExportSafeStateSnapshotButton") as Button
+                    ?? throw new InvalidOperationException("ExportSafeStateSnapshotButton not found.");
+                var restoreSelectedStateSnapshotButton = window.FindName("RestoreSelectedStateSnapshotButton") as Button
+                    ?? throw new InvalidOperationException("RestoreSelectedStateSnapshotButton not found.");
+                var deleteSelectedStateSnapshotButton = window.FindName("DeleteSelectedStateSnapshotButton") as Button
+                    ?? throw new InvalidOperationException("DeleteSelectedStateSnapshotButton not found.");
+                var refreshStateSnapshotsButton = window.FindName("RefreshStateSnapshotsButton") as Button
+                    ?? throw new InvalidOperationException("RefreshStateSnapshotsButton not found.");
+                var openStateSnapshotFolderButton = window.FindName("OpenStateSnapshotFolderButton") as Button
+                    ?? throw new InvalidOperationException("OpenStateSnapshotFolderButton not found.");
+                var stateSnapshotsListBox = window.FindName("StateSnapshotsListBox") as ListBox
+                    ?? throw new InvalidOperationException("StateSnapshotsListBox not found.");
+                var sessionStoreStateTextBlock = window.FindName("SessionStoreStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SessionStoreStateTextBlock not found.");
+                var imageCacheStateTextBlock = window.FindName("ImageCacheStateTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("ImageCacheStateTextBlock not found.");
+                var lastStateSnapshotTextBlock = window.FindName("LastStateSnapshotTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateSnapshotTextBlock not found.");
+                var lastStateRestoreTextBlock = window.FindName("LastStateRestoreTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreTextBlock not found.");
+                var lastStateRestoreSummaryTextBlock = window.FindName("LastStateRestoreSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreSummaryTextBlock not found.");
+                var lastStateRestoreIssueTextBlock = window.FindName("LastStateRestoreIssueTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreIssueTextBlock not found.");
+                var lastStateRestoreTargetsTextBlock = window.FindName("LastStateRestoreTargetsTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreTargetsTextBlock not found.");
+                var lastStateRestoreSessionsTextBlock = window.FindName("LastStateRestoreSessionsTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreSessionsTextBlock not found.");
+                var lastStateRestoreLatestActivityTextBlock = window.FindName("LastStateRestoreLatestActivityTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreLatestActivityTextBlock not found.");
+                var lastStateRestoreAdviceTextBlock = window.FindName("LastStateRestoreAdviceTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreAdviceTextBlock not found.");
+                var lastStateRestoreControlPlaneTextBlock = window.FindName("LastStateRestoreControlPlaneTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreControlPlaneTextBlock not found.");
+                var lastStateRestoreRuntimeTextBlock = window.FindName("LastStateRestoreRuntimeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreRuntimeTextBlock not found.");
+                var lastStateRestoreNextStepTextBlock = window.FindName("LastStateRestoreNextStepTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LastStateRestoreNextStepTextBlock not found.");
+                var restoreResultReloadButton = window.FindName("RestoreResultReloadButton") as Button
+                    ?? throw new InvalidOperationException("RestoreResultReloadButton not found.");
+                var restoreResultStartBackendButton = window.FindName("RestoreResultStartBackendButton") as Button
+                    ?? throw new InvalidOperationException("RestoreResultStartBackendButton not found.");
+                var restoreResultLocalSettingsButton = window.FindName("RestoreResultLocalSettingsButton") as Button
+                    ?? throw new InvalidOperationException("RestoreResultLocalSettingsButton not found.");
+                var selectedStateSnapshotSummaryTextBlock = window.FindName("SelectedStateSnapshotSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotSummaryTextBlock not found.");
+                var selectedStateSnapshotImpactTextBlock = window.FindName("SelectedStateSnapshotImpactTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotImpactTextBlock not found.");
+                var selectedStateSnapshotDiffTextBlock = window.FindName("SelectedStateSnapshotDiffTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotDiffTextBlock not found.");
+                var selectedStateSnapshotAdviceTextBlock = window.FindName("SelectedStateSnapshotAdviceTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotAdviceTextBlock not found.");
+
+                AssertEqual("Start backend", healthPrimaryActionButton.Content?.ToString(), "Health primary action button should expose the next runtime action.");
+                AssertEqual("desktop-token", controlApiTokenTextBox.Text, "Local control-plane token textbox should reflect the local env value.");
+                AssertFalse(string.IsNullOrWhiteSpace(sessionStoreStateTextBlock.Text), "Session state text should be visible.");
+                AssertFalse(string.IsNullOrWhiteSpace(imageCacheStateTextBlock.Text), "Image cache state text should be visible.");
+                await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 2, "state snapshot list load");
+                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "entries", "State snapshot selection should expose a summary.");
+                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "includes secrets", "State snapshot summary should expose secret-risk metadata.");
+                AssertContains(selectedStateSnapshotImpactTextBlock.Text, ".env", "State snapshot impact text should explain env overwrite risk.");
+                await WaitForAsync(() => selectedStateSnapshotDiffTextBlock.Text.Contains("differs", StringComparison.Ordinal), "state snapshot diff preview");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "OPENAI_API_KEY", "State snapshot diff preview should list changed tracked env keys.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "********1234", "State snapshot diff preview should mask snapshot secret values.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json", "State snapshot diff preview should list changed data files.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "data current-only files: none", "State snapshot diff preview should show current-only data summary.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json conversations: current 3 -> snapshot 2", "State snapshot diff preview should show session count changes.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "State snapshot diff preview should show latest session activity timestamps.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "qq:group-c/user-c", "State snapshot diff preview should show changed conversation keys.");
+                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "export your current state", "State snapshot advice should recommend exporting current state.");
+                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "Avoid sharing", "State snapshot advice should warn about secrets.");
+
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.FocusOpenAiDefaultKey);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "OpenAiDefaultApiKeyTextBox",
+                    "health action openai focus");
+
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.FocusControlApiToken);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "ControlApiTokenTextBox",
+                    "health action control api token focus");
+
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.FocusNapCatToken);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "NapCatTokenTextBox",
+                    "health action napcat token focus");
+
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.ShowLogs);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "LogTextBox",
+                    "health action log focus");
+
+                controlApiTokenTextBox.Text = "updated-local-token";
+                saveLocalControlPlaneButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalBootstrapStore.SaveCallCount == 1, "local control-plane save");
+                AssertEqual("QQ_AI_BOT_CONTROL_API_TOKEN", fakeLocalBootstrapStore.LastKey, "Local control-plane save should target the control API token key.");
+                AssertEqual("updated-local-token", fakeLocalBootstrapStore.LastValue, "Local control-plane save should persist the edited token.");
+
+                openSessionStoreFolderButton.Command.Execute(null);
+                openImageCacheFolderButton.Command.Execute(null);
+                clearImageCacheButton.Command.Execute(null);
+                AssertEqual(2, fakeLocalPathOperationsService.OpenedFolders.Count, "State actions should open the session and image cache folders.");
+                AssertContains(fakeLocalPathOperationsService.OpenedFolders[0], "data", "Session store action should open the data folder.");
+                AssertContains(fakeLocalPathOperationsService.OpenedFolders[1], "image-cache", "Image cache action should open the image cache folder.");
+                AssertEqual(1, fakeLocalPathOperationsService.ClearCallCount, "Clear image cache should invoke the path operation service.");
+                AssertContains(fakeLocalPathOperationsService.LastClearedDirectory, "image-cache", "Clear image cache should target the image cache path.");
+
+                exportStateSnapshotButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.ExportCallCount == 1, "state snapshot export");
+                AssertEqual(viewModel.BackendRootPath, fakeLocalStateSnapshotService.LastBackendRootPath, "State snapshot export should use the current backend root.");
+                AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-test.zip", "State snapshot export should update the latest export text.");
+
+                exportSafeStateSnapshotButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.ExportSafeCallCount == 1, "safe state snapshot export");
+                AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-safe-test.zip", "Safe state snapshot export should update the latest export text.");
+
+                stateSnapshotsListBox.SelectedIndex = 1;
+                refreshStateSnapshotsButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.ListCallCount >= 2, "state snapshot list refresh");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                restoreSelectedStateSnapshotButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "state snapshot restore");
+                AssertContains(lastStateRestoreTextBlock.Text, "runtime-state-older.zip", "Selected snapshot restore should update the latest restore text.");
+                AssertContains(lastStateRestoreSummaryTextBlock.Text, "runtime-state-older.zip", "Restore summary should mention the restored archive.");
+                AssertContains(lastStateRestoreIssueTextBlock.Text, "backend host is currently stopped", "Restore result card should explain the stopped backend issue.");
+                AssertContains(lastStateRestoreSummaryTextBlock.Text, "2 conversations", "Restore summary should mention the snapshot conversation count.");
+                AssertContains(lastStateRestoreSummaryTextBlock.Text, "2026-03-26 09:00:00 UTC", "Restore summary should mention the snapshot latest activity time.");
+                AssertContains(lastStateRestoreTargetsTextBlock.Text, ".env", "Restore targets should mention env restoration.");
+                AssertContains(lastStateRestoreSessionsTextBlock.Text, "current 3 -> snapshot 2", "Restore session summary should show session count changes.");
+                AssertContains(lastStateRestoreLatestActivityTextBlock.Text, "2026-03-26 09:00:00 UTC", "Restore latest activity summary should show the snapshot time.");
+                AssertContains(lastStateRestoreAdviceTextBlock.Text, "export your current state", "Restore advice should carry over into the restore result card.");
+                AssertContains(lastStateRestoreControlPlaneTextBlock.Text, "attached to the local control API", "Restore result card should show control plane availability.");
+                AssertContains(lastStateRestoreRuntimeTextBlock.Text, "restored channel settings and session state are waiting to be applied", "Restore result card should explain that stopped runtime state is not active yet.");
+                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreNextStepTextBlock.Text), "Restore result card should surface the next suggested action.");
+                AssertTrue(restoreResultReloadButton.IsEnabled, "Restore result reload button should enable after a restore.");
+                AssertTrue(restoreResultStartBackendButton.IsEnabled, "Restore result start button should enable after a restore.");
+                AssertTrue(restoreResultLocalSettingsButton.IsEnabled, "Restore result local settings button should enable after a restore.");
+                AssertEqual("Start backend", restoreResultReloadButton.Content?.ToString(), "Primary restore action should prefer starting the backend when it is stopped.");
+                AssertEqual("Reload config", restoreResultStartBackendButton.Content?.ToString(), "Secondary restore action should still expose reload.");
+                AssertEqual("Open local control settings", restoreResultLocalSettingsButton.Content?.ToString(), "Tertiary restore action should expose local settings.");
+                AssertContains(fakeLocalStateSnapshotService.LastRestoreArchivePath, "runtime-state-older.zip", "Selected snapshot restore should target the selected archive.");
+                AssertContains(fakeLocalStateSnapshotService.LastPreviewArchivePath, "runtime-state-older.zip", "Restore should compute a preview for the selected archive.");
+                AssertEqual("Restore selected snapshot", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, ".env", "Restore confirmation should mention env overwrite risk.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "differs from current state", "Restore confirmation should include diff preview lines.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "OPENAI_API_KEY", "Restore confirmation should list tracked env keys that change.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "********1234", "Restore confirmation should keep secret values masked.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json", "Restore confirmation should list changed data files.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "data current-only files: none", "Restore confirmation should include current-only data summary.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json conversations: current 3 -> snapshot 2", "Restore confirmation should include session count changes.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "Restore confirmation should include latest session activity timestamps.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "qq:group-c/user-c", "Restore confirmation should include changed conversation keys.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "export your current state", "Restore confirmation should include restore advice.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "Avoid sharing", "Restore confirmation should include secret handling advice.");
+
+                fakeConfirmationDialogService.Results.Enqueue(false);
+                deleteSelectedStateSnapshotButton.Command.Execute(null);
+                AssertEqual(0, fakeLocalStateSnapshotService.DeleteCallCount, "Declining delete confirmation should not remove the snapshot.");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                deleteSelectedStateSnapshotButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.DeleteCallCount == 1, "state snapshot delete");
+                AssertContains(fakeLocalStateSnapshotService.LastDeletedArchivePath, "runtime-state-older.zip", "Selected snapshot delete should target the selected archive.");
+                await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 1, "state snapshot list after delete");
+                AssertEqual("Delete selected snapshot", fakeConfirmationDialogService.LastTitle, "Deleting a snapshot should show a delete confirmation title.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "permanently removes", "Delete confirmation should explain permanence.");
+
+                openStateSnapshotFolderButton.Command.Execute(null);
+                AssertContains(fakeLocalPathOperationsService.OpenedFolders[^1], "state-snapshots", "Open snapshot folder should target the snapshot directory.");
+            }
+            finally
+            {
+                window.Close();
                 await viewModel.DisposeAsync();
             }
         });
@@ -3223,10 +4463,221 @@ async Task TestMainWindowTrayCloseBehaviorAsync()
                 window.Close();
                 await WaitForAsync(() => !window.IsVisible, "window hidden to tray after close");
 
-                AssertEqual("QQ AI Bot", fakeNotifyIcon.BalloonTipTitle, "Closing to tray should set balloon title.");
-                AssertContains(fakeNotifyIcon.BalloonTipText, "tray", "Closing to tray should set balloon message.");
+                AssertEqual("Local AI Runtime", fakeNotifyIcon.BalloonTipTitle, "Closing to tray should set balloon title.");
+                AssertContains(fakeNotifyIcon.BalloonTipText, "start the backend from the tray", "Closing to tray should explain how to resume from the tray when backend is stopped.");
                 AssertEqual(1, fakeNotifyIcon.ShowBalloonTipCallCount, "Closing to tray should show one balloon tip.");
                 AssertTrue(fakeNotifyIcon.Visible, "Tray icon should remain visible after close-to-tray.");
+            }
+            finally
+            {
+                window.ExitFromTrayForTests();
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainWindowTrayExitConfirmsRunningBackendAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-ui-tray-exit-confirm-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeNotifyIcon = new FakeNotifyIconHost();
+    var fakeConfirmationDialogService = new FakeConfirmationDialogService();
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = true,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+            var window = new MainWindow(
+                launchMinimizedToTray: false,
+                ensureRuntimeOnStartup: false,
+                viewModel: viewModel,
+                enableNotifyIcon: true,
+                notifyIconHost: fakeNotifyIcon,
+                confirmationDialogService: fakeConfirmationDialogService);
+
+            try
+            {
+                window.Show();
+                await WaitForAsync(() => fakeBackend.GetConfigCallCount > 0, "tray exit initial load");
+
+                fakeConfirmationDialogService.Results.Enqueue(false);
+                var declinedExit = window.InvokeTrayExitForTests();
+                AssertFalse(declinedExit, "Tray exit should stay open when the user declines the running-backend confirmation.");
+                AssertTrue(window.IsVisible, "Window should remain open when tray exit confirmation is declined.");
+                AssertEqual("Exit Desktop", fakeConfirmationDialogService.LastTitle, "Tray exit confirmation should explain that only the desktop shell exits.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "will stay online", "Tray exit confirmation should explain that the backend keeps running.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "desktop shortcut or Start menu", "Tray exit confirmation should explain how to reopen the desktop shell later.");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                var confirmedExit = window.InvokeTrayExitForTests();
+                AssertTrue(confirmedExit, "Tray exit should close when the user confirms.");
+                await WaitForAsync(() => !window.IsVisible, "window closed after tray exit confirmation");
+                AssertEqual(0, fakeBackend.StopCallCount, "Tray exit should not stop the backend automatically.");
+            }
+            finally
+            {
+                if (window.IsVisible)
+                {
+                    window.ExitFromTrayForTests();
+                }
+
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainWindowToolbarExitConfirmsRunningBackendAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-ui-toolbar-exit-confirm-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeConfirmationDialogService = new FakeConfirmationDialogService();
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = true,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+            var window = new MainWindow(
+                launchMinimizedToTray: false,
+                ensureRuntimeOnStartup: false,
+                viewModel: viewModel,
+                enableNotifyIcon: false,
+                confirmationDialogService: fakeConfirmationDialogService);
+
+            try
+            {
+                window.Show();
+                await WaitForAsync(() => fakeBackend.GetConfigCallCount > 0, "toolbar exit initial load");
+
+                var exitDesktopButton = window.FindName("ExitDesktopButton") as Button
+                    ?? throw new InvalidOperationException("ExitDesktopButton not found.");
+
+                fakeConfirmationDialogService.Results.Enqueue(false);
+                exitDesktopButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                AssertTrue(window.IsVisible, "Toolbar exit should keep the window open when the running-backend confirmation is declined.");
+                AssertEqual("Exit Desktop", fakeConfirmationDialogService.LastTitle, "Toolbar exit should reuse the same confirmation title as tray exit.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "will stay online", "Toolbar exit confirmation should explain that the backend keeps running.");
+
+                fakeConfirmationDialogService.Results.Enqueue(true);
+                exitDesktopButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await WaitForAsync(() => !window.IsVisible, "window closed after toolbar exit confirmation");
+                AssertEqual(0, fakeBackend.StopCallCount, "Toolbar exit should not stop the backend automatically.");
+            }
+            finally
+            {
+                if (window.IsVisible)
+                {
+                    window.ExitFromTrayForTests();
+                }
+
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainWindowTrayBalloonExplainsRunningBackendAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-ui-tray-running-backend-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeNotifyIcon = new FakeNotifyIconHost();
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = true,
+        ControlApiUrl = "http://127.0.0.1:3199"
+    };
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+            var window = new MainWindow(
+                launchMinimizedToTray: false,
+                ensureRuntimeOnStartup: false,
+                viewModel: viewModel,
+                enableNotifyIcon: true,
+                notifyIconHost: fakeNotifyIcon);
+
+            try
+            {
+                window.Show();
+                await WaitForAsync(() => fakeBackend.GetConfigCallCount > 0, "tray running-backend initial load");
+
+                window.WindowState = WindowState.Minimized;
+                await WaitForAsync(() => !window.IsVisible, "window hidden to tray after minimize with running backend");
+
+                AssertContains(fakeNotifyIcon.BalloonTipText, "Backend keeps running until you stop it", "Tray balloon should explain that hiding desktop does not stop an already-running backend.");
             }
             finally
             {
@@ -3282,6 +4733,7 @@ async Task TestMainWindowTrayMenuActionsAsync()
                 AssertEqual("Open", labels[0], "First tray menu action should be Open.");
                 AssertEqual("Start Backend", labels[1], "Second tray menu action should be Start Backend.");
                 AssertEqual("Stop Backend", labels[2], "Third tray menu action should be Stop Backend.");
+                AssertEqual("Exit Desktop", window.GetTrayExitLabelForTests(), "Tray exit label should clarify that it closes only the desktop shell.");
 
                 window.WindowState = WindowState.Minimized;
                 await WaitForAsync(() => !window.IsVisible, "window hidden before tray open action");
@@ -3531,7 +4983,9 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
             OpenAiDefaultEnableCodeInterpreter = "false",
             OpenAiAdvancedEnableCodeInterpreter = "true",
             NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token",
             WechatBridgeUrl = "ws://127.0.0.1:3198",
+            WechatBridgeToken = "wechat-test-token",
             WechatBotPrefix = "/ai",
             AllowedChatIds = "chat-a,chat-b",
             AllowedUserIds = "user-a",
@@ -3554,13 +5008,23 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
                 OpenAiDefaultEnableCodeInterpreter = "false",
                 OpenAiAdvancedEnableCodeInterpreter = "true",
                 NapCatWsUrl = "ws://127.0.0.1:3001",
+                NapCatToken = "napcat-test-token",
                 WechatBridgeUrl = "ws://127.0.0.1:3198",
+                WechatBridgeToken = "wechat-test-token",
                 WechatBotPrefix = "/ai",
                 AllowedChatIds = "chat-a,chat-b",
                 AllowedUserIds = "user-a"
+            },
+            ExtraValues =
+            {
+                ["QQ_AI_BOT_CONTROL_API_TOKEN"] = "desktop-token"
             }
         });
     var fakeActivityStateStore = new FakeActivityStateStore();
+    var fakeLocalBootstrapStore = new FakeLocalBootstrapConfigStore();
+    var fakeLocalPathOperationsService = new FakeLocalPathOperationsService();
+    var fakeLocalStateSnapshotService = new FakeLocalStateSnapshotService();
+    var fakeConfirmationDialogService = new FakeConfirmationDialogService();
 
     return new DesktopUiTestContext(
         rootPath,
@@ -3568,7 +5032,11 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
         fakeLocalFallbackReader,
         new FakeAutoStartService(),
         new FakeBotProcessService(),
-        fakeActivityStateStore);
+        fakeActivityStateStore,
+        fakeLocalBootstrapStore,
+        fakeLocalPathOperationsService,
+        fakeLocalStateSnapshotService,
+        fakeConfirmationDialogService);
 }
 
 static async Task WaitForAsync(Func<bool> predicate, string label, int timeoutMs = 5000, int intervalMs = 50)
@@ -3692,6 +5160,19 @@ async Task RunOnStaThreadAsync(Func<Task> action)
 {
     if (uiDispatcher is null)
     {
+        if (System.Windows.Application.Current is QQAIBot.Desktop.App existingApp &&
+            !existingApp.Dispatcher.HasShutdownStarted &&
+            !existingApp.Dispatcher.HasShutdownFinished)
+        {
+            uiApp = existingApp;
+            uiDispatcher = existingApp.Dispatcher;
+        }
+    }
+
+    if (uiDispatcher is null)
+    {
+        uiDispatcherReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        uiThreadStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         uiThread = new Thread(() =>
         {
             try
@@ -3812,9 +5293,36 @@ static async Task AssertThrowsAsync<TException>(Func<Task> action, string messag
     throw new InvalidOperationException(message);
 }
 
+static void KillStaleDesktopTestProcesses()
+{
+    var currentProcessId = Environment.ProcessId;
+
+    foreach (var process in Process.GetProcessesByName("QQAIBot.Desktop.Tests"))
+    {
+        try
+        {
+            if (process.Id == currentProcessId)
+            {
+                continue;
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
+        catch
+        {
+            // Best-effort cleanup only.
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+}
+
 sealed class FakeAutoStartService : IAutoStartService
 {
-    public bool Enabled { get; private set; }
+    public bool Enabled { get; set; }
 
     public bool IsEnabled() => Enabled;
 
@@ -3963,6 +5471,218 @@ sealed class FakeLocalConfigFallbackReader : ILocalConfigFallbackReader
     }
 }
 
+sealed class FakeLocalBootstrapConfigStore : ILocalBootstrapConfigStore
+{
+    public int SaveCallCount { get; private set; }
+
+    public string LastRootPath { get; private set; } = string.Empty;
+
+    public string LastKey { get; private set; } = string.Empty;
+
+    public string LastValue { get; private set; } = string.Empty;
+
+    public Task SaveExtraValueAsync(string rootPath, string key, string? value)
+    {
+        SaveCallCount += 1;
+        LastRootPath = rootPath;
+        LastKey = key;
+        LastValue = value ?? string.Empty;
+        return Task.CompletedTask;
+    }
+}
+
+sealed class FakeLocalPathOperationsService : ILocalPathOperationsService
+{
+    public List<string> OpenedFolders { get; } = [];
+
+    public string LastClearedDirectory { get; private set; } = string.Empty;
+
+    public int ClearCallCount { get; private set; }
+
+    public int ClearResult { get; set; } = 2;
+
+    public void OpenFolder(string path)
+    {
+        OpenedFolders.Add(path);
+    }
+
+    public int ClearDirectoryContents(string path)
+    {
+        ClearCallCount += 1;
+        LastClearedDirectory = path;
+        return ClearResult;
+    }
+}
+
+sealed class FakeLocalStateSnapshotService : ILocalStateSnapshotService
+{
+    public int ExportCallCount { get; private set; }
+    public int ExportSafeCallCount { get; private set; }
+
+    public int RestoreCallCount { get; private set; }
+
+    public int ListCallCount { get; private set; }
+
+    public int DeleteCallCount { get; private set; }
+
+    public int PreviewCallCount { get; private set; }
+
+    public string LastBackendRootPath { get; private set; } = string.Empty;
+
+    public string LastRestoreArchivePath { get; private set; } = string.Empty;
+
+    public string LastDeletedArchivePath { get; private set; } = string.Empty;
+
+    public string LastPreviewArchivePath { get; private set; } = string.Empty;
+
+    public LocalStateSnapshotResult Result { get; set; } = new()
+    {
+        ArchivePath = @"D:\snapshots\runtime-state-test.zip",
+        IncludedEntries = ["app/.env", "app/data/sessions.json"]
+    };
+
+    public IReadOnlyList<LocalStateSnapshotDescriptor> Snapshots { get; set; } =
+    [
+        new LocalStateSnapshotDescriptor
+        {
+            ArchivePath = @"D:\snapshots\runtime-state-test.zip",
+            FileName = "runtime-state-test.zip",
+            CreatedAtText = "2026-03-26 20:00:00",
+            Summary = "2026-03-26 20:00:00 | 2 entries | includes secrets",
+            Detail = "app/.env\napp/data/sessions.json",
+            IncludesSecrets = true,
+            IncludedEntries = ["app/.env", "app/data/sessions.json"]
+        },
+        new LocalStateSnapshotDescriptor
+        {
+            ArchivePath = @"D:\snapshots\runtime-state-older.zip",
+            FileName = "runtime-state-older.zip",
+            CreatedAtText = "2026-03-25 20:00:00",
+            Summary = "2026-03-25 20:00:00 | 1 entry | includes secrets",
+            Detail = "app/.env",
+            IncludesSecrets = true,
+            IncludedEntries = ["app/.env"]
+        }
+    ];
+
+    public LocalStateSnapshotPreviewResult PreviewResult { get; set; } = new()
+    {
+        ArchivePath = @"D:\snapshots\runtime-state-test.zip",
+        Lines =
+        [
+            ".env: differs from current state",
+            ".env tracked keys changed: OPENAI_API_KEY, NAPCAT_TOKEN",
+            "OPENAI_API_KEY: ********9999 -> ********1234",
+            "NAPCAT_TOKEN: ********5678 -> ********5678",
+            "data/: differs from current state",
+            "data files restored: sessions.json (changed)",
+            "data current-only files: none",
+            "sessions.json conversations: current 3 -> snapshot 2",
+            "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC",
+            "sessions.json changed conversations: qq:group-c/user-c (current-only), qq:group-b/user-b (changed)",
+            "desktop activity state: matches current state"
+        ],
+        Recommendations =
+        [
+            "Recommended: export your current state before restoring so you can roll back if needed.",
+            "Caution: this snapshot includes .env secrets. Avoid sharing the archive outside this device."
+        ]
+    };
+
+    public Task<LocalStateSnapshotResult> ExportAsync(string backendRootPath)
+    {
+        ExportCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        return Task.FromResult(Result);
+    }
+
+    public Task<LocalStateSnapshotResult> ExportSafeAsync(string backendRootPath)
+    {
+        ExportSafeCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        return Task.FromResult(new LocalStateSnapshotResult
+        {
+            ArchivePath = @"D:\snapshots\runtime-state-safe-test.zip",
+            IncludedEntries = ["app/data/sessions.json"],
+            IncludesSecrets = false
+        });
+    }
+
+    public Task<IReadOnlyList<LocalStateSnapshotDescriptor>> ListAsync(string backendRootPath)
+    {
+        ListCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        return Task.FromResult(Snapshots);
+    }
+
+    public Task DeleteAsync(string archivePath)
+    {
+        DeleteCallCount += 1;
+        LastDeletedArchivePath = archivePath;
+        Snapshots = Snapshots.Where((snapshot) => !string.Equals(snapshot.ArchivePath, archivePath, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return Task.CompletedTask;
+    }
+
+    public Task<LocalStateSnapshotPreviewResult> PreviewAsync(string backendRootPath, string archivePath)
+    {
+        PreviewCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        LastPreviewArchivePath = archivePath;
+        return Task.FromResult(PreviewResult with { ArchivePath = archivePath });
+    }
+
+    public Task<LocalStateSnapshotRestoreResult> RestoreAsync(string backendRootPath, string archivePath)
+    {
+        RestoreCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        LastRestoreArchivePath = archivePath;
+        return Task.FromResult(new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = archivePath,
+            RestoredEntries = Result.IncludedEntries
+        });
+    }
+
+    public Task<LocalStateSnapshotRestoreResult> RestoreLatestAsync(string backendRootPath)
+    {
+        RestoreCallCount += 1;
+        LastBackendRootPath = backendRootPath;
+        LastRestoreArchivePath = Result.ArchivePath;
+        return Task.FromResult(new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = Result.ArchivePath,
+            RestoredEntries = Result.IncludedEntries
+        });
+    }
+}
+
+sealed class FakeConfirmationDialogService : IConfirmationDialogService
+{
+    public int ConfirmCallCount { get; private set; }
+
+    public string LastTitle { get; private set; } = string.Empty;
+
+    public string LastMessage { get; private set; } = string.Empty;
+
+    public Queue<bool> Results { get; } = new();
+
+    public bool DefaultResult { get; set; } = true;
+
+    public bool Confirm(string title, string message)
+    {
+        ConfirmCallCount += 1;
+        LastTitle = title;
+        LastMessage = message;
+
+        if (Results.Count > 0)
+        {
+            return Results.Dequeue();
+        }
+
+        return DefaultResult;
+    }
+}
+
 sealed class FakeBackendControlApiService : IBackendControlApiService
 {
     public BackendRuntimeStatus? Status { get; set; }
@@ -3993,6 +5713,10 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
 
     public string ConfigFailureMessage { get; set; } = string.Empty;
 
+    public BackendControlApiFailureKind StatusFailureKind { get; set; } = BackendControlApiFailureKind.None;
+
+    public string StatusFailureMessage { get; set; } = string.Empty;
+
     public BackendControlApiFailureKind SaveFailureKind { get; set; } = BackendControlApiFailureKind.None;
 
     public string SaveFailureMessage { get; set; } = string.Empty;
@@ -4005,6 +5729,17 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
     public Task<BackendRuntimeStatus?> TryGetStatusAsync(CancellationToken cancellationToken = default)
     {
         GetStatusCallCount += 1;
+
+        if (StatusFailureKind != BackendControlApiFailureKind.None)
+        {
+            LastFailure = new BackendControlApiFailure
+            {
+                Kind = StatusFailureKind,
+                Message = StatusFailureMessage
+            };
+            return Task.FromResult<BackendRuntimeStatus?>(null);
+        }
+
         LastFailure = Status is null
             ? new BackendControlApiFailure
             {
@@ -4236,7 +5971,7 @@ sealed class FakeNotifyIconHost : INotifyIconHost
 
     public bool Visible { get; set; } = true;
 
-    public string Text { get; set; } = "QQ AI Bot";
+    public string Text { get; set; } = "Local AI Runtime";
 
     public string BalloonTipTitle { get; set; } = string.Empty;
 
@@ -4267,4 +6002,8 @@ sealed record DesktopUiTestContext(
     FakeLocalConfigFallbackReader FakeLocalFallbackReader,
     FakeAutoStartService FakeAutoStart,
     FakeBotProcessService FakeBotProcess,
-    FakeActivityStateStore FakeActivityStateStore);
+    FakeActivityStateStore FakeActivityStateStore,
+    FakeLocalBootstrapConfigStore FakeLocalBootstrapStore,
+    FakeLocalPathOperationsService FakeLocalPathOperationsService,
+    FakeLocalStateSnapshotService FakeLocalStateSnapshotService,
+    FakeConfirmationDialogService FakeConfirmationDialogService);

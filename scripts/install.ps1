@@ -51,6 +51,31 @@ function Resolve-InstallRootPath {
     return Resolve-AbsolutePath (Join-Path $env:LOCALAPPDATA "QQAIBot")
 }
 
+function Get-DesktopActivityStateStoreRootPath {
+    return Join-Path $env:LOCALAPPDATA "QQAIBot.Desktop\activity-state"
+}
+
+function Resolve-DesktopActivityStateFilePath {
+    param([string]$BackendRootPath)
+
+    $normalizedPath = if ([string]::IsNullOrWhiteSpace($BackendRootPath)) {
+        "default"
+    }
+    else {
+        $BackendRootPath.Trim().ToLowerInvariant()
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalizedPath))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    $hash = ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
+    return Join-Path (Get-DesktopActivityStateStoreRootPath) "$hash.json"
+}
+
 function Assert-CommandExists {
     param([string]$Name)
 
@@ -167,10 +192,22 @@ $desktopPublishPath = Join-Path $appRootPath "desktop-publish"
 $desktopProjectPath = Join-Path $appRootPath "desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj"
 $desktopExePath = Join-Path $desktopPublishPath "QQAIBot.Desktop.exe"
 $installInfoPath = Join-Path $installRootPath "install-info.json"
-$desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "QQ AI Bot.lnk"
-$startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
+$envPath = Join-Path $appRootPath ".env"
+$dataRootPath = Join-Path $appRootPath "data"
+$sessionStorePath = Join-Path $dataRootPath "sessions.json"
+$imageCachePath = Join-Path $dataRootPath "image-cache"
+$snapshotRootPath = Join-Path $appRootPath "artifacts\state-snapshots"
+$desktopActivityStatePath = Resolve-DesktopActivityStateFilePath -BackendRootPath $appRootPath
+$desktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "Local AI Runtime.lnk"
+$startMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "Local AI Runtime.lnk"
+$legacyDesktopShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "QQ AI Bot.lnk"
+$legacyStartMenuShortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "QQ AI Bot.lnk"
 $hasBundledNodeModules = Test-Path $bundledNodeModulesPath
 $hasBundledDesktopPublish = Test-Path $bundledDesktopExePath
+$hadExistingEnv = Test-Path $envPath
+$hadExistingData = Test-Path $dataRootPath
+$hadExistingSnapshots = Test-Path $snapshotRootPath
+$hadExistingDesktopActivityState = Test-Path $desktopActivityStatePath
 $packageVersion = Get-PackageVersion -PackageJsonPath (Join-Path $packageRootPath "package.json")
 $desktopVersionMetadata = Get-DesktopVersionMetadata -SemanticVersion $packageVersion
 
@@ -201,6 +238,12 @@ if (-not $SkipDesktopPublish -and -not $hasBundledDesktopPublish) {
 
 if ($ValidateOnly) {
     Write-Step "Validation succeeded."
+    Write-Host "Expected app root:              $appRootPath"
+    Write-Host "Expected config file (.env):    $envPath"
+    Write-Host "Expected sessions store:        $sessionStorePath"
+    Write-Host "Expected image cache:           $imageCachePath"
+    Write-Host "Expected state snapshots:       $snapshotRootPath"
+    Write-Host "Expected desktop activity state:$desktopActivityStatePath"
     exit 0
 }
 
@@ -272,10 +315,14 @@ foreach ($relativePath in $cleanupPaths) {
     Remove-IfExists -Path (Join-Path $appRootPath $relativePath)
 }
 
-$envPath = Join-Path $appRootPath ".env"
+$createdEnvFromExample = $false
 if (-not (Test-Path $envPath)) {
     Write-Step "Creating .env from .env.example"
     Copy-Item (Join-Path $appRootPath ".env.example") -Destination $envPath -Force
+    $createdEnvFromExample = $true
+}
+else {
+    Write-Step "Keeping existing .env"
 }
 
 Push-Location $appRootPath
@@ -310,19 +357,23 @@ if (-not (Test-Path $desktopExePath)) {
 }
 
 if (-not $NoShortcuts) {
+    Write-Step "Removing legacy shortcuts"
+    Remove-IfExists -Path $legacyDesktopShortcutPath
+    Remove-IfExists -Path $legacyStartMenuShortcutPath
+
     Write-Step "Creating desktop shortcut"
     New-Shortcut `
         -ShortcutPath $desktopShortcutPath `
         -TargetPath $desktopExePath `
         -WorkingDirectory $appRootPath `
-        -Description "Launch QQ AI Bot desktop console"
+        -Description "Launch Local AI Runtime Console"
 
     Write-Step "Creating Start Menu shortcut"
     New-Shortcut `
         -ShortcutPath $startMenuShortcutPath `
         -TargetPath $desktopExePath `
         -WorkingDirectory $appRootPath `
-        -Description "Launch QQ AI Bot desktop console"
+        -Description "Launch Local AI Runtime Console"
 }
 
 $installInfo = @{
@@ -332,16 +383,51 @@ $installInfo = @{
     installRoot = $installRootPath
     appRoot = $appRootPath
     desktopExePath = $desktopExePath
+    envPath = $envPath
+    dataRootPath = $dataRootPath
+    sessionStorePath = $sessionStorePath
+    imageCachePath = $imageCachePath
+    snapshotRootPath = $snapshotRootPath
+    desktopActivityStatePath = $desktopActivityStatePath
+    desktopShortcutPath = $desktopShortcutPath
+    startMenuShortcutPath = $startMenuShortcutPath
     usedBundledNodeModules = $hasBundledNodeModules
     usedBundledDesktopPublish = $hasBundledDesktopPublish
 } | ConvertTo-Json
 
 Set-Content -Path $installInfoPath -Value $installInfo -Encoding UTF8
 
+$configStatusParts = @()
+$configStatusParts += if ($createdEnvFromExample) { "created .env from .env.example" } else { "kept existing .env" }
+if ($hadExistingData) {
+    $configStatusParts += "kept existing data/"
+}
+if ($hadExistingSnapshots) {
+    $configStatusParts += "kept existing state snapshots"
+}
+if ($hadExistingDesktopActivityState) {
+    $configStatusParts += "kept desktop activity history"
+}
+
 Write-Host ""
 Write-Host "Install completed."
-Write-Host "App root:        $appRootPath"
-Write-Host "Desktop binary:  $desktopExePath"
-Write-Host "Config file:     $envPath"
+Write-Host "App root:                    $appRootPath"
+Write-Host "Desktop binary:              $desktopExePath"
+Write-Host "Config file (.env):          $envPath"
+Write-Host "Sessions store:              $sessionStorePath"
+Write-Host "Image cache:                 $imageCachePath"
+Write-Host "State snapshots:             $snapshotRootPath"
+Write-Host "Desktop activity state:      $desktopActivityStatePath"
+if (-not $NoShortcuts) {
+    Write-Host "Desktop shortcut:            $desktopShortcutPath"
+    Write-Host "Start menu shortcut:         $startMenuShortcutPath"
+}
+else {
+    Write-Host "Shortcuts:                   skipped (-NoShortcuts)"
+}
+Write-Host "Config status:               $([string]::Join('; ', $configStatusParts))"
 Write-Host ""
-Write-Host "Re-run this script with a newer package to upgrade in place."
+Write-Host "Upgrade behavior:"
+Write-Host "- Re-run this script with a newer package to upgrade in place."
+Write-Host "- Upgrades replace app files under app\ and keep .env, data\, artifacts\state-snapshots, and the desktop activity state file."
+Write-Host "- If this was the first install, fill in .env before starting the runtime."

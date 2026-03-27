@@ -12,7 +12,7 @@ public sealed class NotifyIconHost : INotifyIconHost
         _notifyIcon = new Forms.NotifyIcon
         {
             Icon = Drawing.SystemIcons.Application,
-            Text = "QQ AI Bot",
+            Text = "Local AI Runtime",
             Visible = true,
             ContextMenuStrip = contextMenuStrip
         };

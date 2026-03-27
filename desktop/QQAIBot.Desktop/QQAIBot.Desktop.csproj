@@ -9,9 +9,9 @@
     <AssemblyName>QQAIBot.Desktop</AssemblyName>
     <RootNamespace>QQAIBot.Desktop</RootNamespace>
     <ApplicationIcon>..\..\installer\assets\qq-ai-bot.ico</ApplicationIcon>
-    <AssemblyTitle>QQ AI Bot</AssemblyTitle>
-    <Product>QQ AI Bot</Product>
-    <Description>Desktop control console for the QQ and WeChat AI bot runtime.</Description>
+    <AssemblyTitle>Local AI Runtime Console</AssemblyTitle>
+    <Product>Local AI Runtime</Product>
+    <Description>Desktop control console for the local multi-process AI runtime.</Description>
     <Company>Wind-Maker1001</Company>
     <Authors>Wind-Maker1001</Authors>
     <Copyright>Copyright (c) Wind-Maker1001</Copyright>

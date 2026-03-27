@@ -85,7 +85,7 @@ public static class BackendControlApiStatusPollCoordinator
             logMessages.Add("Control API became unreachable.");
             notifications.Add(new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = "Control API is unreachable. The supervisor may be stopped or restarting.",
                 Icon = Forms.ToolTipIcon.Warning
             });
@@ -117,7 +117,7 @@ public static class BackendControlApiStatusPollCoordinator
             logMessages.Add("Control API became reachable again.");
             notifications.Add(new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = "Control API is reachable again.",
                 Icon = Forms.ToolTipIcon.Info
             });
@@ -130,7 +130,7 @@ public static class BackendControlApiStatusPollCoordinator
             logMessages.Add($"Worker restarted: {previousWorkerPid} -> {currentWorkerPid}");
             notifications.Add(new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = $"Worker restarted automatically ({previousWorkerPid} -> {currentWorkerPid}).",
                 Icon = Forms.ToolTipIcon.Info
             });
@@ -143,7 +143,7 @@ public static class BackendControlApiStatusPollCoordinator
             logMessages.Add($"Wechat worker restarted: {previousWechatWorkerPid} -> {currentWechatWorkerPid}");
             notifications.Add(new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = $"Wechat worker restarted automatically ({previousWechatWorkerPid} -> {currentWechatWorkerPid}).",
                 Icon = Forms.ToolTipIcon.Info
             });
@@ -154,7 +154,7 @@ public static class BackendControlApiStatusPollCoordinator
             logMessages.Add("Runtime became inactive.");
             notifications.Add(new TrayNotification
             {
-                Title = "QQ AI Bot",
+                Title = "Local AI Runtime",
                 Message = "Runtime is stopped.",
                 Icon = Forms.ToolTipIcon.Warning
             });

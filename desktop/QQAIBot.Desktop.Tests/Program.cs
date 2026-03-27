@@ -48,6 +48,7 @@ await RunTestAsync("BackendControlApiService uses camelCase control API contract
 await RunTestAsync("BackendExecutionProjectionFormatter formats direct and degraded deliberation projections", TestBackendExecutionProjectionFormatterAsync);
 await RunTestAsync("BackendLlmProjectionFormatter formats request and failure details", TestBackendLlmProjectionFormatterAsync);
 await RunTestAsync("BackendActivityProjectionFormatter formats summaries and timelines", TestBackendActivityProjectionFormatterAsync);
+await RunTestAsync("BackendLatestTurnOverviewBuilder compresses latest turn state into user-facing guidance", TestBackendLatestTurnOverviewBuilderAsync);
 await RunTestAsync("DesktopHealthReportBuilder surfaces setup blockers and ready-to-start guidance", TestDesktopHealthReportBuilderAsync);
 await RunTestAsync("BackendRecentActivityProjector updates order, selection, and de-duplicates replayed events", TestBackendRecentActivityProjectorAsync);
 await RunTestAsync("BackendRecentActivityViewStateHelper filters items and resolves visible selection", TestBackendRecentActivityViewStateHelperAsync);
@@ -1060,6 +1061,130 @@ Task TestBackendActivityProjectionFormatterAsync()
     return Task.CompletedTask;
 }
 
+Task TestBackendLatestTurnOverviewBuilderAsync()
+{
+    var failureOverview = BackendLatestTurnOverviewBuilder.Build(
+        new BackendRuntimeSnapshotViewState
+        {
+            LastQqLlmRequest = new BackendLlmRequestStatus
+            {
+                Route = "default",
+                Model = "gpt-5.4",
+                EffectiveApiStyle = "responses",
+                CapturedAt = "2026-03-24T00:00:04.000Z",
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "default"
+                    },
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        CapabilityReasons = ["default"],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        EnableWebSearch = false,
+                        EnableCodeInterpreter = false
+                    },
+                    RouteReason = "default"
+                },
+                ExecutionKind = BackendExecutionProjectionTags.DirectKind
+            },
+            LastWechatLlmFailure = new BackendLlmFailureStatus
+            {
+                Route = "advanced",
+                MatchedPrefix = "/gpt",
+                CapturedAt = "2026-03-24T00:00:05.000Z",
+                Error = "provider rejected request",
+                ExecutionKind = BackendExecutionProjectionTags.DeliberationKind,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DeliberationKind,
+                    FailedStage = BackendExecutionProjectionTags.DraftStage,
+                    CompletedStages = [BackendExecutionProjectionTags.PlannerStage]
+                },
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "directive",
+                        MatchedPrefix = "/gpt"
+                    },
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        CapabilityReasons = ["default"],
+                        UpgradeReasons = ["capability_upgrade"]
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        EnableWebSearch = true,
+                        EnableCodeInterpreter = true
+                    },
+                    RouteReason = "directive:/gpt"
+                }
+            }
+        });
+
+    AssertEqual(DesktopHealthState.Warning, failureOverview.State, "Latest-turn overview should mark the card as warning when the newest event is a failure.");
+    AssertContains(failureOverview.Headline, "WeChat failed", "Latest-turn overview should identify the failing channel.");
+    AssertContains(failureOverview.Summary, "advanced route", "Latest-turn overview should keep route-level context visible.");
+    AssertContains(failureOverview.Capabilities, "web on", "Latest-turn overview should surface whether web search was requested.");
+    AssertContains(failureOverview.Capabilities, "code on", "Latest-turn overview should surface whether code interpreter was requested.");
+    AssertContains(failureOverview.Reason, "directive /gpt", "Latest-turn overview should surface the trigger in user-facing form.");
+    AssertContains(failureOverview.Outcome, "failed during draft after planner", "Latest-turn overview should compress the failing execution stage.");
+    AssertEqual("Review WeChat failure", failureOverview.ActionLabel, "Latest-turn overview should route failures to the relevant channel review action.");
+    AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, failureOverview.ActionKey, "Latest-turn overview should expose the failing-channel action key.");
+
+    var localReplyOverview = BackendLatestTurnOverviewBuilder.Build(
+        new BackendRuntimeSnapshotViewState
+        {
+            LastQqLlmRequest = new BackendLlmRequestStatus
+            {
+                Route = "default",
+                Model = "gpt-5.4",
+                EffectiveApiStyle = "responses",
+                CapturedAt = "2026-03-24T00:00:06.000Z",
+                ImageCount = 0,
+                ExecutionKind = BackendExecutionProjectionTags.LocalCapabilityReplyKind,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.LocalCapabilityReplyKind
+                },
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "default"
+                    },
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        CapabilityReasons = ["default"],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        EnableWebSearch = false,
+                        EnableCodeInterpreter = false
+                    },
+                    RouteReason = "default"
+                }
+            }
+        });
+
+    AssertEqual(DesktopHealthState.Good, localReplyOverview.State, "Successful latest turns should surface as healthy.");
+    AssertContains(localReplyOverview.Headline, "answered locally", "Latest-turn overview should distinguish local replies from LLM calls.");
+    AssertContains(localReplyOverview.Outcome, "without calling the LLM", "Latest-turn overview should explicitly state when the turn stayed local.");
+    AssertEqual("Review recent activity", localReplyOverview.ActionLabel, "Successful latest turns should route to recent-activity review.");
+    AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, localReplyOverview.ActionKey, "Successful latest turns should expose the generic recent-activity action.");
+
+    var emptyOverview = BackendLatestTurnOverviewBuilder.Build(new BackendRuntimeSnapshotViewState());
+    AssertContains(emptyOverview.Headline, "no recent QQ or WeChat activity", "Latest-turn overview should expose a calm empty state when nothing has run yet.");
+
+    return Task.CompletedTask;
+}
+
 Task TestDesktopHealthReportBuilderAsync()
 {
     var setupBlockedReport = DesktopHealthReportBuilder.Build(
@@ -1092,6 +1217,11 @@ Task TestDesktopHealthReportBuilderAsync()
     AssertEqual(DesktopHealthActionKeys.FocusNapCatToken, setupBlockedReport.Checks[2].ActionKey, "QQ checklist item should expose the token focus action.");
     AssertEqual(string.Empty, setupBlockedReport.LatestIssueActionLabel, "Health report should not distract first-run setup with a latest-issue action button.");
     AssertEqual("Enable startup", setupBlockedReport.Checks[4].ActionLabel, "Resident mode should still explain how to enable startup later.");
+    AssertEqual("1", setupBlockedReport.NextActions[0].StepNumber, "Action queue should number the first guided action.");
+    AssertEqual("Add an OpenAI-compatible key", setupBlockedReport.NextActions[0].Title, "Action queue should start with the first missing required credential.");
+    AssertEqual("Go to API keys", setupBlockedReport.NextActions[0].ActionLabel, "Action queue should surface the matching one-click remediation.");
+    AssertEqual("Add the NapCat token", setupBlockedReport.NextActions[1].Title, "Action queue should keep the second blocking setup item visible.");
+    AssertContains(setupBlockedReport.ActionSummary, "Current focus: Add an OpenAI-compatible key", "Action summary should compress first-run setup into one focus sentence.");
 
     var readyToStartReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1129,6 +1259,9 @@ Task TestDesktopHealthReportBuilderAsync()
     AssertEqual("Enable startup", readyToStartReport.Checks[4].ActionLabel, "Resident mode should expose a one-click startup action when auto-start is off.");
     AssertEqual(DesktopHealthActionKeys.ToggleAutoStart, readyToStartReport.Checks[4].ActionKey, "Resident mode should route to the auto-start toggle action.");
     AssertContains(readyToStartReport.Checks[4].Detail, "Exit Desktop closes only this window", "Resident mode should explain that closing desktop is separate from stopping backend.");
+    AssertEqual("Start the backend", readyToStartReport.NextActions[0].Title, "Action queue should point to backend start once setup is complete.");
+    AssertEqual("Start backend", readyToStartReport.NextActions[0].ActionLabel, "Action queue should expose the direct backend start action.");
+    AssertEqual("Enable startup later (optional)", readyToStartReport.NextActions[1].Title, "Action queue should keep resident-mode setup visible as a lower-priority follow-up.");
 
     var qqReadyWechatWaitingReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1156,6 +1289,8 @@ Task TestDesktopHealthReportBuilderAsync()
 
     AssertContains(qqReadyWechatWaitingReport.ChecklistStatus, "1 runtime warning", "Health report should count optional runtime follow-up items separately once setup is complete.");
     AssertContains(qqReadyWechatWaitingReport.ReadyNowText, "QQ is ready for daily use", "Health report should tell the user QQ can still be used when only WeChat is waiting.");
+    AssertEqual("Check the WeChat bridge", qqReadyWechatWaitingReport.NextActions[0].Title, "Action queue should surface WeChat follow-up only after QQ is already ready.");
+    AssertEqual("Go to WeChat config", qqReadyWechatWaitingReport.NextActions[0].ActionLabel, "WeChat follow-up should stay one click away.");
 
     var unauthorizedIssueReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1179,6 +1314,7 @@ Task TestDesktopHealthReportBuilderAsync()
 
     AssertEqual("Go to local token", unauthorizedIssueReport.LatestIssueActionLabel, "Unauthorized latest issue should expose a local-token fix action.");
     AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, unauthorizedIssueReport.LatestIssueActionKey, "Unauthorized latest issue should route to the local token field.");
+    AssertEqual("Sync the desktop control token", unauthorizedIssueReport.NextActions[0].Title, "Action queue should front-load local-token recovery when desktop is locked out.");
 
     var runtimeFailureIssueReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1205,6 +1341,8 @@ Task TestDesktopHealthReportBuilderAsync()
 
     AssertEqual("Review WeChat failure", runtimeFailureIssueReport.LatestIssueActionLabel, "Latest runtime failure should expose the failing channel activity action.");
     AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, runtimeFailureIssueReport.LatestIssueActionKey, "Latest runtime failure should route to the failing WeChat activity.");
+    AssertEqual("Review the latest issue", runtimeFailureIssueReport.NextActions[0].Title, "Action queue should surface runtime failures once setup and startup blockers are gone.");
+    AssertEqual("Review WeChat failure", runtimeFailureIssueReport.NextActions[0].ActionLabel, "Runtime failure action should stay one click away from the action queue.");
 
     var startupEnabledReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1227,6 +1365,8 @@ Task TestDesktopHealthReportBuilderAsync()
     AssertEqual("Starts with Windows", startupEnabledReport.Checks[4].StateText, "Resident mode should confirm when startup is enabled.");
     AssertEqual(string.Empty, startupEnabledReport.Checks[4].ActionLabel, "Resident mode should not prompt for startup when it is already enabled.");
     AssertContains(startupEnabledReport.Checks[4].Detail, "use Stop backend", "Resident mode should explain how to fully stop the runtime when startup is enabled.");
+    AssertEqual(0, startupEnabledReport.NextActions.Count, "Action queue should disappear when nothing urgent is left to do.");
+    AssertContains(startupEnabledReport.ActionSummary, "nothing urgent is blocking", "Action summary should explicitly say when the runtime is calm.");
 
     return Task.CompletedTask;
 }
@@ -2029,6 +2169,22 @@ Task TestDesktopOperationErrorFormatterAsync()
     AssertEqual("Go to local token", localSettingsError.SuggestedActionLabel, "Local settings guidance should suggest the local token field.");
     AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, localSettingsError.SuggestedActionKey, "Local settings guidance should route to the local token field.");
 
+    var unreachable = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Load config",
+        fallbackStatusText: "Load failed",
+        technicalMessage: "No connection could be made because the target machine actively refused it.",
+        controlApiFailure: new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "No connection could be made because the target machine actively refused it."
+        },
+        canStartBackend: true);
+
+    AssertContains(unreachable.DialogMessage, "What happened", "Unreachable guidance should use the structured dialog layout.");
+    AssertContains(unreachable.DialogMessage, "Start the backend from this window", "Unreachable guidance should explicitly tell the user to start the backend when that action is available.");
+    AssertEqual("Start backend", unreachable.SuggestedActionLabel, "Unreachable guidance should route to backend start when the desktop can still launch it.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, unreachable.SuggestedActionKey, "Unreachable guidance should expose the backend start action.");
+
     return Task.CompletedTask;
 }
 
@@ -2066,6 +2222,8 @@ Task TestBackendRuntimeSnapshotViewHelperAsync()
 
     AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestQqLlmDetailText)), "Runtime snapshot notifier should include QQ detail properties.");
     AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestWechatLlmDetailText)), "Runtime snapshot notifier should include Wechat detail properties.");
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestTurnHeadlineText)), "Runtime snapshot notifier should include latest-turn overview headline.");
+    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestTurnOutcomeText)), "Runtime snapshot notifier should include latest-turn overview outcome.");
     AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedQqRecentActivityDetailText)), "Runtime snapshot notifier should include QQ selected activity detail.");
     AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedWechatRecentActivityDetailText)), "Runtime snapshot notifier should include Wechat selected activity detail.");
     return Task.CompletedTask;
@@ -2659,7 +2817,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                     () => (window.FindName("OpenAiAdvancedEnableWebSearchCheckBox") as CheckBox)?.IsChecked == true,
                     "openai advanced web search checkbox binding");
                 await WaitForAsync(
-                    () => ((window.FindName("DefaultBotInstructionsTextBox") as TextBox)?.Text ?? string.Empty).Contains("你是本地消息助手，会处理来自 QQ 和微信的消息。", StringComparison.Ordinal),
+                    () => ((window.FindName("DefaultBotInstructionsTextBox") as TextBox)?.Text ?? string.Empty).Contains("你是本地 AI 助手，会处理来自 QQ 和微信的消息。", StringComparison.Ordinal),
                     "default bot instructions textbox binding");
                 await WaitForAsync(
                     () => ((window.FindName("LatestQqLlmSummaryTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("default / gpt-5.4 / responses", StringComparison.Ordinal),
@@ -2698,6 +2856,22 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("OverallReadinessRecentActivityTextBlock not found.");
                 var overallReadinessActionButton = window.FindName("OverallReadinessActionButton") as Button
                     ?? throw new InvalidOperationException("OverallReadinessActionButton not found.");
+                var overallReadinessActionSummaryTextBlock = window.FindName("OverallReadinessActionSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("OverallReadinessActionSummaryTextBlock not found.");
+                var overallReadinessActionsItemsControl = window.FindName("OverallReadinessActionsItemsControl") as ItemsControl
+                    ?? throw new InvalidOperationException("OverallReadinessActionsItemsControl not found.");
+                var latestTurnHeadlineTextBlock = window.FindName("LatestTurnHeadlineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestTurnHeadlineTextBlock not found.");
+                var latestTurnSummaryTextBlock = window.FindName("LatestTurnSummaryTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestTurnSummaryTextBlock not found.");
+                var latestTurnCapabilitiesTextBlock = window.FindName("LatestTurnCapabilitiesTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestTurnCapabilitiesTextBlock not found.");
+                var latestTurnReasonTextBlock = window.FindName("LatestTurnReasonTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestTurnReasonTextBlock not found.");
+                var latestTurnOutcomeTextBlock = window.FindName("LatestTurnOutcomeTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("LatestTurnOutcomeTextBlock not found.");
+                var latestTurnActionButton = window.FindName("LatestTurnActionButton") as Button
+                    ?? throw new InvalidOperationException("LatestTurnActionButton not found.");
                 var defaultBotInstructionsTextBox = window.FindName("DefaultBotInstructionsTextBox") as TextBox
                     ?? throw new InvalidOperationException("DefaultBotInstructionsTextBox not found.");
                 var botPersonaTextBox = window.FindName("BotPersonaTextBox") as TextBox
@@ -2873,9 +3047,17 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertTrue(viewModel.DailyUseGuideSteps[0].IsCurrent, "Daily-use guide should highlight runtime reachability first while backend is stopped.");
                 AssertEqual("Setup in progress", overallReadinessStateTextBlock.Text, "Overall readiness should show setup-in-progress before the runtime is online.");
                 AssertContains(overallReadinessSummaryTextBlock.Text, "highlighted first-run step", "Overall readiness should explain that first-run setup is still active.");
+                AssertContains(overallReadinessActionSummaryTextBlock.Text, "Current focus: Start the backend", "Overall readiness should front-load the current guided action in one sentence.");
+                AssertEqual(viewModel.HealthNextActions.Count, overallReadinessActionsItemsControl.Items.Count, "Overall readiness should bind the same guided action queue exposed by the view model.");
                 AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity: QQ Request", "Overall readiness should summarize the latest captured activity.");
                 AssertEqual("Start backend", overallReadinessActionButton.Content?.ToString(), "Overall readiness should expose the next first-run action while setup is incomplete.");
-                AssertContains(defaultBotInstructionsTextBox.Text, "你是本地消息助手，会处理来自 QQ 和微信的消息。", "Default bot instructions textbox should show the backend default system prompt.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ completed", "Latest-turn card should front-load the newest captured turn.");
+                AssertContains(latestTurnSummaryTextBlock.Text, "default / gpt-5.4 / responses", "Latest-turn card should compress route/model/api context.");
+                AssertContains(latestTurnCapabilitiesTextBlock.Text, "web off", "Latest-turn card should expose current-turn capability decisions.");
+                AssertContains(latestTurnReasonTextBlock.Text, "trigger default", "Latest-turn card should explain why the current turn stayed on the default route.");
+                AssertContains(latestTurnOutcomeTextBlock.Text, "completed in one direct LLM call", "Latest-turn card should summarize direct successful execution.");
+                AssertEqual("Review recent activity", latestTurnActionButton.Content?.ToString(), "Latest-turn card should route successful turns to recent activity review.");
+                AssertContains(defaultBotInstructionsTextBox.Text, "你是本地 AI 助手，会处理来自 QQ 和微信的消息。", "Default bot instructions textbox should show the backend default system prompt.");
                 AssertContains(defaultBotInstructionsTextBox.Text, "默认使用简体中文。", "Default bot instructions textbox should show the backend language guidance.");
                 AssertEqual(defaultBotInstructionsTextBox.Text, effectiveBotInstructionsTextBox.Text, "Effective bot instructions should match the default prompt when BOT_PERSONA is empty.");
                 AssertFalse(defaultBotInstructionsTextBox.IsReadOnly, "System prompt textbox should be editable.");
@@ -3052,7 +3234,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertFalse(qqPinSelectionToggleButton.IsChecked ?? true, "Clearing QQ activity history should reset the pin toggle.");
                 AssertTrue(clearWechatActivityHistoryButton.Command.CanExecute(null), "Wechat clear activity history button should be enabled while events exist.");
                 AssertEqual("QQ channel ready", runtimeReadyText, "Runtime ready text should reflect runtime status.");
-                AssertEqual("Wechat channel ready", wechatRuntimeReadyText, "Wechat runtime ready text should reflect runtime status.");
+                AssertEqual("WeChat channel ready", wechatRuntimeReadyText, "WeChat runtime ready text should reflect runtime status.");
 
                 wechatPrefixTextBox.Text = "/wx";
                 defaultBotInstructionsTextBox.Text = "Base prompt line 1\r\nBase prompt line 2";
@@ -3114,6 +3296,9 @@ async Task TestMainWindowSmokeAutomationAsync()
                     "overall readiness action binding update");
                 AssertEqual("Review recent activity", overallReadinessActionButton.Content?.ToString(), "Overall readiness should offer recent activity review once no urgent issue remains.");
                 AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity:", "Overall readiness should keep showing the latest activity summary in the ready state.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ completed", "Latest-turn card should fall back to the newest successful turn after failures clear.");
+                AssertContains(latestTurnOutcomeTextBlock.Text, "degraded mode", "Latest-turn card should summarize degraded-but-successful execution after failures clear.");
+                AssertEqual("Review recent activity", latestTurnActionButton.Content?.ToString(), "Latest-turn card should switch back to recent-activity review when the newest turn succeeded.");
                 viewModel.RunHealthActionCommand.Execute(viewModel.OverallReadinessActionKey);
                 await WaitForAsync(
                     () => window.GetLastHealthActionTargetNameForTests() is "LatestQqRecentActivityListBox" or "LatestWechatRecentActivityListBox",
@@ -4288,10 +4473,20 @@ async Task TestMainWindowHealthActionsAsync()
                     ?? throw new InvalidOperationException("SelectedStateSnapshotSummaryTextBlock not found.");
                 var selectedStateSnapshotImpactTextBlock = window.FindName("SelectedStateSnapshotImpactTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("SelectedStateSnapshotImpactTextBlock not found.");
+                var selectedStateSnapshotSafetyHeadlineTextBlock = window.FindName("SelectedStateSnapshotSafetyHeadlineTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotSafetyHeadlineTextBlock not found.");
+                var selectedStateSnapshotSafetyRecommendationTextBlock = window.FindName("SelectedStateSnapshotSafetyRecommendationTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotSafetyRecommendationTextBlock not found.");
+                var selectedStateSnapshotRollbackHintTextBlock = window.FindName("SelectedStateSnapshotRollbackHintTextBlock") as TextBlock
+                    ?? throw new InvalidOperationException("SelectedStateSnapshotRollbackHintTextBlock not found.");
                 var selectedStateSnapshotDiffTextBlock = window.FindName("SelectedStateSnapshotDiffTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("SelectedStateSnapshotDiffTextBlock not found.");
                 var selectedStateSnapshotAdviceTextBlock = window.FindName("SelectedStateSnapshotAdviceTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("SelectedStateSnapshotAdviceTextBlock not found.");
+                var exportSafeRollbackSnapshotButton = window.FindName("ExportSafeRollbackSnapshotButton") as Button
+                    ?? throw new InvalidOperationException("ExportSafeRollbackSnapshotButton not found.");
+                var restoreSelectedSnapshotFromSafetyButton = window.FindName("RestoreSelectedSnapshotFromSafetyButton") as Button
+                    ?? throw new InvalidOperationException("RestoreSelectedSnapshotFromSafetyButton not found.");
 
                 AssertEqual("Start backend", healthPrimaryActionButton.Content?.ToString(), "Health primary action button should expose the next runtime action.");
                 AssertEqual("desktop-token", controlApiTokenTextBox.Text, "Local control-plane token textbox should reflect the local env value.");
@@ -4301,6 +4496,10 @@ async Task TestMainWindowHealthActionsAsync()
                 AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "entries", "State snapshot selection should expose a summary.");
                 AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "includes secrets", "State snapshot summary should expose secret-risk metadata.");
                 AssertContains(selectedStateSnapshotImpactTextBlock.Text, ".env", "State snapshot impact text should explain env overwrite risk.");
+                await WaitForAsync(() => selectedStateSnapshotSafetyHeadlineTextBlock.Text.Contains("high caution", StringComparison.Ordinal), "state snapshot safety summary");
+                AssertContains(selectedStateSnapshotSafetyHeadlineTextBlock.Text, "high caution", "Selected snapshot safety summary should elevate overwrite-plus-secret risk.");
+                AssertContains(selectedStateSnapshotSafetyRecommendationTextBlock.Text, "safe rollback snapshot", "Selected snapshot safety recommendation should tell the user the safest first step.");
+                AssertContains(selectedStateSnapshotRollbackHintTextBlock.Text, "without copying .env secrets", "Selected snapshot rollback hint should explain why the safe snapshot is safer.");
                 await WaitForAsync(() => selectedStateSnapshotDiffTextBlock.Text.Contains("differs", StringComparison.Ordinal), "state snapshot diff preview");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "OPENAI_API_KEY", "State snapshot diff preview should list changed tracked env keys.");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "********1234", "State snapshot diff preview should mask snapshot secret values.");
@@ -4311,6 +4510,8 @@ async Task TestMainWindowHealthActionsAsync()
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "qq:group-c/user-c", "State snapshot diff preview should show changed conversation keys.");
                 AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "export your current state", "State snapshot advice should recommend exporting current state.");
                 AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "Avoid sharing", "State snapshot advice should warn about secrets.");
+                AssertTrue(exportSafeRollbackSnapshotButton.IsEnabled, "Selected snapshot safety action should allow exporting a rollback snapshot.");
+                AssertTrue(restoreSelectedSnapshotFromSafetyButton.IsEnabled, "Selected snapshot safety action should still allow restoring the selected archive.");
 
                 viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.FocusOpenAiDefaultKey);
                 await WaitForAsync(
@@ -4357,6 +4558,10 @@ async Task TestMainWindowHealthActionsAsync()
                 AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-safe-test.zip", "Safe state snapshot export should update the latest export text.");
 
                 stateSnapshotsListBox.SelectedIndex = 1;
+                exportSafeRollbackSnapshotButton.Command.Execute(null);
+                await WaitForAsync(() => fakeLocalStateSnapshotService.ExportSafeCallCount == 2, "safe rollback snapshot export");
+                AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-safe-test.zip", "Safe rollback snapshot export should update the latest export text.");
+                AssertContains(viewModel.SelectedStateSnapshot?.ArchivePath ?? string.Empty, "runtime-state-older.zip", "Safe rollback snapshot export should preserve the original restore target selection.");
                 refreshStateSnapshotsButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.ListCallCount >= 2, "state snapshot list refresh");
 
@@ -4384,6 +4589,8 @@ async Task TestMainWindowHealthActionsAsync()
                 AssertContains(fakeLocalStateSnapshotService.LastRestoreArchivePath, "runtime-state-older.zip", "Selected snapshot restore should target the selected archive.");
                 AssertContains(fakeLocalStateSnapshotService.LastPreviewArchivePath, "runtime-state-older.zip", "Restore should compute a preview for the selected archive.");
                 AssertEqual("Restore selected snapshot", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "Recommended before restore", "Restore confirmation should include a dedicated pre-restore safety section.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "safe rollback snapshot", "Restore confirmation should recommend a safe rollback snapshot before overwriting current state.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, ".env", "Restore confirmation should mention env overwrite risk.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "differs from current state", "Restore confirmation should include diff preview lines.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "OPENAI_API_KEY", "Restore confirmation should list tracked env keys that change.");

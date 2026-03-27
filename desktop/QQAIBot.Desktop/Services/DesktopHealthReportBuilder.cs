@@ -27,6 +27,15 @@ public static class DesktopHealthReportBuilder
             effectiveRuntimeSnapshot,
             effectiveControlApiFailure,
             checks);
+        var nextActions = BuildNextActions(
+            effectiveConfig,
+            effectiveRuntimeSnapshot,
+            effectiveControlApiFailure,
+            checks,
+            latestIssue,
+            isBackendRootValid,
+            hasUnsavedChanges,
+            autoStartEnabled);
 
         var overallState = ResolveOverallState(
             effectiveConfig,
@@ -34,7 +43,9 @@ public static class DesktopHealthReportBuilder
             effectiveControlApiFailure,
             isBackendRootValid);
 
-        var primaryAction = hasUnsavedChanges && isBackendRootValid
+        var hasBlockingSetupItems = checks.Any(static check => check.IsBlocking);
+        var shouldPreferSaveAction = hasUnsavedChanges && isBackendRootValid && !hasBlockingSetupItems;
+        var primaryAction = shouldPreferSaveAction
             ? "Save config to apply the edits shown in this window, then follow the runtime guidance below."
             : overallState.PrimaryAction;
 
@@ -50,8 +61,8 @@ public static class DesktopHealthReportBuilder
                 effectiveControlApiFailure,
                 isBackendRootValid),
             PrimaryAction = primaryAction,
-            PrimaryActionLabel = hasUnsavedChanges && isBackendRootValid ? "Save config" : overallState.PrimaryActionLabel,
-            PrimaryActionKey = hasUnsavedChanges && isBackendRootValid ? DesktopHealthActionKeys.SaveConfig : overallState.PrimaryActionKey,
+            PrimaryActionLabel = shouldPreferSaveAction ? "Save config" : overallState.PrimaryActionLabel,
+            PrimaryActionKey = shouldPreferSaveAction ? DesktopHealthActionKeys.SaveConfig : overallState.PrimaryActionKey,
             RuntimeExplanation = BuildRuntimeExplanation(
                 effectiveConfig,
                 effectiveRuntimeSnapshot,
@@ -60,6 +71,8 @@ public static class DesktopHealthReportBuilder
             LatestIssue = latestIssue.Text,
             LatestIssueActionLabel = latestIssue.ActionLabel,
             LatestIssueActionKey = latestIssue.ActionKey,
+            ActionSummary = BuildActionSummary(nextActions, isBackendRootValid),
+            NextActions = nextActions,
             Checks = checks
         };
     }
@@ -156,6 +169,236 @@ public static class DesktopHealthReportBuilder
         return wechatConfigured
             ? "Ready now: QQ and WeChat are both ready for regular use."
             : "Ready now: QQ is ready for regular use. WeChat remains optional and disabled.";
+    }
+
+    private static IReadOnlyList<DesktopNextActionItem> BuildNextActions(
+        BotConfig config,
+        BackendRuntimeSnapshotViewState runtimeSnapshot,
+        BackendControlApiFailure controlApiFailure,
+        IReadOnlyList<DesktopHealthCheckItem> checks,
+        LatestIssueSummary latestIssue,
+        bool isBackendRootValid,
+        bool hasUnsavedChanges,
+        bool autoStartEnabled)
+    {
+        var actions = new List<DesktopNextActionItem>();
+
+        void addAction(
+            string title,
+            string detail,
+            string outcome,
+            string actionLabel,
+            string actionKey)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(actionKey) &&
+                actions.Any((action) => string.Equals(action.ActionKey, actionKey, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            if (actions.Any((action) => string.Equals(action.Title, title, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            actions.Add(
+                new DesktopNextActionItem
+                {
+                    Title = title,
+                    Detail = detail,
+                    Outcome = outcome,
+                    ActionLabel = actionLabel,
+                    ActionKey = actionKey
+                });
+        }
+
+        if (!isBackendRootValid)
+        {
+            addAction(
+                "Choose the installed runtime folder",
+                "Desktop needs the local runtime folder that contains package.json and src\\index.mjs before it can load config or show live status.",
+                "After this, the rest of setup becomes visible in one place.",
+                "Choose folder",
+                DesktopHealthActionKeys.FocusBackendRoot);
+            return FinalizeNextActions(actions);
+        }
+
+        var blockingChecks = checks.Where(static check => check.IsBlocking).ToArray();
+
+        foreach (var blockingCheck in blockingChecks)
+        {
+            var blockingAction = BuildBlockingAction(blockingCheck, config);
+            addAction(
+                blockingAction.Title,
+                blockingAction.Detail,
+                blockingAction.Outcome,
+                blockingAction.ActionLabel,
+                blockingAction.ActionKey);
+        }
+
+        if (blockingChecks.Length > 0)
+        {
+            return FinalizeNextActions(actions);
+        }
+
+        if (hasUnsavedChanges)
+        {
+            addAction(
+                "Save the current edits",
+                "The values shown in this window are still local until you save them through the control API.",
+                "After this, the backend uses the same settings you see here.",
+                "Save config",
+                DesktopHealthActionKeys.SaveConfig);
+        }
+
+        if (controlApiFailure.Kind == BackendControlApiFailureKind.Unauthorized)
+        {
+            addAction(
+                "Reload after the token matches",
+                "Once the local control token is corrected, this window needs a fresh load before it can trust live runtime state again.",
+                "After this, desktop can reload config, start the backend, and verify runtime health again.",
+                "Reload config",
+                DesktopHealthActionKeys.ReloadConfig);
+            return FinalizeNextActions(actions);
+        }
+
+        var hasOpenAiKey = HasText(config.OpenAiApiKey) || HasText(config.OpenAiDefaultApiKey);
+        var hasQqConfig = HasText(config.NapCatToken) && LooksLikeWebSocketUrl(config.NapCatWsUrl);
+        var canStartRuntime = hasOpenAiKey && hasQqConfig;
+
+        if (canStartRuntime)
+        {
+            if (runtimeSnapshot.ControlApiReachable != true || runtimeSnapshot.RuntimeActive != true)
+            {
+                addAction(
+                    "Start the backend",
+                    runtimeSnapshot.ControlApiReachable == true
+                        ? "Config looks ready, but the backend host is still stopped."
+                        : "Config looks ready, but this window is not attached to a live backend yet.",
+                    "After this, desktop can verify live state and QQ can try to come online.",
+                    "Start backend",
+                    DesktopHealthActionKeys.StartBackend);
+            }
+            else if (runtimeSnapshot.RuntimeReady != true)
+            {
+                addAction(
+                    "Confirm NapCat is online",
+                    $"QQ is still waiting for NapCat at {config.NapCatWsUrl}.",
+                    "After this, QQ can become ready for regular use.",
+                    "Check NapCat config",
+                    DesktopHealthActionKeys.FocusNapCatUrl);
+            }
+        }
+
+        var hasUrgentAction = actions.Count > 0;
+
+        if (!hasUrgentAction && runtimeSnapshot.ControlApiReachable == true && runtimeSnapshot.RuntimeActive == true)
+        {
+            if (HasText(config.WechatBridgeUrl) && runtimeSnapshot.WechatRuntimeReady != true)
+            {
+                addAction(
+                    "Check the WeChat bridge",
+                    $"QQ is already up, but WeChat is still waiting for the bridge at {config.WechatBridgeUrl}.",
+                    "After this, the WeChat worker can join the same runtime.",
+                    "Go to WeChat config",
+                    DesktopHealthActionKeys.FocusWechatUrl);
+            }
+            else if (!string.IsNullOrWhiteSpace(latestIssue.ActionLabel))
+            {
+                addAction(
+                    "Review the latest issue",
+                    latestIssue.Text,
+                    "After this, you can judge whether the runtime is fully healthy or still needs follow-up.",
+                    latestIssue.ActionLabel,
+                    latestIssue.ActionKey);
+            }
+        }
+
+        if (!autoStartEnabled && canStartRuntime)
+        {
+            addAction(
+                "Enable startup later (optional)",
+                "Startup is still manual, so you need to reopen Local AI Runtime yourself after Windows sign-in.",
+                "After this, the desktop can reopen minimized and stay easier to reach as a daily console.",
+                "Enable startup",
+                DesktopHealthActionKeys.ToggleAutoStart);
+        }
+
+        return FinalizeNextActions(actions);
+    }
+
+    private static (string Title, string Detail, string Outcome, string ActionLabel, string ActionKey) BuildBlockingAction(
+        DesktopHealthCheckItem check,
+        BotConfig config)
+    {
+        return check.Key switch
+        {
+            "control-api" => (
+                "Sync the desktop control token",
+                "This desktop window cannot save config or verify live state until QQ_AI_BOT_CONTROL_API_TOKEN matches the backend .env.",
+                "After this, the desktop can talk to the live runtime again.",
+                DefaultIfBlank(check.ActionLabel, "Go to local token"),
+                DefaultIfBlank(check.ActionKey, DesktopHealthActionKeys.FocusControlApiToken)),
+            "openai" => (
+                "Add an OpenAI-compatible key",
+                "The runtime cannot answer requests until at least one API key is saved.",
+                "After this, the runtime can call the configured model route.",
+                DefaultIfBlank(check.ActionLabel, "Go to API keys"),
+                DefaultIfBlank(check.ActionKey, DesktopHealthActionKeys.FocusOpenAiDefaultKey)),
+            "qq" when !HasText(config.NapCatToken) => (
+                "Add the NapCat token",
+                "QQ cannot authenticate to NapCat until the token is saved.",
+                "After this, QQ has the last required credential it needs before startup.",
+                DefaultIfBlank(check.ActionLabel, "Go to NapCat token"),
+                DefaultIfBlank(check.ActionKey, DesktopHealthActionKeys.FocusNapCatToken)),
+            "qq" => (
+                "Fix the NapCat address",
+                "QQ still needs a valid ws:// or wss:// NapCat address before it can connect.",
+                "After this, QQ can try to connect to NapCat when the backend starts.",
+                DefaultIfBlank(check.ActionLabel, "Go to NapCat URL"),
+                DefaultIfBlank(check.ActionKey, DesktopHealthActionKeys.FocusNapCatUrl)),
+            _ => (
+                DefaultIfBlank(check.Title, "Finish required setup"),
+                DefaultIfBlank(check.Detail, "A required setup item still needs attention."),
+                "After this, desktop can move to the next guided step.",
+                check.ActionLabel,
+                check.ActionKey)
+        };
+    }
+
+    private static IReadOnlyList<DesktopNextActionItem> FinalizeNextActions(IReadOnlyList<DesktopNextActionItem> actions)
+    {
+        return actions
+            .Take(3)
+            .Select((action, index) => action with
+            {
+                StepNumber = (index + 1).ToString(),
+                IsPrimary = index == 0
+            })
+            .ToArray();
+    }
+
+    private static string BuildActionSummary(
+        IReadOnlyList<DesktopNextActionItem> actions,
+        bool isBackendRootValid)
+    {
+        if (!isBackendRootValid)
+        {
+            return "Start here: choose the installed runtime folder. Desktop will then point you at the remaining setup fields automatically.";
+        }
+
+        if (actions.Count == 0)
+        {
+            return "Current focus: nothing urgent is blocking this runtime right now. Use recent activity if you want to inspect the latest turn.";
+        }
+
+        var primaryAction = actions[0];
+        return $"Current focus: {primaryAction.Title}. {primaryAction.Outcome}";
     }
 
     private static DesktopHealthCheckItem BuildControlApiCheck(

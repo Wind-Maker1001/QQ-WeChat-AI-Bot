@@ -25,7 +25,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private static readonly string DefaultBotInstructionsTextValue = string.Join(
         Environment.NewLine,
         [
-            "你是本地消息助手，会处理来自 QQ 和微信的消息。",
+            "你是本地 AI 助手，会处理来自 QQ 和微信的消息。",
             "默认使用简体中文。",
             "回答直接、准确、简洁。",
             "不要说教。",
@@ -62,6 +62,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly RelayCommand _clearImageCacheCommand;
     private readonly AsyncRelayCommand _exportStateSnapshotCommand;
     private readonly AsyncRelayCommand _exportSafeStateSnapshotCommand;
+    private readonly AsyncRelayCommand _exportSafeRollbackSnapshotCommand;
     private readonly AsyncRelayCommand _restoreLatestStateSnapshotCommand;
     private readonly AsyncRelayCommand _refreshStateSnapshotsCommand;
     private readonly AsyncRelayCommand _restoreSelectedStateSnapshotCommand;
@@ -132,9 +133,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _selectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
     private string _selectedStateSnapshotAdviceText = "Restore advice will appear here.";
     private LocalStateSnapshotDescriptor? _selectedStateSnapshot;
+    private LocalStateSnapshotPreviewResult? _selectedStateSnapshotPreview;
     private LocalStateSnapshotRestoreResult? _lastStateRestoreResult;
     private LocalStateSnapshotPreviewResult? _lastStateRestorePreview;
     private BackendRuntimeSnapshotViewState _runtimeSnapshot = new();
+    private DesktopLatestTurnOverview _latestTurnOverview = new();
     private DesktopHealthReport _healthReport = new();
     private BackendControlApiPollState _controlApiPollState = new();
     private bool _controlApiRecoveryInProgress;
@@ -198,6 +201,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             _ => IsBackendRootValid);
         _exportStateSnapshotCommand = new AsyncRelayCommand(ExportStateSnapshotAsync, CanLoadOrSave);
         _exportSafeStateSnapshotCommand = new AsyncRelayCommand(ExportSafeStateSnapshotAsync, CanLoadOrSave);
+        _exportSafeRollbackSnapshotCommand = new AsyncRelayCommand(
+            ExportSafeRollbackSnapshotAsync,
+            () => IsBackendRootValid && SelectedStateSnapshot is not null);
         _restoreLatestStateSnapshotCommand = new AsyncRelayCommand(RestoreLatestStateSnapshotAsync, CanLoadOrSave);
         _refreshStateSnapshotsCommand = new AsyncRelayCommand(RefreshStateSnapshotsAsync, CanLoadOrSave);
         _restoreSelectedStateSnapshotCommand = new AsyncRelayCommand(
@@ -242,6 +248,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         RefreshAutoStartState();
         AutoDetectBackendRoot();
+        RefreshLatestTurnOverview();
         RefreshHealthReport();
         AddLog("Desktop UI initialized.");
     }
@@ -259,6 +266,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public ICommand ClearImageCacheCommand => _clearImageCacheCommand;
     public ICommand ExportStateSnapshotCommand => _exportStateSnapshotCommand;
     public ICommand ExportSafeStateSnapshotCommand => _exportSafeStateSnapshotCommand;
+    public ICommand ExportSafeRollbackSnapshotCommand => _exportSafeRollbackSnapshotCommand;
     public ICommand RestoreLatestStateSnapshotCommand => _restoreLatestStateSnapshotCommand;
     public ICommand RefreshStateSnapshotsCommand => _refreshStateSnapshotsCommand;
     public ICommand RestoreSelectedStateSnapshotCommand => _restoreSelectedStateSnapshotCommand;
@@ -572,26 +580,26 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string WechatRuntimeStateText =>
         _runtimeSnapshot.WechatConfigured != true
-            ? "Wechat disabled"
+            ? "WeChat disabled"
             : _runtimeSnapshot.WechatRuntimeActive == true
-                ? "Wechat runtime active"
-                : "Wechat runtime stopped";
+                ? "WeChat runtime active"
+                : "WeChat runtime stopped";
 
     public string RuntimeReadyText =>
         _runtimeSnapshot.RuntimeReady == true ? "QQ channel ready" : "QQ channel not ready";
 
     public string WechatRuntimeReadyText =>
         _runtimeSnapshot.WechatConfigured != true
-            ? "Wechat channel disabled"
+            ? "WeChat channel disabled"
             : _runtimeSnapshot.WechatRuntimeReady == true
-                ? "Wechat channel ready"
-                : "Wechat channel not ready";
+                ? "WeChat channel ready"
+                : "WeChat channel not ready";
 
     public string WechatBridgeStateText =>
-        _runtimeSnapshot.WechatBridgeConnected == true ? "Wechat bridge connected" : "Wechat bridge disconnected";
+        _runtimeSnapshot.WechatBridgeConnected == true ? "WeChat bridge connected" : "WeChat bridge disconnected";
 
     public string WechatWorkerProcessText =>
-        _runtimeSnapshot.WechatWorkerProcessId is int workerPid ? $"Wechat worker PID {workerPid}" : "Wechat worker not running";
+        _runtimeSnapshot.WechatWorkerProcessId is int workerPid ? $"WeChat worker PID {workerPid}" : "WeChat worker not running";
 
     public string HealthStateText => _healthReport.StateText;
 
@@ -607,6 +615,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string HealthPrimaryActionKey => _healthReport.PrimaryActionKey;
 
+    public string HealthActionSummaryText => _healthReport.ActionSummary;
+
+    public IReadOnlyList<DesktopNextActionItem> HealthNextActions => _healthReport.NextActions;
+
+    public bool HasHealthNextActions => HealthNextActions.Count > 0;
+
     public string HealthRuntimeExplanationText => _healthReport.RuntimeExplanation;
 
     public string HealthLatestIssueText => _healthReport.LatestIssue;
@@ -614,6 +628,22 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string HealthLatestIssueActionLabel => _healthReport.LatestIssueActionLabel;
 
     public string HealthLatestIssueActionKey => _healthReport.LatestIssueActionKey;
+
+    public DesktopHealthState LatestTurnState => _latestTurnOverview.State;
+
+    public string LatestTurnHeadlineText => _latestTurnOverview.Headline;
+
+    public string LatestTurnSummaryText => _latestTurnOverview.Summary;
+
+    public string LatestTurnCapabilitiesText => _latestTurnOverview.Capabilities;
+
+    public string LatestTurnReasonText => _latestTurnOverview.Reason;
+
+    public string LatestTurnOutcomeText => _latestTurnOverview.Outcome;
+
+    public string LatestTurnActionLabel => _latestTurnOverview.ActionLabel;
+
+    public string LatestTurnActionKey => _latestTurnOverview.ActionKey;
 
     public string LatestQqLlmSummaryText =>
         BackendActivityProjectionFormatter.FormatRequestSummary(_runtimeSnapshot.LastQqLlmRequest, "No QQ requests captured yet");
@@ -708,16 +738,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         BackendLlmProjectionFormatter.FormatRequestedCapabilities(_runtimeSnapshot.LastQqLlmRequest);
 
     public string LatestWechatLlmSummaryText =>
-        BackendActivityProjectionFormatter.FormatRequestSummary(_runtimeSnapshot.LastWechatLlmRequest, "No Wechat requests captured yet");
+        BackendActivityProjectionFormatter.FormatRequestSummary(_runtimeSnapshot.LastWechatLlmRequest, "No WeChat requests captured yet");
 
     public string LatestWechatLlmDetailText =>
         BackendLlmProjectionFormatter.FormatRequestDetail(_runtimeSnapshot.LastWechatLlmRequest);
 
     public string LatestWechatActivitySummaryText =>
-        BackendActivityProjectionFormatter.FormatActivitySummary(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure, "No Wechat activity captured yet");
+        BackendActivityProjectionFormatter.FormatActivitySummary(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure, "No WeChat activity captured yet");
 
     public string LatestWechatRecentActivityText =>
-        BackendActivityProjectionFormatter.FormatRecentActivity(WechatRecentActivities, "No recent Wechat activity yet");
+        BackendActivityProjectionFormatter.FormatRecentActivity(WechatRecentActivities, "No recent WeChat activity yet");
 
     public bool PinSelectedWechatActivity
     {
@@ -764,13 +794,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public string SelectedWechatRecentActivitySummaryText =>
-        _selectedWechatRecentActivity?.Summary ?? "Select a Wechat activity event";
+        _selectedWechatRecentActivity?.Summary ?? "Select a WeChat activity event";
 
     public string SelectedWechatRecentActivityMetaText =>
         _selectedWechatRecentActivity?.Meta ?? "No event selected";
 
     public string SelectedWechatRecentActivityDetailText =>
-        _selectedWechatRecentActivity?.Detail ?? "Select a Wechat activity event";
+        _selectedWechatRecentActivity?.Detail ?? "Select a WeChat activity event";
 
     public string LatestWechatActivityStateText =>
         BackendActivityProjectionFormatter.FormatActivityState(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure);
@@ -818,7 +848,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         BackendLlmProjectionFormatter.FormatFailureError(_runtimeSnapshot.LastQqLlmFailure);
 
     public string LatestWechatFailureSummaryText =>
-        BackendActivityProjectionFormatter.FormatFailureSummary(_runtimeSnapshot.LastWechatLlmFailure, "No Wechat failures captured yet");
+        BackendActivityProjectionFormatter.FormatFailureSummary(_runtimeSnapshot.LastWechatLlmFailure, "No WeChat failures captured yet");
 
     public string LatestWechatFailureTimelineText =>
         BackendActivityProjectionFormatter.FormatFailureTimeline(_runtimeSnapshot.LastWechatLlmFailure);
@@ -1554,9 +1584,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (SetProperty(ref _selectedStateSnapshot, value))
             {
+                _selectedStateSnapshotPreview = null;
                 OnPropertyChanged(nameof(SelectedStateSnapshotSummaryText));
                 OnPropertyChanged(nameof(SelectedStateSnapshotDetailText));
                 OnPropertyChanged(nameof(SelectedStateSnapshotImpactText));
+                OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
+                OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
+                OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
                 _ = RefreshSelectedStateSnapshotPreviewAsync();
                 UpdateCommandStates();
             }
@@ -1585,6 +1619,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _selectedStateSnapshotAdviceText;
         private set => SetProperty(ref _selectedStateSnapshotAdviceText, value);
     }
+
+    public string SelectedStateSnapshotSafetyHeadlineText =>
+        BuildSelectedStateSnapshotSafetyHeadline(SelectedStateSnapshot, _selectedStateSnapshotPreview);
+
+    public string SelectedStateSnapshotSafetyRecommendationText =>
+        BuildSelectedStateSnapshotSafetyRecommendation(SelectedStateSnapshot, _selectedStateSnapshotPreview);
+
+    public string SelectedStateSnapshotRollbackHintText =>
+        BuildSelectedStateSnapshotRollbackHint(SelectedStateSnapshot, _selectedStateSnapshotPreview);
 
     public string SnapshotRetentionHintText =>
         "Snapshots are kept until you delete them. Older snapshots may still include secrets from .env.";
@@ -1735,7 +1778,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 fallbackStatusText: "Load failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _backendControlApiService.LastFailure,
-                envPath: EnvFilePath);
+                envPath: EnvFilePath,
+                canStartBackend: StartCommand.CanExecute(null));
             DesktopControlPlaneFeedback.ApplyError(
                 statusText: userFacingError.StatusText,
                 logMessage: $"Load config failed: {ex.Message}",
@@ -1804,7 +1848,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 fallbackStatusText: "Local control-plane save failed",
                 technicalMessage: ex.Message,
                 envPath: EnvFilePath,
-                localControlSettingsOperation: true);
+                localControlSettingsOperation: true,
+                canStartBackend: StartCommand.CanExecute(null));
             StatusText = userFacingError.StatusText;
             AddLog($"Saving local control-plane settings failed: {ex.Message}");
             System.Windows.MessageBox.Show(
@@ -1861,7 +1906,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 fallbackStatusText: "Save failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _backendControlApiService.LastFailure,
-                envPath: EnvFilePath);
+                envPath: EnvFilePath,
+                canStartBackend: StartCommand.CanExecute(null));
             DesktopControlPlaneFeedback.ApplyError(
                 statusText: userFacingError.StatusText,
                 logMessage: $"Save config failed: {ex.Message}",
@@ -1932,7 +1978,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 fallbackStatusText: "Start failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _backendControlApiService.LastFailure,
-                envPath: EnvFilePath);
+                envPath: EnvFilePath,
+                canStartBackend: StartCommand.CanExecute(null));
             DesktopControlPlaneFeedback.ApplyError(
                 statusText: userFacingError.StatusText,
                 logMessage: $"Start backend failed: {ex.Message}",
@@ -1979,7 +2026,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 fallbackStatusText: "Stop failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _backendControlApiService.LastFailure,
-                envPath: EnvFilePath);
+                envPath: EnvFilePath,
+                canStartBackend: StartCommand.CanExecute(null));
             DesktopControlPlaneFeedback.ApplyError(
                 statusText: userFacingError.StatusText,
                 logMessage: $"Stop backend failed: {ex.Message}",
@@ -2183,6 +2231,43 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private async Task ExportSafeRollbackSnapshotAsync()
+    {
+        if (!IsBackendRootValid || SelectedStateSnapshot is null)
+        {
+            return;
+        }
+
+        var restoreTargetArchivePath = SelectedStateSnapshot.ArchivePath;
+        var restoreTargetFileName = SelectedStateSnapshot.FileName;
+
+        try
+        {
+            StatusText = "Exporting safe rollback snapshot...";
+            var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
+            LastStateSnapshotText = result.ArchivePath;
+            await RefreshStateSnapshotsAsync(restoreTargetArchivePath);
+            StatusText = "Safe rollback snapshot exported";
+            AddLog(
+                $"Exported safe rollback snapshot to {result.ArchivePath} before restoring {restoreTargetFileName}. Original restore target remains selected.");
+            OnPropertyChanged(nameof(StateSnapshotFolderPathText));
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Safe rollback snapshot export failed";
+            AddLog($"Exporting safe rollback snapshot failed: {ex.Message}");
+            System.Windows.MessageBox.Show(
+                $"Exporting a safe rollback snapshot failed:\n{ex.Message}",
+                "Export safe rollback snapshot failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            UpdateCommandStates();
+        }
+    }
+
     private async Task RestoreLatestStateSnapshotAsync()
     {
         if (!IsBackendRootValid)
@@ -2194,11 +2279,21 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            StatusText = "Restoring latest state snapshot...";
             var snapshots = await _localStateSnapshotService.ListAsync(BackendRootPath);
             var latestSnapshot = snapshots.FirstOrDefault()
                 ?? throw new InvalidOperationException("No state snapshots are available to restore.");
             var preview = await _localStateSnapshotService.PreviewAsync(BackendRootPath, latestSnapshot.ArchivePath);
+
+            if (!_confirmationDialogService.Confirm(
+                    "Restore latest snapshot",
+                    BuildRestoreConfirmationMessage(latestSnapshot, preview)))
+            {
+                StatusText = "Latest snapshot restore cancelled";
+                AddLog($"Cancelled restoring latest snapshot: {latestSnapshot.ArchivePath}");
+                return;
+            }
+
+            StatusText = "Restoring latest state snapshot...";
             var result = await _localStateSnapshotService.RestoreLatestAsync(BackendRootPath);
             LastStateRestoreText = result.ArchivePath;
             ApplyRestoreResultSummary(result, preview);
@@ -2498,6 +2593,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private void RefreshLatestTurnOverview()
+    {
+        _latestTurnOverview = BackendLatestTurnOverviewBuilder.Build(_runtimeSnapshot);
+        OnPropertyChanged(nameof(LatestTurnState));
+        OnPropertyChanged(nameof(LatestTurnHeadlineText));
+        OnPropertyChanged(nameof(LatestTurnSummaryText));
+        OnPropertyChanged(nameof(LatestTurnCapabilitiesText));
+        OnPropertyChanged(nameof(LatestTurnReasonText));
+        OnPropertyChanged(nameof(LatestTurnOutcomeText));
+        OnPropertyChanged(nameof(LatestTurnActionLabel));
+        OnPropertyChanged(nameof(LatestTurnActionKey));
+    }
+
     private async void OnStatusPollTimerTick(object? sender, EventArgs e)
     {
         await LoadLocalEnvDocumentAsync(suppressErrors: true);
@@ -2525,6 +2633,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (!pollOutcome.ShouldApplyRuntimeStatus)
         {
             _runtimeSnapshot = pollOutcome.NextRuntimeSnapshot;
+            RefreshLatestTurnOverview();
             RefreshHealthReport();
             OnPropertyChanged(nameof(IsControlApiReachable));
             NotifyRuntimeSnapshotChanged();
@@ -2563,6 +2672,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(HealthPrimaryActionText));
         OnPropertyChanged(nameof(HealthPrimaryActionLabel));
         OnPropertyChanged(nameof(HealthPrimaryActionKey));
+        OnPropertyChanged(nameof(HealthActionSummaryText));
+        OnPropertyChanged(nameof(HealthNextActions));
+        OnPropertyChanged(nameof(HasHealthNextActions));
         OnPropertyChanged(nameof(HealthRuntimeExplanationText));
         OnPropertyChanged(nameof(HealthLatestIssueText));
         OnPropertyChanged(nameof(HealthLatestIssueActionLabel));
@@ -2611,8 +2723,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             ReplaceStateSnapshots([]);
             SelectedStateSnapshot = null;
+            _selectedStateSnapshotPreview = null;
             SelectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
             SelectedStateSnapshotAdviceText = "Restore advice will appear here.";
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
             return;
         }
 
@@ -2633,8 +2749,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         if (selectedSnapshot is null || !IsBackendRootValid)
         {
+            _selectedStateSnapshotPreview = null;
             SelectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
             SelectedStateSnapshotAdviceText = "Restore advice will appear here.";
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
             return;
         }
 
@@ -2652,8 +2772,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
+            _selectedStateSnapshotPreview = preview;
             SelectedStateSnapshotDiffText = string.Join(Environment.NewLine, preview.Lines);
             SelectedStateSnapshotAdviceText = string.Join(Environment.NewLine, preview.Recommendations);
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
         }
         catch (Exception ex)
         {
@@ -2662,8 +2786,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 return;
             }
 
+            _selectedStateSnapshotPreview = null;
             SelectedStateSnapshotDiffText = $"Diff preview unavailable: {ex.Message}";
             SelectedStateSnapshotAdviceText = "Review the snapshot details carefully before restoring.";
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
+            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
         }
     }
 
@@ -2791,6 +2919,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _selectedWechatRecentActivity = projection.WechatActivity.SelectedItem;
         IsProcessRunning = projection.SnapshotState.RuntimeActive == true;
         _runtimeSnapshot = projection.SnapshotState;
+        RefreshLatestTurnOverview();
         RefreshHealthReport();
 
         if (HasStateRestoreResult)
@@ -3066,6 +3195,76 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return $"Restoring this snapshot will overwrite {overwriteTargetText}. {secretRiskText}";
     }
 
+    private static string BuildSelectedStateSnapshotSafetyHeadline(
+        LocalStateSnapshotDescriptor? snapshot,
+        LocalStateSnapshotPreviewResult? preview)
+    {
+        if (snapshot is null)
+        {
+            return "Safety check: choose a snapshot to see what restore would overwrite.";
+        }
+
+        var hasMeaningfulDiff = PreviewHasMeaningfulDiff(preview);
+        var overwritesEnv = SnapshotIncludesEntry(snapshot, "app/.env");
+        var overwritesData = SnapshotIncludesPrefix(snapshot, "app/data/");
+        var includesSecrets = snapshot.IncludesSecrets;
+
+        if (hasMeaningfulDiff && (overwritesEnv || overwritesData) && includesSecrets)
+        {
+            return "Safety check: high caution. This restore would overwrite current runtime state, and the archive includes .env secrets.";
+        }
+
+        if (hasMeaningfulDiff && (overwritesEnv || overwritesData))
+        {
+            return "Safety check: review carefully. This restore would overwrite current runtime state on this machine.";
+        }
+
+        if (includesSecrets)
+        {
+            return "Safety check: low restore impact, but keep this archive private because it includes .env secrets.";
+        }
+
+        return "Safety check: current state already looks close to this snapshot.";
+    }
+
+    private static string BuildSelectedStateSnapshotSafetyRecommendation(
+        LocalStateSnapshotDescriptor? snapshot,
+        LocalStateSnapshotPreviewResult? preview)
+    {
+        if (snapshot is null)
+        {
+            return "Recommended first step: select a snapshot to inspect the overwrite risk before restoring.";
+        }
+
+        if (PreviewHasMeaningfulDiff(preview))
+        {
+            return "Recommended first step: export a safe rollback snapshot of the current state. That keeps current sessions and desktop activity without copying .env secrets, and this restore target will stay selected.";
+        }
+
+        return snapshot.IncludesSecrets
+            ? "Recommended first step: restore only if you intentionally want to roll back to this exact saved state, and avoid sharing the archive because it includes .env secrets."
+            : "Recommended first step: review the diff below, then restore if you intentionally want to roll back.";
+    }
+
+    private static string BuildSelectedStateSnapshotRollbackHint(
+        LocalStateSnapshotDescriptor? snapshot,
+        LocalStateSnapshotPreviewResult? preview)
+    {
+        if (snapshot is null)
+        {
+            return "Safe rollback snapshots keep a current-state fallback without .env secrets.";
+        }
+
+        if (PreviewHasMeaningfulDiff(preview))
+        {
+            return "Rollback protection: a safe rollback snapshot stores the current data/ and desktop activity state without copying .env secrets, so you can back out more confidently.";
+        }
+
+        return snapshot.IncludesSecrets
+            ? "Rollback protection: this archive already contains secrets, so prefer a fresh safe rollback snapshot before testing any restore workflow."
+            : "Rollback protection: if you still want an easy way back, export a safe rollback snapshot first.";
+    }
+
     private static string BuildRestoreConfirmationMessage(
         LocalStateSnapshotDescriptor snapshot,
         LocalStateSnapshotPreviewResult preview)
@@ -3075,7 +3274,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             [
                 $"Restore snapshot: {snapshot.FileName}",
                 snapshot.Summary,
+                "What will be overwritten",
                 BuildSelectedStateSnapshotImpactText(snapshot),
+                string.Empty,
+                "Recommended before restore",
+                BuildSelectedStateSnapshotSafetyHeadline(snapshot, preview),
+                BuildSelectedStateSnapshotSafetyRecommendation(snapshot, preview),
+                BuildSelectedStateSnapshotRollbackHint(snapshot, preview),
+                string.Empty,
+                "Current vs snapshot",
                 string.Join(Environment.NewLine, preview.Lines),
                 string.Join(Environment.NewLine, preview.Recommendations),
                 "Continue?"
@@ -3452,6 +3659,29 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         };
     }
 
+    private static bool PreviewHasMeaningfulDiff(LocalStateSnapshotPreviewResult? preview)
+    {
+        if (preview?.Lines is not { Count: > 0 })
+        {
+            return false;
+        }
+
+        return preview.Lines.Any((line) =>
+            line.Contains("differs from current state", StringComparison.Ordinal) ||
+            line.Contains("current file is missing and will be restored", StringComparison.Ordinal) ||
+            line.Contains("current folder is missing and will be restored", StringComparison.Ordinal) ||
+            (line.Contains("-> snapshot ", StringComparison.Ordinal) &&
+             !line.EndsWith("-> snapshot <missing>", StringComparison.Ordinal)) ||
+            (line.StartsWith("sessions.json changed conversations:", StringComparison.Ordinal) &&
+             !line.EndsWith("none", StringComparison.Ordinal)));
+    }
+
+    private static bool SnapshotIncludesEntry(LocalStateSnapshotDescriptor snapshot, string entry) =>
+        snapshot.IncludedEntries.Any((includedEntry) => string.Equals(includedEntry, entry, StringComparison.Ordinal));
+
+    private static bool SnapshotIncludesPrefix(LocalStateSnapshotDescriptor snapshot, string prefix) =>
+        snapshot.IncludedEntries.Any((includedEntry) => includedEntry.StartsWith(prefix, StringComparison.Ordinal));
+
     private void ResetRestoreResultState()
     {
         _lastStateRestoreResult = null;
@@ -3629,6 +3859,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _clearImageCacheCommand.RaiseCanExecuteChanged();
         _exportStateSnapshotCommand.RaiseCanExecuteChanged();
         _exportSafeStateSnapshotCommand.RaiseCanExecuteChanged();
+        _exportSafeRollbackSnapshotCommand.RaiseCanExecuteChanged();
         _restoreLatestStateSnapshotCommand.RaiseCanExecuteChanged();
         _refreshStateSnapshotsCommand.RaiseCanExecuteChanged();
         _restoreSelectedStateSnapshotCommand.RaiseCanExecuteChanged();

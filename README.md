@@ -1,49 +1,59 @@
 # Local AI Runtime Console
 
-This repository packages a local multi-process AI runtime for personal use: Node supervisor, QQ and WeChat workers, a local control API, and a WPF desktop control plane.
+This repository packages a local multi-process AI runtime for personal use:
 
-本项目当前应被理解为：
+- a Node supervisor
+- QQ and WeChat workers
+- a local control API
+- a WPF desktop control plane
 
-`单机多进程 AI runtime + 本地 desktop control plane`
+Treat it as:
 
-不要把它当成“只有一个 QQ bot 脚本”的仓库，也不要只依赖历史 README 心智模型。
+`single-machine AI runtime + local desktop console`
+
+Do not treat it as "just a QQ bot script". Some environment keys still use legacy `BOT_*` names for compatibility, but the product direction is a local runtime and console, not a one-off bot script.
 
 ## Start Here
 
-当前推荐阅读顺序：
+Recommended reading order:
 
 1. [docs/current-architecture.md](docs/current-architecture.md)
 2. `tests/`
 3. `desktop/QQAIBot.Desktop.Tests/Program.cs`
-4. `src/` 和 `desktop/QQAIBot.Desktop/`
+4. `src/` and `desktop/QQAIBot.Desktop/`
 
-当 README、代码、测试不一致时：
+When README, code, and tests disagree:
 
-- 以代码和测试为准
-- 以 [docs/current-architecture.md](docs/current-architecture.md) 为当前架构说明入口
+- trust code and tests first
+- treat [docs/current-architecture.md](docs/current-architecture.md) as the current architecture entry point
 
 ## Quick Start
 
-安装依赖并准备配置：
+Install dependencies and prepare local config:
 
 ```powershell
 npm install
 Copy-Item .env.example .env
 ```
 
-运行完整回归：
+Minimum first-run config:
+
+- `OPENAI_API_KEY` or `OPENAI_DEFAULT_API_KEY`
+- `NAPCAT_TOKEN`
+
+Run the full regression suite:
 
 ```powershell
 npm test
 ```
 
-启动 supervisor：
+Start the local runtime supervisor:
 
 ```powershell
 npm start
 ```
 
-启动 Local AI Runtime 控制台：
+Start the desktop console:
 
 ```powershell
 dotnet run --project .\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj
@@ -51,7 +61,7 @@ dotnet run --project .\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj
 
 ## Current Entry Points
 
-核心入口：
+Core runtime and control-plane entry points:
 
 - `src/index.mjs`
 - `src/app/runtime-worker.mjs`
@@ -61,7 +71,7 @@ dotnet run --project .\desktop\QQAIBot.Desktop\QQAIBot.Desktop.csproj
 
 ## Key Scripts
 
-最常用命令：
+Most-used commands:
 
 ```powershell
 npm test
@@ -81,13 +91,14 @@ npm run release:installer
 
 ## Key Config
 
-最关键的环境变量见 `.env.example`。
+See [.env.example](.env.example) for the full template.
 
-通常至少需要关注：
+The most important keys are:
 
 - `OPENAI_API_KEY`
 - `OPENAI_DEFAULT_MODEL`
 - `OPENAI_ADVANCED_MODEL`
+- `OPENAI_ADVANCED_TRIGGER_PREFIXES`
 - `NAPCAT_WS_URL`
 - `NAPCAT_TOKEN`
 - `WECHAT_BRIDGE_URL`
@@ -96,43 +107,48 @@ npm run release:installer
 - `WECHAT_BOT_PREFIX`
 - `QQ_AI_BOT_CONTROL_API_TOKEN`
 
+Compatibility note:
+
+- `BOT_PREFIX`, `WECHAT_BOT_PREFIX`, `BOT_SYSTEM_PROMPT`, and `BOT_PERSONA` keep older names for compatibility.
+- In product terms, they configure assistant behavior inside the local AI runtime.
+
 ## Install Layout
 
-默认安装根目录：
+Default install root:
 
 - `%LOCALAPPDATA%\QQAIBot`
 
-默认关键路径：
+Important paths:
 
-- 应用文件：`%LOCALAPPDATA%\QQAIBot\app`
-- 配置文件：`%LOCALAPPDATA%\QQAIBot\app\.env`
-- 会话与图片缓存：`%LOCALAPPDATA%\QQAIBot\app\data\`
-- 状态快照：`%LOCALAPPDATA%\QQAIBot\app\artifacts\state-snapshots\`
-- desktop activity state：`%LOCALAPPDATA%\QQAIBot.Desktop\activity-state\<hash>.json`
+- app files: `%LOCALAPPDATA%\QQAIBot\app`
+- config file: `%LOCALAPPDATA%\QQAIBot\app\.env`
+- sessions and image cache: `%LOCALAPPDATA%\QQAIBot\app\data\`
+- state snapshots: `%LOCALAPPDATA%\QQAIBot\app\artifacts\state-snapshots\`
+- desktop activity state: `%LOCALAPPDATA%\QQAIBot.Desktop\activity-state\<hash>.json`
 
-安装脚本完成后会直接打印这些路径。
+The install scripts print these paths when setup finishes.
 
 ## Upgrade And Uninstall
 
-安装 / 升级：
+Install or upgrade:
 
 - `npm run setup:install`
-- 重新运行同一个安装脚本会原地升级。
-- 原地升级会替换 `app\` 下的程序文件，但保留 `.env`、`data\`、`artifacts\state-snapshots\`，以及 desktop activity state。
+- Running the same install script again upgrades in place.
+- In-place upgrade replaces program files under `app\`, but keeps `.env`, `data\`, `artifacts\state-snapshots\`, and desktop activity state.
 
-卸载：
+Uninstall:
 
 - `npm run setup:uninstall`
-- 这会删除当前安装对应的应用文件、配置、会话数据、状态快照，以及 desktop activity state。
+- This removes the current install's app files, config, session data, snapshots, and desktop activity state.
 
-保留状态卸载：
+Uninstall but keep state:
 
 - `npm run setup:uninstall:keep-state`
-- 这会删除应用二进制和快捷方式，但保留 `.env`、`data\`、`artifacts\state-snapshots\`，以及 desktop activity state，便于之后重新安装接回原状态。
+- This removes binaries and shortcuts, but keeps `.env`, `data\`, `artifacts\state-snapshots\`, and desktop activity state so a later reinstall can reconnect to the same local state.
 
 ## Docs
 
-当前文档入口：
+Current documentation entry points:
 
 - [docs/current-architecture.md](docs/current-architecture.md)
 - [docs/operations.md](docs/operations.md)
@@ -141,5 +157,4 @@ npm run release:installer
 
 ## Legacy Note
 
-旧 README 曾经同时承担产品介绍、安装手册、运行手册和架构说明。
-现在这些内容应逐步下沉到 `docs/`，README 仅保留当前入口作用。
+Older versions of this repository mixed product intro, install instructions, runtime operations, and architecture notes into one README. The current direction is to keep README as the current product entry point and move deeper detail into `docs/`.

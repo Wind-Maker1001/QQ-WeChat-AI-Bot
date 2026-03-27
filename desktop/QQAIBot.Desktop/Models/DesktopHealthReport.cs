@@ -46,6 +46,23 @@ public sealed record DesktopGuideStepItem
     public string ActionKey { get; init; } = string.Empty;
 }
 
+public sealed record DesktopNextActionItem
+{
+    public string StepNumber { get; init; } = string.Empty;
+
+    public string Title { get; init; } = string.Empty;
+
+    public string Detail { get; init; } = string.Empty;
+
+    public string Outcome { get; init; } = string.Empty;
+
+    public bool IsPrimary { get; init; }
+
+    public string ActionLabel { get; init; } = string.Empty;
+
+    public string ActionKey { get; init; } = string.Empty;
+}
+
 public sealed record DesktopHealthReport
 {
     public DesktopHealthState State { get; init; } = DesktopHealthState.Info;
@@ -71,6 +88,10 @@ public sealed record DesktopHealthReport
     public string LatestIssueActionLabel { get; init; } = string.Empty;
 
     public string LatestIssueActionKey { get; init; } = string.Empty;
+
+    public string ActionSummary { get; init; } = string.Empty;
+
+    public IReadOnlyList<DesktopNextActionItem> NextActions { get; init; } = [];
 
     public IReadOnlyList<DesktopHealthCheckItem> Checks { get; init; } = [];
 }

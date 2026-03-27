@@ -12,7 +12,7 @@ public class BotConfig
     public string OpenAiDefaultTextVerbosity { get; set; } = "medium";
     public string OpenAiDefaultEnableWebSearch { get; set; } = "false";
     public string OpenAiDefaultEnableCodeInterpreter { get; set; } = "false";
-    public string OpenAiAdvancedTriggerPrefixes { get; set; } = "/5.4,/gpt,/vision,/楂樼骇,/澶氭ā鎬?/鐪嬪浘,/鍥剧墖鍒嗘瀽";
+    public string OpenAiAdvancedTriggerPrefixes { get; set; } = "/5.4,/gpt,/vision,/高级,/多模态,/看图,/图片分析";
     public string OpenAiAdvancedReasoningEffort { get; set; } = "high";
     public string OpenAiAdvancedTextVerbosity { get; set; } = "high";
     public string OpenAiAdvancedEnableWebSearch { get; set; } = "true";

@@ -66,6 +66,9 @@ await RunTestAsync("BackendControlApiRecoveryCoordinator handles recovered, star
 await RunTestAsync("BackendControlPlaneCoordinator handles load and save recovery paths", TestBackendControlPlaneCoordinatorAsync);
 await RunTestAsync("BackendRuntimeControlCoordinator handles start and stop branches", TestBackendRuntimeControlCoordinatorAsync);
 await RunTestAsync("BackendControlPlaneFacade composes load, save, start, and stop entry points", TestBackendControlPlaneFacadeAsync);
+await RunTestAsync("DesktopControlPlaneSession selects local-token recovery guidance after restore token mismatch", TestDesktopControlPlaneSessionRestoreTokenGuidanceAsync);
+await RunTestAsync("DesktopControlPlaneSession selects NapCat review guidance when QQ readiness is blocked after restore", TestDesktopControlPlaneSessionRestoreNapCatGuidanceAsync);
+await RunTestAsync("DesktopControlPlaneSession targets selected snapshot for preview restore and delete", TestDesktopControlPlaneSessionSnapshotTargetingAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
@@ -2403,7 +2406,6 @@ async Task TestBackendRuntimeControlCoordinatorAsync()
 
 async Task TestBackendControlPlaneFacadeAsync()
 {
-    var prepareCallCount = 0;
     var recoverCallCount = 0;
     BackendControlApiFailure lastFailure = new()
     {
@@ -2519,6 +2521,95 @@ async Task TestBackendControlPlaneFacadeAsync()
     AssertEqual(1, stopPrepareCallCount, "Facade stop should run preflight prepare step.");
     AssertEqual(1, stopLocalCallCount, "Facade stop should pass through runtime stop coordination.");
     AssertEqual("Backend host stopped", stopOutcome.StatusText, "Facade stop should preserve local-stop outcome.");
+}
+
+async Task TestDesktopControlPlaneSessionRestoreTokenGuidanceAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-restore-token-");
+    context.FakeBackend.StatusFailureKind = BackendControlApiFailureKind.Unauthorized;
+    context.FakeBackend.StatusFailureMessage = "Control API authentication failed.";
+    context.FakeLocalStateSnapshotService.PreviewResult = context.FakeLocalStateSnapshotService.PreviewResult with
+    {
+        Lines =
+        [
+            ".env锛氫笌褰撳墠鐘舵€佷笉鍚?",
+            ".env 璺熻釜閿彉鏇达細QQ_AI_BOT_CONTROL_API_TOKEN",
+            "QQ_AI_BOT_CONTROL_API_TOKEN: ********0000 -> ********1234"
+        ]
+    };
+
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    var restoreResult = await session.RestoreSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
+
+    AssertTrue(restoreResult.Succeeded, "Session restore should succeed for the selected archive.");
+    AssertEqual(selectedSnapshot.ArchivePath, context.FakeLocalStateSnapshotService.LastRestoreArchivePath, "Session restore should target the selected archive.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, restoreResult.NextState?.SnapshotState.LastStateRestorePrimaryActionKey, "Restore guidance should prioritize the local token action.");
+    AssertContains(restoreResult.NextState?.SnapshotState.LastStateRestoreControlPlaneText ?? string.Empty, "QQ_AI_BOT_CONTROL_API_TOKEN", "Restore control-plane text should identify the local token mismatch.");
+    AssertFalse(string.IsNullOrWhiteSpace(restoreResult.NextState?.SnapshotState.LastStateRestoreNextStepText), "Restore next-step text should remain populated.");
+}
+
+async Task TestDesktopControlPlaneSessionRestoreNapCatGuidanceAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-restore-napcat-");
+    context.FakeBackend.Status = new BackendRuntimeStatus
+    {
+        RuntimeActive = true,
+        RuntimeReady = false,
+        WechatConfigured = true,
+        WechatRuntimeActive = true,
+        WechatRuntimeReady = true,
+        WechatBridgeConnected = true
+    };
+    context.FakeLocalStateSnapshotService.PreviewResult = context.FakeLocalStateSnapshotService.PreviewResult with
+    {
+        Lines =
+        [
+            ".env锛氫笌褰撳墠鐘舵€佷笉鍚?",
+            ".env 璺熻釜閿彉鏇达細NAPCAT_WS_URL, NAPCAT_TOKEN",
+            "NAPCAT_WS_URL: ws://before -> ws://after",
+            "NAPCAT_TOKEN: ********5678 -> ********1234"
+        ]
+    };
+
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    var restoreResult = await session.RestoreSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
+
+    AssertTrue(restoreResult.Succeeded, "Session restore should succeed for NapCat blocker scenario.");
+    AssertEqual(DesktopHealthActionKeys.FocusNapCatUrl, restoreResult.NextState?.SnapshotState.LastStateRestorePrimaryActionKey, "Restore guidance should prioritize NapCat review when QQ is blocked.");
+    AssertFalse(string.IsNullOrWhiteSpace(restoreResult.NextState?.SnapshotState.LastStateRestoreRuntimeText), "Restore runtime text should remain populated for QQ blocker guidance.");
+    AssertFalse(string.IsNullOrWhiteSpace(restoreResult.NextState?.SnapshotState.LastStateRestoreNextStepText), "Restore next-step guidance should remain populated for QQ blocker guidance.");
+}
+
+async Task TestDesktopControlPlaneSessionSnapshotTargetingAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-snapshot-targeting-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    await session.RefreshSelectedStateSnapshotPreviewAsync();
+    AssertEqual(selectedSnapshot.ArchivePath, context.FakeLocalStateSnapshotService.LastPreviewArchivePath, "Snapshot preview should target the selected archive.");
+
+    var restoreResult = await session.RestoreSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
+    AssertEqual(selectedSnapshot.ArchivePath, context.FakeLocalStateSnapshotService.LastRestoreArchivePath, "Snapshot restore should target the selected archive.");
+    AssertEqual(selectedSnapshot.ArchivePath, restoreResult.NextState?.SnapshotState.LastStateRestoreText, "Restore state should record the selected archive path.");
+
+    var deleteResult = await session.DeleteSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
+    AssertTrue(deleteResult.Succeeded, "Snapshot delete should succeed.");
+    AssertEqual(selectedSnapshot.ArchivePath, context.FakeLocalStateSnapshotService.LastDeletedArchivePath, "Snapshot delete should target the selected archive.");
 }
 
 Task TestDesktopControlPlaneFeedbackAsync()
@@ -5685,6 +5776,50 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
         fakeLocalPathOperationsService,
         fakeLocalStateSnapshotService,
         fakeConfirmationDialogService);
+}
+
+static DesktopControlPlaneSession CreateDesktopControlPlaneSessionForTests(DesktopUiTestContext context)
+{
+    return new DesktopControlPlaneSession(
+        new DesktopSessionDependencies
+        {
+            LocalConfigFallbackReader = context.FakeLocalFallbackReader,
+            LocalBootstrapConfigStore = context.FakeLocalBootstrapStore,
+            LocalPathOperationsService = context.FakeLocalPathOperationsService,
+            LocalStateSnapshotService = context.FakeLocalStateSnapshotService,
+            BackendControlApiService = context.FakeBackend,
+            BotProcessService = context.FakeBotProcess,
+            ActivityStateStore = context.FakeActivityStateStore,
+            ActivityStatePolicy = DesktopActivityStatePolicy.Default
+        },
+        new DesktopShellState
+        {
+            ConfigEditorState = new DesktopConfigEditorState
+            {
+                Config = context.FakeLocalFallbackReader.Document.Config,
+                ControlApiToken = context.FakeLocalFallbackReader.Document.ExtraValues.TryGetValue("QQ_AI_BOT_CONTROL_API_TOKEN", out var token)
+                    ? token
+                    : string.Empty
+            },
+            RuntimeShellState = new DesktopRuntimeSnapshotState
+            {
+                AutoStartEnabled = context.FakeAutoStart.Enabled,
+                CanStartBackend = context.FakeBackend.Status?.RuntimeActive != true
+            },
+            SnapshotState = new DesktopSnapshotState
+            {
+                StateSnapshots = context.FakeLocalStateSnapshotService.Snapshots
+            },
+            LocalDocumentState = new DesktopLocalDocumentState
+            {
+                BackendRootPath = context.RootPath,
+                BackendRootDetected = true,
+                ConfigDocument = new DesktopConfigDocumentState
+                {
+                    Document = context.FakeLocalFallbackReader.Document
+                }
+            }
+        });
 }
 
 static async Task WaitForAsync(Func<bool> predicate, string label, int timeoutMs = 5000, int intervalMs = 50)

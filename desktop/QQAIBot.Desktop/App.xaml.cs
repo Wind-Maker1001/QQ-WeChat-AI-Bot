@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using QQAIBot.Desktop.Services;
 
 namespace QQAIBot.Desktop;
@@ -10,8 +11,16 @@ public partial class App : System.Windows.Application
 
     private readonly SingleInstanceCoordinator _singleInstanceCoordinator;
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    private static readonly IntPtr DpiAwarenessContextPerMonitorAwareV2 = new(-4);
+
     public App()
     {
+        SetProcessDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
+
         var scopeSuffix = Environment.GetEnvironmentVariable(SingleInstanceSuffixEnvKey)?.Trim();
 
         _singleInstanceCoordinator = string.IsNullOrWhiteSpace(scopeSuffix)

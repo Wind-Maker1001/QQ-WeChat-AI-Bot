@@ -4,6 +4,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Diagnostics;
 using System.Windows.Input;
+using System.Reflection;
 
 using Forms = System.Windows.Forms;
 
@@ -15,7 +16,7 @@ namespace QQAIBot.Desktop;
 public partial class MainWindow : Window
 {
     private sealed record TrayMenuAction(string Label, Action Execute);
-    private const string TrayExitMenuLabel = "Exit Desktop";
+    private const string TrayExitMenuLabel = "退出控制台";
 
     private readonly MainViewModel _viewModel;
     private readonly bool _ownsViewModel;
@@ -40,6 +41,7 @@ public partial class MainWindow : Window
         IConfirmationDialogService? confirmationDialogService = null)
     {
         InitializeComponent();
+        RegisterNamedElementsForAutomation();
         _launchMinimizedToTray = launchMinimizedToTray;
         _ensureRuntimeOnStartup = ensureRuntimeOnStartup;
         _enableNotifyIcon = enableNotifyIcon;
@@ -65,6 +67,37 @@ public partial class MainWindow : Window
         {
             _notifyIcon = notifyIconHost ?? CreateNotifyIcon();
             _notifyIcon.DoubleClick += OnNotifyIconDoubleClick;
+        }
+
+        EnsureStartupSequenceStarted();
+    }
+
+    private void RegisterNamedElementsForAutomation()
+    {
+        var fields = GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
+        foreach (var field in fields)
+        {
+            if (field.IsStatic ||
+                field.Name.StartsWith("_", StringComparison.Ordinal) ||
+                FindName(field.Name) is not null)
+            {
+                continue;
+            }
+
+            var value = field.GetValue(this);
+
+            if (value is FrameworkElement or FrameworkContentElement)
+            {
+                try
+                {
+                    RegisterName(field.Name, value);
+                }
+                catch (ArgumentException)
+                {
+                    // Ignore names that already belong to another namescope.
+                }
+            }
         }
     }
 
@@ -182,6 +215,18 @@ public partial class MainWindow : Window
         RequestDesktopExit();
     }
 
+    private void MoreActionsButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button button ||
+            button.ContextMenu is not { } contextMenu)
+        {
+            return;
+        }
+
+        contextMenu.PlacementTarget = button;
+        contextMenu.IsOpen = true;
+    }
+
     private void ExitFromTray()
     {
         RequestDesktopExit();
@@ -291,11 +336,10 @@ public partial class MainWindow : Window
         var animatedElements = new UIElement[]
         {
             HeroHeaderCard,
+            OverviewCardsPanel,
             ToolbarShellCard,
-            OpenAiCard,
-            NapCatCard,
-            AccessCard,
-            LocalControlPlaneCard,
+            SuggestionsPanel,
+            ConfigurationWorkspace,
             RuntimeInfoCard,
             LogCard
         };
@@ -412,25 +456,25 @@ public partial class MainWindow : Window
         switch (actionKey)
         {
             case "focus_backend_root":
-                FocusElement(BackendRootPathTextBox);
+                FocusSettingsElement(StartupSyncTabItem, BackendRootPathTextBox);
                 return;
             case "focus_control_api_token":
-                FocusElement(ControlApiTokenTextBox);
+                FocusSettingsElement(StartupSyncTabItem, ControlApiTokenTextBox);
                 return;
             case "focus_openai_default_key":
-                FocusElement(OpenAiDefaultApiKeyTextBox);
+                FocusSettingsElement(ModelApiTabItem, OpenAiDefaultApiKeyTextBox);
                 return;
             case "focus_openai_advanced_key":
-                FocusElement(OpenAiApiKeyTextBox);
+                FocusSettingsElement(ModelApiTabItem, OpenAiApiKeyTextBox);
                 return;
             case "focus_napcat_url":
-                FocusElement(NapCatWsUrlTextBox);
+                FocusSettingsElement(ChannelsTabItem, NapCatWsUrlTextBox);
                 return;
             case "focus_napcat_token":
-                FocusElement(NapCatTokenTextBox);
+                FocusSettingsElement(ChannelsTabItem, NapCatTokenTextBox);
                 return;
             case "focus_wechat_url":
-                FocusElement(WechatBridgeUrlTextBox);
+                FocusSettingsElement(ChannelsTabItem, WechatBridgeUrlTextBox);
                 return;
             case "focus_qq_failure":
                 FocusLatestFailureActivity(isQq: true);
@@ -442,6 +486,7 @@ public partial class MainWindow : Window
                 FocusLatestActivity();
                 return;
             case "show_logs":
+                LogCard.BringIntoView();
                 FocusElement(LogTextBox);
                 LogTextBox.ScrollToEnd();
                 return;
@@ -454,6 +499,7 @@ public partial class MainWindow : Window
     {
         if (isQq)
         {
+            SelectActivityTab(QqActivityTab);
             var latestFailure = _viewModel.QqRecentActivities.FirstOrDefault(static item => item.IsFailure);
             if (latestFailure is not null)
             {
@@ -465,6 +511,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        SelectActivityTab(WechatActivityTab);
         var latestWechatFailure = _viewModel.WechatRecentActivities.FirstOrDefault(static item => item.IsFailure);
         if (latestWechatFailure is not null)
         {
@@ -493,6 +540,7 @@ public partial class MainWindow : Window
         if (latestWechatItem is null ||
             (latestQqItem is not null && ParseCapturedAt(latestQqItem.CapturedAt) >= ParseCapturedAt(latestWechatItem.CapturedAt)))
         {
+            SelectActivityTab(QqActivityTab);
             _viewModel.SelectedQqRecentActivity = latestQqItem;
             if (latestQqItem is not null)
             {
@@ -503,16 +551,35 @@ public partial class MainWindow : Window
             return;
         }
 
+        SelectActivityTab(WechatActivityTab);
         _viewModel.SelectedWechatRecentActivity = latestWechatItem;
         LatestWechatRecentActivityListBox.ScrollIntoView(latestWechatItem);
         FocusElement(LatestWechatRecentActivityListBox);
     }
 
+    private void FocusSettingsElement(System.Windows.Controls.TabItem tabItem, FrameworkElement element)
+    {
+        SelectSettingsTab(tabItem);
+        FocusElement(element);
+    }
+
+    private void SelectSettingsTab(System.Windows.Controls.TabItem tabItem)
+    {
+        SettingsTabControl.SelectedItem = tabItem;
+        SettingsTabControl.UpdateLayout();
+    }
+
+    private void SelectActivityTab(System.Windows.Controls.TabItem tabItem)
+    {
+        ChannelActivityTabControl.SelectedItem = tabItem;
+        ChannelActivityTabControl.UpdateLayout();
+    }
+
     private string BuildTrayBalloonText()
     {
         return _viewModel.IsProcessRunning
-            ? "Desktop hidden to tray. Backend keeps running until you stop it."
-            : "Desktop hidden to tray. Reopen it any time or start the backend from the tray.";
+            ? "控制台已收进托盘。Backend 会继续运行，直到你主动停止它。"
+            : "控制台已收进托盘。你可以随时重新打开，或者直接从托盘启动后端。";
     }
 
     private static DateTimeOffset ParseCapturedAt(string? capturedAt)
@@ -530,14 +597,14 @@ public partial class MainWindow : Window
         }
 
         return _confirmationDialogService.Confirm(
-            "Exit Desktop",
+            "退出控制台",
             string.Join(
                 Environment.NewLine,
                 [
-                    "Exit Desktop will close only the desktop shell and tray icon.",
-                    "The backend runtime is still running and will stay online until you choose Stop backend.",
-                    "You can reopen Local AI Runtime later from the desktop shortcut or Start menu without starting a second desktop shell.",
-                    "Continue?"
+                    "退出控制台只会关闭桌面壳和托盘图标。",
+                    "Backend runtime 当前仍在运行，会继续保持在线，直到你主动选择停止后端。",
+                    "之后你可以从桌面快捷方式或开始菜单重新打开 Local AI Runtime，而不会再启动第二个桌面壳。",
+                    "是否继续？"
                 ]));
     }
 

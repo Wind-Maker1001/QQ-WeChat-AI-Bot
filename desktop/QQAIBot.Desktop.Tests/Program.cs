@@ -37,6 +37,7 @@ await RunTestAsync("LocalStateSnapshotService exports a safe snapshot without .e
 await RunTestAsync("LocalStateSnapshotService lists snapshots and restores a selected archive", TestLocalStateSnapshotListAndRestoreAsync);
 await RunTestAsync("LocalStateSnapshotService deletes a selected archive and updates the list", TestLocalStateSnapshotDeleteAsync);
 await RunTestAsync("LocalStateSnapshotService previews current-vs-snapshot differences", TestLocalStateSnapshotPreviewAsync);
+await RunTestAsync("LocalStateSnapshotPresentationBuilder explains snapshot safety and restore follow-up actions", TestLocalStateSnapshotPresentationBuilderAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter saves ALLOWED_CHAT_IDS only", TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter + fallback reader round-trip OpenAI reasoning, verbosity, and tool flags", TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync);
 await RunTestAsync("PathDiscoveryService identifies backend root", TestPathDiscoveryServiceBackendRootAsync);
@@ -49,6 +50,10 @@ await RunTestAsync("BackendExecutionProjectionFormatter formats direct and degra
 await RunTestAsync("BackendLlmProjectionFormatter formats request and failure details", TestBackendLlmProjectionFormatterAsync);
 await RunTestAsync("BackendActivityProjectionFormatter formats summaries and timelines", TestBackendActivityProjectionFormatterAsync);
 await RunTestAsync("BackendLatestTurnOverviewBuilder compresses latest turn state into user-facing guidance", TestBackendLatestTurnOverviewBuilderAsync);
+await RunTestAsync("DesktopHealthGuidanceBuilder prioritizes blocking setup, runtime follow-up, and latest issues", TestDesktopHealthGuidanceBuilderAsync);
+await RunTestAsync("DesktopGuideFlowBuilder derives first-run, daily-use, and readiness state from runtime context", TestDesktopGuideFlowBuilderAsync);
+await RunTestAsync("DesktopHealthChecklistBuilder derives stable checklist items and setup summary", TestDesktopHealthChecklistBuilderAsync);
+await RunTestAsync("DesktopHealthStatusBuilder derives readiness, primary action, and runtime explanation", TestDesktopHealthStatusBuilderAsync);
 await RunTestAsync("DesktopHealthReportBuilder surfaces setup blockers and ready-to-start guidance", TestDesktopHealthReportBuilderAsync);
 await RunTestAsync("BackendRecentActivityProjector updates order, selection, and de-duplicates replayed events", TestBackendRecentActivityProjectorAsync);
 await RunTestAsync("BackendRecentActivityViewStateHelper filters items and resolves visible selection", TestBackendRecentActivityViewStateHelperAsync);
@@ -331,7 +336,7 @@ async Task TestLocalStateSnapshotListAndRestoreAsync()
 
     AssertEqual(2, snapshots.Count, "Snapshot listing should return both exported archives.");
     AssertEqual(Path.GetFileName(secondExport.ArchivePath), snapshots[0].FileName, "Snapshot listing should order newest archives first.");
-    AssertContains(snapshots[0].Summary, "entries", "Snapshot listing should expose a summary.");
+    AssertContains(snapshots[0].Summary, "项", "Snapshot listing should expose a summary.");
     AssertFalse(string.IsNullOrWhiteSpace(snapshots[0].SizeText), "Snapshot listing should expose archive size text.");
 
     await File.WriteAllTextAsync(Path.Combine(rootPath, ".env"), "OPENAI_API_KEY=mutated", Encoding.UTF8);
@@ -397,18 +402,156 @@ async Task TestLocalStateSnapshotPreviewAsync()
 
     var preview = await service.PreviewAsync(rootPath, exportResult.ArchivePath);
 
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), ".env: differs", "Snapshot preview should report env differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), ".env：与当前状态不同", "Snapshot preview should report env differences.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "OPENAI_API_KEY", "Snapshot preview should list changed tracked env keys.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "********1234", "Snapshot preview should mask snapshot secret values.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "********9999", "Snapshot preview should mask current secret values.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data/: differs", "Snapshot preview should report data differences.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data files restored: sessions.json (changed)", "Snapshot preview should report changed data files.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data current-only files: none", "Snapshot preview should report whether local-only data files exist.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json conversations: current 3 -> snapshot 2", "Snapshot preview should report current vs snapshot conversation counts.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "Snapshot preview should report latest session activity timestamps.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json changed conversations: qq:group-c/user-c (current-only), qq:group-b/user-b (changed)", "Snapshot preview should report changed conversation keys.");
-    AssertContains(string.Join(Environment.NewLine, preview.Recommendations), "export your current state", "Snapshot preview should include restore advice.");
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), "desktop activity state: matches", "Snapshot preview should report unchanged desktop activity state.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "data/：与当前状态不同", "Snapshot preview should report data differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "将恢复的数据文件：sessions.json（已变化）", "Snapshot preview should report changed data files.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "仅当前存在的数据文件：无", "Snapshot preview should report whether local-only data files exist.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json 会话数：当前 3 -> 快照 2", "Snapshot preview should report current vs snapshot conversation counts.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC", "Snapshot preview should report latest session activity timestamps.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "sessions.json 变更会话：qq:group-c/user-c (仅当前存在), qq:group-b/user-b (已变化)", "Snapshot preview should report changed conversation keys.");
+    AssertContains(string.Join(Environment.NewLine, preview.Recommendations), "恢复前先导出当前状态", "Snapshot preview should include restore advice.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "桌面活动状态：与当前状态一致", "Snapshot preview should report unchanged desktop activity state.");
+}
+
+Task TestLocalStateSnapshotPresentationBuilderAsync()
+{
+    var snapshot = new LocalStateSnapshotDescriptor
+    {
+        ArchivePath = @"D:\snapshots\runtime-state-older.zip",
+        FileName = "runtime-state-older.zip",
+        Summary = "2026-03-26 09:00:00 | 8.2 KB | 3 项 | 包含密钥",
+        Detail = string.Join(Environment.NewLine, ["app/.env", "app/data/sessions.json", "desktop/activity-state.json"]),
+        IncludesSecrets = true,
+        IncludedEntries = ["app/.env", "app/data/sessions.json", "desktop/activity-state.json"]
+    };
+    var overwritePreview = new LocalStateSnapshotPreviewResult
+    {
+        ArchivePath = snapshot.ArchivePath,
+        Lines =
+        [
+            ".env：与当前状态不同",
+            "sessions.json 会话数：当前 3 -> 快照 2",
+            "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC",
+            ".env 跟踪键变更：QQ_AI_BOT_CONTROL_API_TOKEN, NAPCAT_WS_URL"
+        ],
+        Recommendations =
+        [
+            "建议：恢复前先导出当前状态，便于需要时回滚。",
+            "注意：这个快照包含 .env 密钥，请不要把归档分享给当前设备之外的人。"
+        ]
+    };
+
+    var selectionPresentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(snapshot, overwritePreview);
+    AssertContains(selectionPresentation.ImpactText, ".env", "Snapshot presentation should explain env overwrite risk.");
+    AssertContains(selectionPresentation.SafetyHeadlineText, "高风险", "Snapshot presentation should elevate overwrite-plus-secret restores.");
+    AssertContains(selectionPresentation.SafetyRecommendationText, "安全回滚快照", "Snapshot presentation should recommend a safe rollback snapshot first.");
+    AssertContains(selectionPresentation.RollbackHintText, "不会复制 .env 密钥", "Snapshot presentation should explain why the rollback snapshot is safer.");
+
+    var unauthorizedPresentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
+        new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = snapshot.ArchivePath,
+            RestoredEntries = ["app/.env", "app/data/sessions.json"]
+        },
+        overwritePreview,
+        new LocalStateSnapshotRestoreRuntimeContext
+        {
+            ControlApiFailure = new BackendControlApiFailure
+            {
+                Kind = BackendControlApiFailureKind.Unauthorized,
+                Message = "Control API authentication failed."
+            },
+            IsControlApiReachable = false,
+            CanStartBackend = true,
+            IsQqRuntimeReady = false,
+            IsWechatConfigured = false,
+            IsWechatRuntimeReady = false
+        });
+    AssertContains(unauthorizedPresentation.IssueText, "本地控制令牌", "Restore presentation should explain token mismatch when the snapshot changed the local control token.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, unauthorizedPresentation.PrimaryAction.Key, "Restore presentation should prioritize fixing the local control token first.");
+    AssertEqual(DesktopHealthActionKeys.ReloadConfig, unauthorizedPresentation.SecondaryAction.Key, "Restore presentation should keep reload as the second token-recovery step.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, unauthorizedPresentation.TertiaryAction.Key, "Restore presentation should still expose start-backend as a later action when the host is stopped.");
+
+    var stoppedPresentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
+        new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = snapshot.ArchivePath,
+            RestoredEntries = ["app/.env", "app/data/sessions.json"]
+        },
+        overwritePreview,
+        new LocalStateSnapshotRestoreRuntimeContext
+        {
+            ControlApiFailure = new BackendControlApiFailure(),
+            IsControlApiReachable = false,
+            CanStartBackend = true,
+            IsQqRuntimeReady = false,
+            IsWechatConfigured = false,
+            IsWechatRuntimeReady = false
+        });
+    AssertContains(stoppedPresentation.IssueText, "backend 宿主当前已停止", "Restore presentation should explain when the backend host is still stopped after restore.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, stoppedPresentation.PrimaryAction.Key, "Restore presentation should prioritize restarting the backend after an env-overwriting restore.");
+    AssertEqual(DesktopHealthActionKeys.ReloadConfig, stoppedPresentation.SecondaryAction.Key, "Restore presentation should keep reload immediately after restarting.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, stoppedPresentation.TertiaryAction.Key, "Restore presentation should keep local control settings as the tertiary stopped-runtime fallback.");
+
+    var qqBlockedPresentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
+        new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = snapshot.ArchivePath,
+            RestoredEntries = ["app/.env", "app/data/sessions.json"]
+        },
+        overwritePreview,
+        new LocalStateSnapshotRestoreRuntimeContext
+        {
+            ControlApiFailure = new BackendControlApiFailure(),
+            IsControlApiReachable = true,
+            CanStartBackend = false,
+            IsQqRuntimeReady = false,
+            IsWechatConfigured = true,
+            IsWechatRuntimeReady = false
+        });
+    AssertContains(qqBlockedPresentation.IssueText, "改动了 NapCat 设置", "Restore presentation should explain QQ readiness blockers caused by restored NapCat settings.");
+    AssertEqual(DesktopHealthActionKeys.FocusNapCatUrl, qqBlockedPresentation.PrimaryAction.Key, "Restore presentation should prioritize NapCat review when QQ is blocked.");
+    AssertEqual(DesktopHealthActionKeys.ReloadConfig, qqBlockedPresentation.SecondaryAction.Key, "Restore presentation should keep reload as the follow-up after NapCat review.");
+
+    var healthyPreview = new LocalStateSnapshotPreviewResult
+    {
+        ArchivePath = snapshot.ArchivePath,
+        Lines =
+        [
+            "sessions.json 会话数：当前 3 -> 快照 2",
+            "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC",
+            ".env 跟踪键：没有变化"
+        ],
+        Recommendations =
+        [
+            "建议：恢复前先导出当前状态，便于需要时回滚。"
+        ]
+    };
+    var healthyPresentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
+        new LocalStateSnapshotRestoreResult
+        {
+            ArchivePath = snapshot.ArchivePath,
+            RestoredEntries = ["app/data/sessions.json"]
+        },
+        healthyPreview,
+        new LocalStateSnapshotRestoreRuntimeContext
+        {
+            ControlApiFailure = new BackendControlApiFailure(),
+            IsControlApiReachable = true,
+            CanStartBackend = false,
+            IsQqRuntimeReady = true,
+            IsWechatConfigured = false,
+            IsWechatRuntimeReady = false
+        });
+    AssertContains(healthyPresentation.IssueText, "没有发现立即需要处理的恢复后问题", "Restore presentation should say when no immediate blockers remain.");
+    AssertContains(healthyPresentation.RuntimeText, "会话存储现在也应该已经生效", "Restore presentation should surface the session-store activation outcome when the runtime is healthy.");
+    AssertEqual(DesktopHealthActionKeys.ReloadConfig, healthyPresentation.PrimaryAction.Key, "Restore presentation should fall back to reload when the restore looks healthy.");
+    AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, healthyPresentation.SecondaryAction.Key, "Restore presentation should keep local control settings available as a secondary healthy-state follow-up.");
+
+    return Task.CompletedTask;
 }
 
 async Task TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync()
@@ -1128,13 +1271,15 @@ Task TestBackendLatestTurnOverviewBuilderAsync()
         });
 
     AssertEqual(DesktopHealthState.Warning, failureOverview.State, "Latest-turn overview should mark the card as warning when the newest event is a failure.");
-    AssertContains(failureOverview.Headline, "WeChat failed", "Latest-turn overview should identify the failing channel.");
-    AssertContains(failureOverview.Summary, "advanced route", "Latest-turn overview should keep route-level context visible.");
-    AssertContains(failureOverview.Capabilities, "web on", "Latest-turn overview should surface whether web search was requested.");
-    AssertContains(failureOverview.Capabilities, "code on", "Latest-turn overview should surface whether code interpreter was requested.");
-    AssertContains(failureOverview.Reason, "directive /gpt", "Latest-turn overview should surface the trigger in user-facing form.");
-    AssertContains(failureOverview.Outcome, "failed during draft after planner", "Latest-turn overview should compress the failing execution stage.");
-    AssertEqual("Review WeChat failure", failureOverview.ActionLabel, "Latest-turn overview should route failures to the relevant channel review action.");
+    AssertContains(failureOverview.Headline, "微信", "Latest-turn overview should identify the failing channel.");
+    AssertContains(failureOverview.Headline, "失败", "Latest-turn overview should identify the failing channel.");
+    AssertContains(failureOverview.Summary, "advanced 路由", "Latest-turn overview should keep route-level context visible.");
+    AssertContains(failureOverview.Capabilities, "联网 开", "Latest-turn overview should surface whether web search was requested.");
+    AssertContains(failureOverview.Capabilities, "代码 开", "Latest-turn overview should surface whether code interpreter was requested.");
+    AssertContains(failureOverview.Reason, "触发 directive /gpt", "Latest-turn overview should surface the trigger in user-facing form.");
+    AssertContains(failureOverview.Outcome, "于 draft 阶段失败", "Latest-turn overview should compress the failing execution stage.");
+    AssertContains(failureOverview.Outcome, "planner", "Latest-turn overview should mention completed execution stages.");
+    AssertEqual("查看微信失败", failureOverview.ActionLabel, "Latest-turn overview should route failures to the relevant channel review action.");
     AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, failureOverview.ActionKey, "Latest-turn overview should expose the failing-channel action key.");
 
     var localReplyOverview = BackendLatestTurnOverviewBuilder.Build(
@@ -1174,13 +1319,314 @@ Task TestBackendLatestTurnOverviewBuilderAsync()
         });
 
     AssertEqual(DesktopHealthState.Good, localReplyOverview.State, "Successful latest turns should surface as healthy.");
-    AssertContains(localReplyOverview.Headline, "answered locally", "Latest-turn overview should distinguish local replies from LLM calls.");
-    AssertContains(localReplyOverview.Outcome, "without calling the LLM", "Latest-turn overview should explicitly state when the turn stayed local.");
-    AssertEqual("Review recent activity", localReplyOverview.ActionLabel, "Successful latest turns should route to recent-activity review.");
+    AssertContains(localReplyOverview.Headline, "已本地回复", "Latest-turn overview should distinguish local replies from LLM calls.");
+    AssertContains(localReplyOverview.Outcome, "未调用 LLM", "Latest-turn overview should explicitly state when the turn stayed local.");
+    AssertEqual("查看最近活动", localReplyOverview.ActionLabel, "Successful latest turns should route to recent-activity review.");
     AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, localReplyOverview.ActionKey, "Successful latest turns should expose the generic recent-activity action.");
 
     var emptyOverview = BackendLatestTurnOverviewBuilder.Build(new BackendRuntimeSnapshotViewState());
-    AssertContains(emptyOverview.Headline, "no recent QQ or WeChat activity", "Latest-turn overview should expose a calm empty state when nothing has run yet.");
+    AssertContains(emptyOverview.Headline, "还没有最近的 QQ 或微信活动", "Latest-turn overview should expose a calm empty state when nothing has run yet.");
+
+    return Task.CompletedTask;
+}
+
+Task TestDesktopHealthGuidanceBuilderAsync()
+{
+    DesktopHealthCheckItem[] setupChecks =
+    [
+        new DesktopHealthCheckItem
+        {
+            Key = "openai",
+            Title = "OpenAI",
+            State = DesktopHealthState.Error,
+            Detail = "API key is missing.",
+            IsBlocking = true,
+            ActionLabel = "查看 API 密钥",
+            ActionKey = DesktopHealthActionKeys.FocusOpenAiDefaultKey
+        },
+        new DesktopHealthCheckItem
+        {
+            Key = "qq",
+            Title = "QQ",
+            State = DesktopHealthState.Error,
+            Detail = "NapCat token is missing.",
+            IsBlocking = true,
+            ActionLabel = "查看 NapCat Token",
+            ActionKey = DesktopHealthActionKeys.FocusNapCatToken
+        }
+    ];
+    var setupGuidance = DesktopHealthGuidanceBuilder.Build(
+        new BotConfig
+        {
+            NapCatWsUrl = "ws://127.0.0.1:3001"
+        },
+        new BackendRuntimeSnapshotViewState(),
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        setupChecks,
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual(string.Empty, setupGuidance.LatestIssueActionLabel, "Guidance builder should keep latest-issue actions out of the way when setup is still blocking.");
+    AssertEqual("添加 OpenAI 兼容密钥", setupGuidance.NextActions[0].Title, "Guidance builder should prioritize the OpenAI blocker first.");
+    AssertEqual("补上 NapCat Token", setupGuidance.NextActions[1].Title, "Guidance builder should keep the QQ credential blocker visible next.");
+    AssertContains(setupGuidance.ActionSummary, "当前重点：添加 OpenAI 兼容密钥", "Guidance builder should compress blocking setup into a single focus sentence.");
+
+    var runtimeGuidance = DesktopHealthGuidanceBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = false,
+            RuntimeReady = false
+        },
+        new BackendControlApiFailure(),
+        [],
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: false);
+
+    AssertEqual("启动后端", runtimeGuidance.NextActions[0].Title, "Guidance builder should prioritize backend start once setup is complete.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, runtimeGuidance.NextActions[0].ActionKey, "Guidance builder should expose the direct backend start action.");
+    AssertEqual("稍后启用开机启动（可选）", runtimeGuidance.NextActions[1].Title, "Guidance builder should keep resident-mode setup as a lower-priority follow-up.");
+
+    var latestIssueGuidance = DesktopHealthGuidanceBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = true,
+            RuntimeReady = true,
+            LastWechatLlmFailure = new BackendLlmFailureStatus
+            {
+                CapturedAt = "2026-03-24T00:00:05.000Z",
+                Error = "provider rejected request"
+            }
+        },
+        new BackendControlApiFailure(),
+        [],
+        isBackendRootValid: true,
+        hasUnsavedChanges: false,
+        autoStartEnabled: true);
+
+    AssertContains(latestIssueGuidance.LatestIssueText, "微信", "Guidance builder should surface the latest runtime failure summary.");
+    AssertContains(latestIssueGuidance.LatestIssueText, "失败", "Guidance builder should surface the latest runtime failure summary.");
+    AssertEqual("查看微信失败", latestIssueGuidance.LatestIssueActionLabel, "Guidance builder should expose the failing-channel review action.");
+    AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, latestIssueGuidance.LatestIssueActionKey, "Guidance builder should route the latest issue to the failing channel.");
+    AssertEqual("查看最新问题", latestIssueGuidance.NextActions[0].Title, "Guidance builder should turn the latest runtime failure into the first follow-up action when no higher-priority setup/runtime action exists.");
+
+    return Task.CompletedTask;
+}
+
+Task TestDesktopGuideFlowBuilderAsync()
+{
+    var firstRunFlow = DesktopGuideFlowBuilder.Build(
+        new DesktopGuideFlowContext
+        {
+            IsBackendRootValid = true,
+            HasUnsavedChanges = false,
+            CanStartBackend = true,
+            IsProcessRunning = false,
+            IsQqRuntimeReady = false,
+            AutoStartEnabled = false,
+            HealthChecks =
+            [
+                new DesktopHealthCheckItem
+                {
+                    Key = "control-api",
+                    Title = "Control API",
+                    State = DesktopHealthState.Warning,
+                    Detail = "Desktop is offline from the live backend."
+                },
+                new DesktopHealthCheckItem
+                {
+                    Key = "openai",
+                    Title = "LLM credentials",
+                    State = DesktopHealthState.Good,
+                    Detail = "Configured"
+                }
+            ]
+        });
+
+    AssertFalse(firstRunFlow.IsFirstRunGuideComplete, "Guide flow should keep first-run incomplete while the runtime is still offline.");
+    AssertContains(firstRunFlow.FirstRunGuideText, "首次打开", "Guide flow should expose the first-run summary text.");
+    AssertContains(firstRunFlow.FirstRunGuideProgressText, "已完成 2/3", "Guide flow should compute first-run progress from step completion.");
+    AssertContains(firstRunFlow.FirstRunGuideCurrentStepText, "让 runtime 上线", "Guide flow should compute the current first-run step summary.");
+    AssertEqual("让 runtime 上线", firstRunFlow.FirstRunGuideSteps[2].Title, "Guide flow should keep the runtime-online step as the third first-run action.");
+    AssertTrue(firstRunFlow.FirstRunGuideSteps[2].IsCurrent, "Guide flow should highlight bringing the runtime online once 必填设置已完成.");
+    AssertEqual("启动后端", firstRunFlow.FirstRunGuideSteps[2].ActionLabel, "Guide flow should expose a direct backend start action for the first-run runtime step.");
+    AssertFalse(firstRunFlow.IsOverallReadinessReady, "Overall readiness should stay incomplete before daily-use prerequisites are finished.");
+    AssertEqual("设置进行中", firstRunFlow.OverallReadinessStateText, "Guide flow should report setup-in-progress before the runtime is online.");
+    AssertEqual("启动后端", firstRunFlow.OverallReadinessActionLabel, "Overall readiness should route to the current first-run action before setup is complete.");
+
+    var issueFlow = DesktopGuideFlowBuilder.Build(
+        new DesktopGuideFlowContext
+        {
+            IsBackendRootValid = true,
+            HasUnsavedChanges = false,
+            CanStartBackend = false,
+            IsProcessRunning = true,
+            IsQqRuntimeReady = true,
+            AutoStartEnabled = true,
+            HealthLatestIssueText = "最新问题：微信在 2026-03-24 08:00:00 失败。provider rejected request",
+            HealthLatestIssueActionLabel = "查看微信失败",
+            HealthLatestIssueActionKey = DesktopHealthActionKeys.FocusWechatFailure,
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-1",
+                    EventType = "Request",
+                    Summary = "default / gpt-5.4",
+                    CapturedAt = "2026-03-24T08:00:01.000Z",
+                    Meta = "2026-03-24 08:00:01"
+                }
+            ]
+        });
+
+    AssertFalse(issueFlow.IsDailyUseGuideComplete, "Daily-use guide should stay incomplete while a latest issue still needs review.");
+    AssertContains(issueFlow.DailyUseGuideText, "日常常驻", "Guide flow should expose the daily-use summary text.");
+    AssertContains(issueFlow.DailyUseGuideProgressText, "已完成 2/3", "Guide flow should compute daily-use progress from the step states.");
+    AssertContains(issueFlow.DailyUseGuideCurrentStepText, "有异常时查看最新问题", "Guide flow should compute the current daily-use step summary.");
+    AssertTrue(issueFlow.DailyUseGuideSteps[2].IsCurrent, "Guide flow should highlight the latest-issue review step after runtime reachability and startup are handled.");
+    AssertContains(issueFlow.DailyUseGuideSteps[2].Detail, "provider rejected request", "Guide flow should surface the latest issue detail in the daily-use review step.");
+    AssertEqual("查看微信失败", issueFlow.OverallReadinessActionLabel, "Overall readiness should route to the current daily-use issue action when setup is complete but an issue remains.");
+    AssertContains(issueFlow.OverallReadinessRecentActivityText, "最近活动：QQ Request", "Guide flow should summarize the latest recent activity across channels.");
+
+    var readyFlow = DesktopGuideFlowBuilder.Build(
+        new DesktopGuideFlowContext
+        {
+            IsBackendRootValid = true,
+            HasUnsavedChanges = false,
+            CanStartBackend = false,
+            IsProcessRunning = true,
+            IsQqRuntimeReady = true,
+            AutoStartEnabled = true,
+            QqRecentActivities =
+            [
+                new BackendRecentActivityItem
+                {
+                    EventKey = "req-2",
+                    EventType = "Request",
+                    Summary = "advanced / gpt-5.4",
+                    CapturedAt = "2026-03-24T09:00:00.000Z",
+                    Meta = "2026-03-24 09:00:00"
+                }
+            ]
+        });
+
+    AssertTrue(readyFlow.IsFirstRunGuideComplete, "Guide flow should mark first-run complete once QQ is online.");
+    AssertTrue(readyFlow.IsDailyUseGuideComplete, "Guide flow should mark daily-use complete once runtime is online, startup is enabled, and no latest issue remains.");
+    AssertContains(readyFlow.FirstRunGuideCompletionText, "首次安装已完成", "Guide flow should expose the first-run completion text once setup is fully complete.");
+    AssertContains(readyFlow.DailyUseGuideCompletionText, "已进入日常常驻模式", "Guide flow should expose the daily-use completion text once the desktop is in steady-state use.");
+    AssertTrue(readyFlow.IsOverallReadinessReady, "Overall readiness should be ready once both guide tracks are complete.");
+    AssertEqual("可日常使用", readyFlow.OverallReadinessStateText, "Guide flow should expose the ready state when all guide requirements are complete.");
+    AssertEqual("查看最近活动", readyFlow.OverallReadinessActionLabel, "Guide flow should still offer recent-activity review when the system is otherwise calm.");
+    AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, readyFlow.OverallReadinessActionKey, "Guide flow should route the ready-state action to recent activity.");
+
+    return Task.CompletedTask;
+}
+
+Task TestDesktopHealthChecklistBuilderAsync()
+{
+    var setupChecklist = DesktopHealthChecklistBuilder.Build(
+        new BotConfig
+        {
+            NapCatWsUrl = "ws://127.0.0.1:3001"
+        },
+        new BackendRuntimeSnapshotViewState(),
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isBackendRootValid: true,
+        autoStartEnabled: false);
+
+    AssertEqual(5, setupChecklist.Checks.Count, "Checklist builder should produce the fixed desktop checklist.");
+    AssertContains(setupChecklist.ChecklistStatus, "还有 2 个必填项待处理", "Checklist builder should summarize the remaining first-run blockers.");
+    AssertEqual("缺少 API Key", setupChecklist.Checks[1].StateText, "Checklist builder should preserve the OpenAI blocker state.");
+    AssertEqual(DesktopHealthActionKeys.FocusNapCatToken, setupChecklist.Checks[2].ActionKey, "Checklist builder should preserve the QQ token remediation action.");
+
+    var startupChecklist = DesktopHealthChecklistBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = true,
+            RuntimeReady = true
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true,
+        autoStartEnabled: true);
+
+    AssertContains(startupChecklist.ChecklistStatus, "必填设置已完成", "Checklist builder should distinguish completed setup from runtime follow-up.");
+    AssertEqual("随 Windows 启动", startupChecklist.Checks[4].StateText, "Checklist builder should preserve the resident-mode enabled state.");
+    AssertEqual(string.Empty, startupChecklist.Checks[4].ActionLabel, "Checklist builder should clear the resident-mode action when startup is already enabled.");
+
+    return Task.CompletedTask;
+}
+
+Task TestDesktopHealthStatusBuilderAsync()
+{
+    var setupStatus = DesktopHealthStatusBuilder.Build(
+        new BotConfig
+        {
+            NapCatWsUrl = "ws://127.0.0.1:3001"
+        },
+        new BackendRuntimeSnapshotViewState(),
+        new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Unreachable,
+            Message = "Control API is unreachable."
+        },
+        isBackendRootValid: true);
+
+    AssertEqual(DesktopHealthState.Error, setupStatus.State, "Status builder should surface setup blockers as an error state.");
+    AssertEqual("需要设置", setupStatus.StateText, "Status builder should expose the setup-needed state text.");
+    AssertContains(setupStatus.ReadyNowText, "还不行", "Status builder should explicitly say the runtime is not ready during first-run blockers.");
+    AssertEqual("查看 API 密钥", setupStatus.PrimaryActionLabel, "Status builder should preserve the first-run remediation action.");
+
+    var readyToStartStatus = DesktopHealthStatusBuilder.Build(
+        new BotConfig
+        {
+            OpenAiApiKey = "test-key",
+            NapCatWsUrl = "ws://127.0.0.1:3001",
+            NapCatToken = "napcat-test-token"
+        },
+        new BackendRuntimeSnapshotViewState
+        {
+            ControlApiReachable = true,
+            RuntimeActive = false,
+            RuntimeReady = false
+        },
+        new BackendControlApiFailure(),
+        isBackendRootValid: true);
+
+    AssertEqual(DesktopHealthState.Warning, readyToStartStatus.State, "Status builder should use a warning state when config is ready but the backend is stopped.");
+    AssertEqual("可启动", readyToStartStatus.StateText, "Status builder should expose ready-to-start state text.");
+    AssertContains(readyToStartStatus.ReadyNowText, "QQ 已具备启动条件", "Status builder should explain that QQ can be started now.");
+    AssertContains(readyToStartStatus.RuntimeExplanation, "QQ worker 已停止", "Status builder should explain the stopped runtime state.");
+    AssertEqual(DesktopHealthActionKeys.StartBackend, readyToStartStatus.PrimaryActionKey, "Status builder should preserve the direct start action.");
 
     return Task.CompletedTask;
 }
@@ -1203,25 +1649,25 @@ Task TestDesktopHealthReportBuilderAsync()
         autoStartEnabled: false);
 
     AssertEqual(DesktopHealthState.Error, setupBlockedReport.State, "Health report should flag missing first-run config as an error.");
-    AssertEqual("Setup needed", setupBlockedReport.StateText, "Health report should surface setup-needed state text.");
-    AssertContains(setupBlockedReport.Summary, "OpenAI-compatible API key", "Health report summary should explain the missing model credential.");
-    AssertContains(setupBlockedReport.ChecklistStatus, "2 required items still need attention", "Health report checklist should count first-run blockers.");
-    AssertContains(setupBlockedReport.ReadyNowText, "not yet", "Health report should clearly say the runtime is not ready during first-run blockers.");
+    AssertEqual("需要设置", setupBlockedReport.StateText, "Health report should surface setup-needed state text.");
+    AssertContains(setupBlockedReport.Summary, "OpenAI 兼容 API key", "Health report summary should explain the missing model credential.");
+    AssertContains(setupBlockedReport.ChecklistStatus, "还有 2 个必填项待处理", "Health report checklist should count first-run blockers.");
+    AssertContains(setupBlockedReport.ReadyNowText, "还不行", "Health report should clearly say the runtime is not ready during first-run blockers.");
     AssertContains(setupBlockedReport.PrimaryAction, "OPENAI_API_KEY", "Health report should tell the user how to unblock first run.");
-    AssertEqual("Go to API keys", setupBlockedReport.PrimaryActionLabel, "Health report should expose a primary remediation label.");
+    AssertEqual("查看 API 密钥", setupBlockedReport.PrimaryActionLabel, "Health report should expose a primary remediation label.");
     AssertEqual(DesktopHealthActionKeys.FocusOpenAiDefaultKey, setupBlockedReport.PrimaryActionKey, "Health report should expose a primary remediation action key.");
     AssertEqual(5, setupBlockedReport.Checks.Count, "Health report should produce the fixed checklist plus resident mode.");
-    AssertEqual("Missing API key", setupBlockedReport.Checks[1].StateText, "OpenAI checklist item should explain the missing key.");
-    AssertEqual("Go to API keys", setupBlockedReport.Checks[1].ActionLabel, "OpenAI checklist item should expose a remediation action.");
-    AssertEqual("Missing token", setupBlockedReport.Checks[2].StateText, "QQ checklist item should explain the missing NapCat token.");
+    AssertEqual("缺少 API Key", setupBlockedReport.Checks[1].StateText, "OpenAI checklist item should explain the missing key.");
+    AssertEqual("查看 API 密钥", setupBlockedReport.Checks[1].ActionLabel, "OpenAI checklist item should expose a remediation action.");
+    AssertEqual("缺少 Token", setupBlockedReport.Checks[2].StateText, "QQ checklist item should explain the missing NapCat token.");
     AssertEqual(DesktopHealthActionKeys.FocusNapCatToken, setupBlockedReport.Checks[2].ActionKey, "QQ checklist item should expose the token focus action.");
     AssertEqual(string.Empty, setupBlockedReport.LatestIssueActionLabel, "Health report should not distract first-run setup with a latest-issue action button.");
-    AssertEqual("Enable startup", setupBlockedReport.Checks[4].ActionLabel, "Resident mode should still explain how to enable startup later.");
+    AssertEqual("启用开机启动", setupBlockedReport.Checks[4].ActionLabel, "常驻模式 should still explain how to enable startup later.");
     AssertEqual("1", setupBlockedReport.NextActions[0].StepNumber, "Action queue should number the first guided action.");
-    AssertEqual("Add an OpenAI-compatible key", setupBlockedReport.NextActions[0].Title, "Action queue should start with the first missing required credential.");
-    AssertEqual("Go to API keys", setupBlockedReport.NextActions[0].ActionLabel, "Action queue should surface the matching one-click remediation.");
-    AssertEqual("Add the NapCat token", setupBlockedReport.NextActions[1].Title, "Action queue should keep the second blocking setup item visible.");
-    AssertContains(setupBlockedReport.ActionSummary, "Current focus: Add an OpenAI-compatible key", "Action summary should compress first-run setup into one focus sentence.");
+    AssertEqual("添加 OpenAI 兼容密钥", setupBlockedReport.NextActions[0].Title, "Action queue should start with the first missing required credential.");
+    AssertEqual("查看 API 密钥", setupBlockedReport.NextActions[0].ActionLabel, "Action queue should surface the matching one-click remediation.");
+    AssertEqual("补上 NapCat Token", setupBlockedReport.NextActions[1].Title, "Action queue should keep the second blocking setup item visible.");
+    AssertContains(setupBlockedReport.ActionSummary, "当前重点：添加 OpenAI 兼容密钥", "Action summary should compress first-run setup into one focus sentence.");
 
     var readyToStartReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1247,21 +1693,21 @@ Task TestDesktopHealthReportBuilderAsync()
         autoStartEnabled: false);
 
     AssertEqual(DesktopHealthState.Warning, readyToStartReport.State, "Health report should use a warning state when config is ready but the backend is stopped.");
-    AssertEqual("Ready to start", readyToStartReport.StateText, "Health report should expose ready-to-start state text.");
-    AssertContains(readyToStartReport.PrimaryAction, "Start the backend", "Health report should point the user to the next runtime action.");
-    AssertEqual("Start backend", readyToStartReport.PrimaryActionLabel, "Ready-to-start report should expose a start action label.");
+    AssertEqual("可启动", readyToStartReport.StateText, "Health report should expose ready-to-start state text.");
+    AssertContains(readyToStartReport.PrimaryAction, "启动后端", "Health report should point the user to the next runtime action.");
+    AssertEqual("启动后端", readyToStartReport.PrimaryActionLabel, "Ready-to-start report should expose a start action label.");
     AssertEqual(DesktopHealthActionKeys.StartBackend, readyToStartReport.PrimaryActionKey, "Ready-to-start report should expose a start action key.");
-    AssertContains(readyToStartReport.ChecklistStatus, "required setup is complete", "Health report should separate completed setup from runtime start state.");
-    AssertContains(readyToStartReport.ReadyNowText, "QQ is ready to start", "Health report should tell the user that QQ can be started now.");
-    AssertContains(readyToStartReport.RuntimeExplanation, "QQ worker is stopped", "Health report explanation should make the stopped runtime easy to understand.");
-    AssertContains(readyToStartReport.Checks[3].Detail, "QQ can run without it", "Health report should explain that WeChat is optional when it is disabled.");
+    AssertContains(readyToStartReport.ChecklistStatus, "必填设置已完成", "Health report should separate completed setup from runtime start state.");
+    AssertContains(readyToStartReport.ReadyNowText, "QQ 已具备启动条件", "Health report should tell the user that QQ can be started now.");
+    AssertContains(readyToStartReport.RuntimeExplanation, "QQ worker 已停止", "Health report explanation should make the stopped runtime easy to understand.");
+    AssertContains(readyToStartReport.Checks[3].Detail, "QQ 可独立运行", "Health report should explain that WeChat is optional when it is disabled.");
     AssertEqual(string.Empty, readyToStartReport.LatestIssueActionLabel, "Health report should hide latest-issue actions when no runtime failures have been captured.");
-    AssertEqual("Enable startup", readyToStartReport.Checks[4].ActionLabel, "Resident mode should expose a one-click startup action when auto-start is off.");
-    AssertEqual(DesktopHealthActionKeys.ToggleAutoStart, readyToStartReport.Checks[4].ActionKey, "Resident mode should route to the auto-start toggle action.");
-    AssertContains(readyToStartReport.Checks[4].Detail, "Exit Desktop closes only this window", "Resident mode should explain that closing desktop is separate from stopping backend.");
-    AssertEqual("Start the backend", readyToStartReport.NextActions[0].Title, "Action queue should point to backend start once setup is complete.");
-    AssertEqual("Start backend", readyToStartReport.NextActions[0].ActionLabel, "Action queue should expose the direct backend start action.");
-    AssertEqual("Enable startup later (optional)", readyToStartReport.NextActions[1].Title, "Action queue should keep resident-mode setup visible as a lower-priority follow-up.");
+    AssertEqual("启用开机启动", readyToStartReport.Checks[4].ActionLabel, "常驻模式 should expose a one-click startup action when auto-start is off.");
+    AssertEqual(DesktopHealthActionKeys.ToggleAutoStart, readyToStartReport.Checks[4].ActionKey, "常驻模式 should route to the auto-start toggle action.");
+    AssertContains(readyToStartReport.Checks[4].Detail, "退出控制台", "常驻模式 should explain that closing desktop is separate from stopping backend.");
+    AssertEqual("启动后端", readyToStartReport.NextActions[0].Title, "Action queue should point to backend start once setup is complete.");
+    AssertEqual("启动后端", readyToStartReport.NextActions[0].ActionLabel, "Action queue should expose the direct backend start action.");
+    AssertEqual("稍后启用开机启动（可选）", readyToStartReport.NextActions[1].Title, "Action queue should keep resident-mode setup visible as a lower-priority follow-up.");
 
     var qqReadyWechatWaitingReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1287,10 +1733,10 @@ Task TestDesktopHealthReportBuilderAsync()
         hasUnsavedChanges: false,
         autoStartEnabled: false);
 
-    AssertContains(qqReadyWechatWaitingReport.ChecklistStatus, "1 runtime warning", "Health report should count optional runtime follow-up items separately once setup is complete.");
-    AssertContains(qqReadyWechatWaitingReport.ReadyNowText, "QQ is ready for daily use", "Health report should tell the user QQ can still be used when only WeChat is waiting.");
-    AssertEqual("Check the WeChat bridge", qqReadyWechatWaitingReport.NextActions[0].Title, "Action queue should surface WeChat follow-up only after QQ is already ready.");
-    AssertEqual("Go to WeChat config", qqReadyWechatWaitingReport.NextActions[0].ActionLabel, "WeChat follow-up should stay one click away.");
+    AssertContains(qqReadyWechatWaitingReport.ChecklistStatus, "1 个 runtime 警告", "Health report should count optional runtime follow-up items separately once setup is complete.");
+    AssertContains(qqReadyWechatWaitingReport.ReadyNowText, "QQ 已可日常使用", "Health report should tell the user QQ can still be used when only WeChat is waiting.");
+    AssertEqual("检查微信桥接", qqReadyWechatWaitingReport.NextActions[0].Title, "Action queue should surface WeChat follow-up only after QQ is already ready.");
+    AssertEqual("查看微信配置", qqReadyWechatWaitingReport.NextActions[0].ActionLabel, "WeChat follow-up should stay one click away.");
 
     var unauthorizedIssueReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1312,9 +1758,9 @@ Task TestDesktopHealthReportBuilderAsync()
         hasUnsavedChanges: false,
         autoStartEnabled: false);
 
-    AssertEqual("Go to local token", unauthorizedIssueReport.LatestIssueActionLabel, "Unauthorized latest issue should expose a local-token fix action.");
+    AssertEqual("查看本机令牌", unauthorizedIssueReport.LatestIssueActionLabel, "Unauthorized latest issue should expose a local-token fix action.");
     AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, unauthorizedIssueReport.LatestIssueActionKey, "Unauthorized latest issue should route to the local token field.");
-    AssertEqual("Sync the desktop control token", unauthorizedIssueReport.NextActions[0].Title, "Action queue should front-load local-token recovery when desktop is locked out.");
+    AssertEqual("同步 desktop control token", unauthorizedIssueReport.NextActions[0].Title, "Action queue should front-load local-token recovery when desktop is locked out.");
 
     var runtimeFailureIssueReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1339,10 +1785,10 @@ Task TestDesktopHealthReportBuilderAsync()
         hasUnsavedChanges: false,
         autoStartEnabled: false);
 
-    AssertEqual("Review WeChat failure", runtimeFailureIssueReport.LatestIssueActionLabel, "Latest runtime failure should expose the failing channel activity action.");
+    AssertEqual("查看微信失败", runtimeFailureIssueReport.LatestIssueActionLabel, "Latest runtime failure should expose the failing channel activity action.");
     AssertEqual(DesktopHealthActionKeys.FocusWechatFailure, runtimeFailureIssueReport.LatestIssueActionKey, "Latest runtime failure should route to the failing WeChat activity.");
-    AssertEqual("Review the latest issue", runtimeFailureIssueReport.NextActions[0].Title, "Action queue should surface runtime failures once setup and startup blockers are gone.");
-    AssertEqual("Review WeChat failure", runtimeFailureIssueReport.NextActions[0].ActionLabel, "Runtime failure action should stay one click away from the action queue.");
+    AssertEqual("查看最新问题", runtimeFailureIssueReport.NextActions[0].Title, "Action queue should surface runtime failures once setup and startup blockers are gone.");
+    AssertEqual("查看微信失败", runtimeFailureIssueReport.NextActions[0].ActionLabel, "Runtime failure action should stay one click away from the action queue.");
 
     var startupEnabledReport = DesktopHealthReportBuilder.Build(
         new BotConfig
@@ -1362,11 +1808,11 @@ Task TestDesktopHealthReportBuilderAsync()
         hasUnsavedChanges: false,
         autoStartEnabled: true);
 
-    AssertEqual("Starts with Windows", startupEnabledReport.Checks[4].StateText, "Resident mode should confirm when startup is enabled.");
-    AssertEqual(string.Empty, startupEnabledReport.Checks[4].ActionLabel, "Resident mode should not prompt for startup when it is already enabled.");
-    AssertContains(startupEnabledReport.Checks[4].Detail, "use Stop backend", "Resident mode should explain how to fully stop the runtime when startup is enabled.");
+    AssertEqual("随 Windows 启动", startupEnabledReport.Checks[4].StateText, "常驻模式 should confirm when startup is enabled.");
+    AssertEqual(string.Empty, startupEnabledReport.Checks[4].ActionLabel, "常驻模式 should not prompt for startup when it is already enabled.");
+    AssertContains(startupEnabledReport.Checks[4].Detail, "使用“停止后端”", "常驻模式 should explain how to fully stop the runtime when startup is enabled.");
     AssertEqual(0, startupEnabledReport.NextActions.Count, "Action queue should disappear when nothing urgent is left to do.");
-    AssertContains(startupEnabledReport.ActionSummary, "nothing urgent is blocking", "Action summary should explicitly say when the runtime is calm.");
+    AssertContains(startupEnabledReport.ActionSummary, "没有阻塞这个 runtime 的紧急问题", "Action summary should explicitly say when the runtime is calm.");
 
     return Task.CompletedTask;
 }
@@ -2132,8 +2578,8 @@ Task TestDesktopOperationErrorFormatterAsync()
         },
         envPath: @"D:\runtime\.env");
 
-    AssertContains(unauthorized.StatusText, "local control token mismatch", "Unauthorized guidance should explain the local control token mismatch.");
-    AssertEqual("Local control token required", unauthorized.DialogTitle, "Unauthorized guidance should use a focused dialog title.");
+    AssertContains(unauthorized.StatusText, "本地控制令牌不一致", "Unauthorized guidance should explain the local control token mismatch.");
+    AssertEqual("需要本地控制令牌", unauthorized.DialogTitle, "Unauthorized guidance should use a focused dialog title.");
     AssertContains(unauthorized.DialogMessage, "本机连接设置", "Unauthorized guidance should point the user to the local desktop attachment section.");
     AssertContains(unauthorized.DialogMessage, "QQ_AI_BOT_CONTROL_API_TOKEN", "Unauthorized guidance should mention the exact local token key.");
     AssertContains(unauthorized.DialogMessage, @"D:\runtime\.env", "Unauthorized guidance should surface the local env path.");
@@ -2148,11 +2594,11 @@ Task TestDesktopOperationErrorFormatterAsync()
             Message = "WECHAT_BRIDGE_URL must be a valid ws:// or wss:// URL"
         });
 
-    AssertContains(rejected.StatusText, "control API rejected the request", "Rejected guidance should explain that the control API refused the update.");
-    AssertEqual("Save config rejected", rejected.DialogTitle, "Rejected guidance should identify the rejected action.");
-    AssertContains(rejected.DialogMessage, "Check the field mentioned below", "Rejected guidance should tell the user what to do next.");
+    AssertContains(rejected.StatusText, "control API 拒绝了请求", "Rejected guidance should explain that the control API refused the update.");
+    AssertEqual("Save config被拒绝", rejected.DialogTitle, "Rejected guidance should identify the rejected action.");
+    AssertContains(rejected.DialogMessage, "先检查下面提到的字段", "Rejected guidance should tell the user what to do next.");
     AssertContains(rejected.DialogMessage, "WECHAT_BRIDGE_URL", "Rejected guidance should preserve the specific validation detail.");
-    AssertEqual("Go to WeChat config", rejected.SuggestedActionLabel, "Rejected guidance should suggest the most relevant field to edit.");
+    AssertEqual("查看微信配置", rejected.SuggestedActionLabel, "Rejected guidance should suggest the most relevant field to edit.");
     AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, rejected.SuggestedActionKey, "Rejected guidance should route to the WeChat config field.");
 
     var localSettingsError = DesktopOperationErrorFormatter.Build(
@@ -2163,10 +2609,10 @@ Task TestDesktopOperationErrorFormatterAsync()
         localControlSettingsOperation: true);
 
     AssertEqual("Local control-plane save failed", localSettingsError.StatusText, "Local settings guidance should preserve the existing status text.");
-    AssertEqual("Save local control settings failed", localSettingsError.DialogTitle, "Local settings guidance should identify the local-only save action.");
-    AssertContains(localSettingsError.DialogMessage, "local desktop attachment settings", "Local settings guidance should explain that only local desktop settings are affected.");
+    AssertEqual("Save local control settings失败", localSettingsError.DialogTitle, "Local settings guidance should identify the local-only save action.");
+    AssertContains(localSettingsError.DialogMessage, "本地 desktop 附着设置", "Local settings guidance should explain that only local desktop settings are affected.");
     AssertContains(localSettingsError.DialogMessage, @"D:\runtime\.env", "Local settings guidance should show the target file path.");
-    AssertEqual("Go to local token", localSettingsError.SuggestedActionLabel, "Local settings guidance should suggest the local token field.");
+    AssertEqual("查看本机令牌", localSettingsError.SuggestedActionLabel, "Local settings guidance should suggest the local token field.");
     AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, localSettingsError.SuggestedActionKey, "Local settings guidance should route to the local token field.");
 
     var unreachable = DesktopOperationErrorFormatter.Build(
@@ -2180,9 +2626,9 @@ Task TestDesktopOperationErrorFormatterAsync()
         },
         canStartBackend: true);
 
-    AssertContains(unreachable.DialogMessage, "What happened", "Unreachable guidance should use the structured dialog layout.");
-    AssertContains(unreachable.DialogMessage, "Start the backend from this window", "Unreachable guidance should explicitly tell the user to start the backend when that action is available.");
-    AssertEqual("Start backend", unreachable.SuggestedActionLabel, "Unreachable guidance should route to backend start when the desktop can still launch it.");
+    AssertContains(unreachable.DialogMessage, "发生了什么", "Unreachable guidance should use the structured dialog layout.");
+    AssertContains(unreachable.DialogMessage, "先从这个窗口启动 backend", "Unreachable guidance should explicitly tell the user to start the backend when that action is available.");
+    AssertEqual("启动后端", unreachable.SuggestedActionLabel, "Unreachable guidance should route to backend start when the desktop can still launch it.");
     AssertEqual(DesktopHealthActionKeys.StartBackend, unreachable.SuggestedActionKey, "Unreachable guidance should expose the backend start action.");
 
     return Task.CompletedTask;
@@ -2823,7 +3269,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                     () => ((window.FindName("LatestQqLlmSummaryTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("default / gpt-5.4 / responses", StringComparison.Ordinal),
                     "latest qq llm summary binding");
                 await WaitForAsync(
-                    () => ((window.FindName("HealthStateTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("Ready to start", StringComparison.Ordinal),
+                    () => ((window.FindName("HealthStateTextBlock") as TextBlock)?.Text ?? string.Empty).Contains("可启动", StringComparison.Ordinal),
                     "health state binding");
 
                 var wechatPrefixTextBox = window.FindName("WechatBotPrefixTextBox") as TextBox
@@ -3026,37 +3472,38 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("/ai", wechatPrefixTextBox.Text, "WechatBotPrefix textbox should reflect loaded config.");
                 AssertContains(firstRunGuideTextBlock.Text, "首次打开", "Hero guide should expose a first-run explanation.");
                 AssertContains(firstRunGuideProgressTextBlock.Text, "已完成 2/3", "First-run guide should surface completion progress.");
-                AssertContains(firstRunGuideCurrentTextBlock.Text, "Bring the runtime online", "First-run guide should surface the current step summary.");
+                AssertContains(firstRunGuideCurrentTextBlock.Text, "让 runtime 上线", "First-run guide should surface the current step summary.");
                 AssertEqual(string.Empty, firstRunGuideCompletionTextBlock.Text, "First-run completion text should stay empty until all setup steps are done.");
                 AssertEqual(3, firstRunGuideStepsItemsControl.Items.Count, "First-run guide should expose three clickable setup steps.");
                 AssertEqual("1", viewModel.FirstRunGuideSteps[0].StepNumber, "First-run steps should expose a numeric badge for the first item.");
-                AssertEqual("Attach runtime folder", viewModel.FirstRunGuideSteps[0].Title, "First-run steps should begin with attaching the runtime folder.");
+                AssertEqual("连接 runtime 目录", viewModel.FirstRunGuideSteps[0].Title, "First-run steps should begin with attaching the runtime folder.");
                 AssertEqual("3", viewModel.FirstRunGuideSteps[2].StepNumber, "First-run steps should expose a numeric badge for the runtime-online step.");
-                AssertEqual("Bring the runtime online", viewModel.FirstRunGuideSteps[2].Title, "First-run steps should end with bringing the runtime online.");
-                AssertEqual("Start backend", viewModel.FirstRunGuideSteps[2].ActionLabel, "First-run runtime step should expose a direct start action when setup is complete.");
+                AssertEqual("让 runtime 上线", viewModel.FirstRunGuideSteps[2].Title, "First-run steps should end with bringing the runtime online.");
+                AssertEqual("启动后端", viewModel.FirstRunGuideSteps[2].ActionLabel, "First-run runtime step should expose a direct start action when setup is complete.");
                 AssertTrue(viewModel.FirstRunGuideSteps[2].IsCurrent, "First-run guide should highlight bringing the runtime online when setup is complete but runtime is offline.");
                 AssertContains(dailyUseGuideTextBlock.Text, "日常常驻", "Daily-use guide should expose an everyday-use summary.");
                 AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 0/3", "Daily-use guide should surface completion progress.");
-                AssertContains(dailyUseGuideCurrentTextBlock.Text, "Keep the runtime reachable", "Daily-use guide should surface the current step summary.");
+                AssertContains(dailyUseGuideCurrentTextBlock.Text, "保持 runtime 可接回", "Daily-use guide should surface the current step summary.");
                 AssertEqual(string.Empty, dailyUseGuideCompletionTextBlock.Text, "Daily-use completion text should stay empty while upkeep is not fully complete.");
                 AssertEqual(3, dailyUseGuideStepsItemsControl.Items.Count, "Daily-use guide should expose three clickable upkeep steps.");
                 AssertEqual("1", viewModel.DailyUseGuideSteps[0].StepNumber, "Daily-use guide should expose a numeric badge for the first item.");
-                AssertEqual("Keep the runtime reachable", viewModel.DailyUseGuideSteps[0].Title, "Daily-use guide should begin with runtime reachability.");
-                AssertEqual("Enable startup", viewModel.DailyUseGuideSteps[1].ActionLabel, "Daily-use guide should expose startup enablement as an optional action.");
+                AssertEqual("保持 runtime 可接回", viewModel.DailyUseGuideSteps[0].Title, "Daily-use guide should begin with runtime reachability.");
+                AssertEqual("启用开机启动", viewModel.DailyUseGuideSteps[1].ActionLabel, "Daily-use guide should expose startup enablement as an optional action.");
                 AssertContains(viewModel.DailyUseGuideSteps[2].Detail, "provider rejected request", "Daily-use guide should surface the latest issue detail when one exists.");
                 AssertTrue(viewModel.DailyUseGuideSteps[0].IsCurrent, "Daily-use guide should highlight runtime reachability first while backend is stopped.");
-                AssertEqual("Setup in progress", overallReadinessStateTextBlock.Text, "Overall readiness should show setup-in-progress before the runtime is online.");
-                AssertContains(overallReadinessSummaryTextBlock.Text, "highlighted first-run step", "Overall readiness should explain that first-run setup is still active.");
-                AssertContains(overallReadinessActionSummaryTextBlock.Text, "Current focus: Start the backend", "Overall readiness should front-load the current guided action in one sentence.");
+                AssertEqual("设置进行中", overallReadinessStateTextBlock.Text, "Overall readiness should show setup-in-progress before the runtime is online.");
+                AssertContains(overallReadinessSummaryTextBlock.Text, "首次使用步骤", "Overall readiness should explain that first-run setup is still active.");
+                AssertContains(overallReadinessActionSummaryTextBlock.Text, "当前重点：启动后端", "Overall readiness should front-load the current guided action in one sentence.");
                 AssertEqual(viewModel.HealthNextActions.Count, overallReadinessActionsItemsControl.Items.Count, "Overall readiness should bind the same guided action queue exposed by the view model.");
-                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity: QQ Request", "Overall readiness should summarize the latest captured activity.");
-                AssertEqual("Start backend", overallReadinessActionButton.Content?.ToString(), "Overall readiness should expose the next first-run action while setup is incomplete.");
-                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ completed", "Latest-turn card should front-load the newest captured turn.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "最近活动：QQ Request", "Overall readiness should summarize the latest captured activity.");
+                AssertEqual("启动后端", overallReadinessActionButton.Content?.ToString(), "Overall readiness should expose the next first-run action while setup is incomplete.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ", "Latest-turn card should front-load the newest captured turn.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "已完成", "Latest-turn card should front-load the newest captured turn.");
                 AssertContains(latestTurnSummaryTextBlock.Text, "default / gpt-5.4 / responses", "Latest-turn card should compress route/model/api context.");
-                AssertContains(latestTurnCapabilitiesTextBlock.Text, "web off", "Latest-turn card should expose current-turn capability decisions.");
-                AssertContains(latestTurnReasonTextBlock.Text, "trigger default", "Latest-turn card should explain why the current turn stayed on the default route.");
-                AssertContains(latestTurnOutcomeTextBlock.Text, "completed in one direct LLM call", "Latest-turn card should summarize direct successful execution.");
-                AssertEqual("Review recent activity", latestTurnActionButton.Content?.ToString(), "Latest-turn card should route successful turns to recent activity review.");
+                AssertContains(latestTurnCapabilitiesTextBlock.Text, "联网 关", "Latest-turn card should expose current-turn capability decisions.");
+                AssertContains(latestTurnReasonTextBlock.Text, "触发 default", "Latest-turn card should explain why the current turn stayed on the default route.");
+                AssertContains(latestTurnOutcomeTextBlock.Text, "一次直接 LLM 调用完成", "Latest-turn card should summarize direct successful execution.");
+                AssertEqual("查看最近活动", latestTurnActionButton.Content?.ToString(), "Latest-turn card should route successful turns to recent activity review.");
                 AssertContains(defaultBotInstructionsTextBox.Text, "你是本地 AI 助手，会处理来自 QQ 和微信的消息。", "Default bot instructions textbox should show the backend default system prompt.");
                 AssertContains(defaultBotInstructionsTextBox.Text, "默认使用简体中文。", "Default bot instructions textbox should show the backend language guidance.");
                 AssertEqual(defaultBotInstructionsTextBox.Text, effectiveBotInstructionsTextBox.Text, "Effective bot instructions should match the default prompt when BOT_PERSONA is empty.");
@@ -3111,36 +3558,36 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("default", latestWechatFailureCapabilityTextBlock.Text, "Latest Wechat failure capability should reflect structured failure binding.");
                 AssertEqual("capability_upgrade", latestWechatFailureUpgradeTextBlock.Text, "Latest Wechat failure upgrade should reflect structured failure binding.");
                 AssertEqual("provider rejected request", latestWechatFailureErrorTextBlock.Text, "Latest Wechat failure error should reflect structured failure binding.");
-                AssertEqual("Ready to start", healthStateTextBlock.Text, "Health state should explain that config is usable but the backend is stopped.");
-                AssertContains(healthSummaryTextBlock.Text, "backend host is currently stopped", "Health summary should explain why the runtime is not online yet.");
-                AssertContains(healthChecklistStatusTextBlock.Text, "required setup is complete", "Health checklist should separate setup completion from runtime state.");
-                AssertContains(healthReadyNowTextBlock.Text, "QQ and WeChat settings look usable", "Health readiness text should explain that channels are configured even when the backend is stopped.");
-                AssertContains(healthPrimaryActionTextBlock.Text, "Start the backend", "Health summary should tell the user the next action.");
-                AssertEqual("Exit Desktop", exitDesktopButton.Content?.ToString(), "Toolbar should expose an explicit desktop-exit action.");
-                AssertContains(residentModeDetailTextBlock.Text, "Exit Desktop closes only this window", "Toolbar should explain that tray exit is separate from stopping the backend.");
-                AssertContains(closeToTrayBehaviorTextBlock.Text, "keeps the tray entry available", "Boundary guide should explain the close-to-tray behavior when runtime is stopped.");
-                AssertContains(exitDesktopBehaviorTextBlock.Text, "reopen it later", "Boundary guide should explain desktop-only exit when runtime is stopped.");
-                AssertContains(stopBackendBehaviorTextBlock.Text, "already offline", "Boundary guide should explain the stopped-runtime case on first load.");
-                AssertContains(reopenDesktopBehaviorTextBlock.Text, "desktop shortcut or Start menu", "Boundary guide should explain where to reopen the desktop shell.");
-                AssertContains(reopenDesktopBehaviorTextBlock.Text, "second desktop shell", "Boundary guide should explain that reopening is single-instance.");
-                AssertContains(healthRuntimeExplanationTextBlock.Text, "QQ worker is stopped", "Health runtime explanation should describe the stopped QQ runtime.");
+                AssertEqual("可启动", healthStateTextBlock.Text, "Health state should explain that config is usable but the backend is stopped.");
+                AssertContains(healthSummaryTextBlock.Text, "backend 宿主当前已停止", "Health summary should explain why the runtime is not online yet.");
+                AssertContains(healthChecklistStatusTextBlock.Text, "必填设置已完成", "Health checklist should separate setup completion from runtime state.");
+                AssertContains(healthReadyNowTextBlock.Text, "QQ 和微信设置看起来都可用", "Health readiness text should explain that channels are configured even when the backend is stopped.");
+                AssertContains(healthPrimaryActionTextBlock.Text, "启动后端", "Health summary should tell the user the next action.");
+                AssertEqual("退出控制台", exitDesktopButton.Content?.ToString(), "Toolbar should expose an explicit desktop-exit action.");
+                AssertContains(residentModeDetailTextBlock.Text, "退出控制台", "Toolbar should explain that tray exit is separate from stopping the backend.");
+                AssertContains(closeToTrayBehaviorTextBlock.Text, "保留托盘入口", "Boundary guide should explain the close-to-tray behavior when runtime is stopped.");
+                AssertContains(exitDesktopBehaviorTextBlock.Text, "重新打开", "Boundary guide should explain desktop-only exit when runtime is stopped.");
+                AssertContains(stopBackendBehaviorTextBlock.Text, "已离线", "Boundary guide should explain the stopped-runtime case on first load.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "桌面快捷方式或开始菜单", "Boundary guide should explain where to reopen the desktop shell.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "新的桌面壳", "Boundary guide should explain that reopening is single-instance.");
+                AssertContains(healthRuntimeExplanationTextBlock.Text, "QQ worker 已停止", "Health runtime explanation should describe the stopped QQ runtime.");
                 AssertContains(healthLatestIssueTextBlock.Text, "provider rejected request", "Health latest issue should surface the newest runtime failure.");
-                AssertEqual("Review WeChat failure", healthLatestIssueActionButton.Content?.ToString(), "Health latest issue should expose the failing channel activity action when a runtime failure is the newest issue.");
+                AssertEqual("查看微信失败", healthLatestIssueActionButton.Content?.ToString(), "Health latest issue should expose the failing channel activity action when a runtime failure is the newest issue.");
                 healthLatestIssueActionButton.Command.Execute(healthLatestIssueActionButton.CommandParameter);
                 await WaitForAsync(
                     () => window.GetLastHealthActionTargetNameForTests() == "LatestWechatRecentActivityListBox",
                     "health latest issue action routes to wechat activity");
                 AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "provider rejected request", "Health latest issue action should select the latest WeChat failure detail.");
                 AssertEqual(5, healthChecksItemsControl.Items.Count, "Health checks should show the fixed checklist plus resident mode.");
-                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "Resident mode" && check.ActionLabel == "Enable startup"), "Health checks should expose resident mode guidance when startup is off.");
+                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "常驻模式" && check.ActionLabel == "启用开机启动"), "Health checks should expose resident mode guidance when startup is off.");
                 viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.ToggleAutoStart);
                 await WaitForAsync(() => fakeAutoStart.Enabled, "health action toggle auto-start");
                 await WaitForAsync(
-                    () => residentModeDetailTextBlock.Text.Contains("starts at Windows sign-in", StringComparison.Ordinal),
+                    () => residentModeDetailTextBlock.Text.Contains("Windows 登录时启动", StringComparison.Ordinal),
                     "resident mode detail updates after startup enable");
-                AssertContains(residentModeDetailTextBlock.Text, "use Stop backend", "Toolbar should explain how to fully stop the runtime when resident mode is enabled.");
-                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "Resident mode" && check.StateText == "Starts with Windows"), "Health checks should reflect startup-enabled resident mode.");
-                AssertEqual("Done", viewModel.FirstRunGuideSteps[1].StatusText, "First-run setup step should mark required setup as done when config is already complete.");
+                AssertContains(residentModeDetailTextBlock.Text, "停止后端", "Toolbar should explain how to fully stop the runtime when resident mode is enabled.");
+                AssertTrue(viewModel.HealthChecks.Any((check) => check.Title == "常驻模式" && check.StateText == "随 Windows 启动"), "Health checks should reflect startup-enabled resident mode.");
+                AssertEqual("已完成", viewModel.FirstRunGuideSteps[1].StatusText, "First-run setup step should mark required setup as done when config is already complete.");
                 AssertEqual(string.Empty, viewModel.DailyUseGuideSteps[1].ActionLabel, "Daily-use startup step should clear its action once resident mode is enabled.");
                 AssertTrue(viewModel.DailyUseGuideSteps[0].IsCurrent, "Daily-use guide should keep runtime reachability current until the backend is started.");
                 AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 1/3", "Daily-use guide should update progress after startup is enabled.");
@@ -3230,11 +3677,11 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertContains(selectedWechatRecentActivitySummaryTextBlock.Text, "advanced / provider rejected request", "Wechat failures-only filter should keep the failure event selected.");
                 clearQqActivityHistoryButton.Command.Execute(null);
                 await WaitForAsync(() => latestQqRecentActivityListBox.Items.Count == 0, "QQ clear activity history");
-                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "Select a QQ activity event", "Clearing QQ activity history should clear the selected detail.");
+                AssertContains(selectedQqRecentActivitySummaryTextBlock.Text, "请选择一条 QQ 活动记录", "Clearing QQ activity history should clear the selected detail.");
                 AssertFalse(qqPinSelectionToggleButton.IsChecked ?? true, "Clearing QQ activity history should reset the pin toggle.");
                 AssertTrue(clearWechatActivityHistoryButton.Command.CanExecute(null), "Wechat clear activity history button should be enabled while events exist.");
-                AssertEqual("QQ channel ready", runtimeReadyText, "Runtime ready text should reflect runtime status.");
-                AssertEqual("WeChat channel ready", wechatRuntimeReadyText, "WeChat runtime ready text should reflect runtime status.");
+                AssertEqual("QQ 通道已就绪", runtimeReadyText, "Runtime ready text should reflect runtime status.");
+                AssertEqual("微信通道已就绪", wechatRuntimeReadyText, "WeChat runtime ready text should reflect runtime status.");
 
                 wechatPrefixTextBox.Text = "/wx";
                 defaultBotInstructionsTextBox.Text = "Base prompt line 1\r\nBase prompt line 2";
@@ -3267,38 +3714,39 @@ async Task TestMainWindowSmokeAutomationAsync()
                 startButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.StartCallCount == 1, "start command invocation");
                 await WaitForAsync(
-                    () => closeToTrayBehaviorTextBlock.Text.Contains("leaves the backend running", StringComparison.Ordinal),
+                    () => closeToTrayBehaviorTextBlock.Text.Contains("backend 会继续运行", StringComparison.Ordinal),
                     "close-to-tray guide after backend start");
                 AssertContains(firstRunGuideCompletionTextBlock.Text, "首次安装已完成", "First-run guide should show an explicit completion message once runtime is online.");
-                AssertEqual("Done", viewModel.DailyUseGuideSteps[0].StatusText, "Daily-use runtime step should mark the runtime as reachable after start.");
+                AssertEqual("已完成", viewModel.DailyUseGuideSteps[0].StatusText, "Daily-use runtime step should mark the runtime as reachable after start.");
                 AssertTrue(viewModel.DailyUseGuideSteps[2].IsCurrent, "Daily-use guide should highlight the latest-issue review step once runtime and startup are already handled.");
                 AssertContains(viewModel.DailyUseGuideSteps[2].Detail, "provider rejected request", "Daily-use issue step should continue to surface the latest issue detail while it exists.");
                 AssertContains(dailyUseGuideProgressTextBlock.Text, "已完成 2/3", "Daily-use guide should update progress after runtime becomes reachable.");
-                AssertContains(dailyUseGuideCurrentTextBlock.Text, "Check the latest issue", "Daily-use guide should update the current-step summary after runtime is online.");
+                AssertContains(dailyUseGuideCurrentTextBlock.Text, "有异常时查看最新问题", "Daily-use guide should update the current-step summary after runtime is online.");
                 AssertEqual(string.Empty, dailyUseGuideCompletionTextBlock.Text, "Daily-use completion text should remain empty while a latest issue still needs review.");
-                AssertEqual("Setup complete", overallReadinessStateTextBlock.Text, "Overall readiness should move to setup-complete once first-run steps are done.");
-                AssertContains(overallReadinessSummaryTextBlock.Text, "highlighted daily-use step", "Overall readiness should explain that only daily-use polish remains.");
-                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity:", "Overall readiness should continue to summarize the latest activity while setup completes.");
-                AssertEqual("Review WeChat failure", overallReadinessActionButton.Content?.ToString(), "Overall readiness should hand off to the current daily-use issue action.");
-                AssertContains(exitDesktopBehaviorTextBlock.Text, "keeps running until you stop it", "Boundary guide should explain desktop-only exit while runtime is active.");
-                AssertContains(stopBackendBehaviorTextBlock.Text, "takes QQ/WeChat offline", "Boundary guide should explain the full stop action while runtime is active.");
-                AssertContains(reopenDesktopBehaviorTextBlock.Text, "reattaches to the same running runtime", "Boundary guide should explain reconnecting to an already-running runtime.");
-                AssertContains(reopenDesktopBehaviorTextBlock.Text, "desktop shortcut or Start menu", "Boundary guide should keep the reopen entry point visible while runtime is active.");
+                AssertEqual("设置完成", overallReadinessStateTextBlock.Text, "Overall readiness should move to setup-complete once first-run steps are done.");
+                AssertContains(overallReadinessSummaryTextBlock.Text, "日常使用步骤", "Overall readiness should explain that only daily-use polish remains.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "最近活动：", "Overall readiness should continue to summarize the latest activity while setup completes.");
+                AssertEqual("查看微信失败", overallReadinessActionButton.Content?.ToString(), "Overall readiness should hand off to the current daily-use issue action.");
+                AssertContains(exitDesktopBehaviorTextBlock.Text, "直到你主动停止", "Boundary guide should explain desktop-only exit while runtime is active.");
+                AssertContains(stopBackendBehaviorTextBlock.Text, "让 QQ / 微信下线", "Boundary guide should explain the full stop action while runtime is active.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "重新附着到同一个正在运行的 runtime", "Boundary guide should explain reconnecting to an already-running runtime.");
+                AssertContains(reopenDesktopBehaviorTextBlock.Text, "桌面快捷方式或开始菜单", "Boundary guide should keep the reopen entry point visible while runtime is active.");
 
                 fakeBackend.Status!.LastWechatLlmFailure = null;
                 fakeBackend.Status!.LastQqLlmFailure = null;
                 applyStatusMethod.Invoke(viewModel, [fakeBackend.Status, true]);
                 await WaitForAsync(
-                    () => overallReadinessStateTextBlock.Text.Contains("Ready for daily use", StringComparison.Ordinal),
+                    () => overallReadinessStateTextBlock.Text.Contains("可日常使用", StringComparison.Ordinal),
                     "overall readiness ready state");
                 await WaitForAsync(
-                    () => string.Equals(overallReadinessActionButton.Content?.ToString(), "Review recent activity", StringComparison.Ordinal),
+                    () => string.Equals(overallReadinessActionButton.Content?.ToString(), "查看最近活动", StringComparison.Ordinal),
                     "overall readiness action binding update");
-                AssertEqual("Review recent activity", overallReadinessActionButton.Content?.ToString(), "Overall readiness should offer recent activity review once no urgent issue remains.");
-                AssertContains(overallReadinessRecentActivityTextBlock.Text, "Recent activity:", "Overall readiness should keep showing the latest activity summary in the ready state.");
-                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ completed", "Latest-turn card should fall back to the newest successful turn after failures clear.");
-                AssertContains(latestTurnOutcomeTextBlock.Text, "degraded mode", "Latest-turn card should summarize degraded-but-successful execution after failures clear.");
-                AssertEqual("Review recent activity", latestTurnActionButton.Content?.ToString(), "Latest-turn card should switch back to recent-activity review when the newest turn succeeded.");
+                AssertEqual("查看最近活动", overallReadinessActionButton.Content?.ToString(), "Overall readiness should offer recent activity review once no urgent issue remains.");
+                AssertContains(overallReadinessRecentActivityTextBlock.Text, "最近活动：", "Overall readiness should keep showing the latest activity summary in the ready state.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "QQ", "Latest-turn card should fall back to the newest successful turn after failures clear.");
+                AssertContains(latestTurnHeadlineTextBlock.Text, "已完成", "Latest-turn card should fall back to the newest successful turn after failures clear.");
+                AssertContains(latestTurnOutcomeTextBlock.Text, "降级模式", "Latest-turn card should summarize degraded-but-successful execution after failures clear.");
+                AssertEqual("查看最近活动", latestTurnActionButton.Content?.ToString(), "Latest-turn card should switch back to recent-activity review when the newest turn succeeded.");
                 viewModel.RunHealthActionCommand.Execute(viewModel.OverallReadinessActionKey);
                 await WaitForAsync(
                     () => window.GetLastHealthActionTargetNameForTests() is "LatestQqRecentActivityListBox" or "LatestWechatRecentActivityListBox",
@@ -3307,7 +3755,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 stopButton.Command.Execute(null);
                 await WaitForAsync(() => fakeBackend.StopCallCount == 1, "stop command invocation");
                 await WaitForAsync(
-                    () => stopBackendBehaviorTextBlock.Text.Contains("already offline", StringComparison.Ordinal),
+                    () => stopBackendBehaviorTextBlock.Text.Contains("已离线", StringComparison.Ordinal),
                     "stop-backend guide after backend stop");
             }
             finally
@@ -3767,7 +4215,7 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
                 AssertEqual(0, fakeBotProcess.StartCallCount, "Rejected save should not start local backend recovery.");
                 AssertEqual(0, fakeBackend.StartCallCount, "Rejected save should not issue control API start.");
                 AssertEqual(0, fakeLocalFallbackReader.SaveCallCount, "Rejected save should not fall back to env file writes.");
-                AssertContains(viewModel.StatusText, "control API rejected the request", "Rejected save should surface the control API rejection reason in status text.");
+                AssertContains(viewModel.StatusText, "control API 拒绝了请求", "Rejected save should surface the control API rejection reason in status text.");
                 AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, lastHealthActionKey, "Rejected save should direct the user to the offending WeChat field.");
             }
             finally
@@ -3814,15 +4262,15 @@ async Task TestMainViewModelPublishesResidentModeNotificationsAsync()
                 await WaitForAsync(() => fakeAutoStart.Enabled, "resident mode enable");
                 await WaitForAsync(() => notifications.Count == 1, "resident mode enable notification");
 
-                AssertContains(notifications[0].Message, "start minimized", "Resident mode enable notification should explain launch behavior.");
-                AssertContains(notifications[0].Message, "ensure the runtime", "Resident mode enable notification should explain runtime recovery behavior.");
+                AssertContains(notifications[0].Message, "Windows 登录后会以最小化方式启动", "常驻模式 enable notification should explain launch behavior.");
+                AssertContains(notifications[0].Message, "确保 runtime 运行", "常驻模式 enable notification should explain runtime recovery behavior.");
 
                 viewModel.ToggleAutoStartCommand.Execute(null);
                 await WaitForAsync(() => !fakeAutoStart.Enabled, "resident mode disable");
                 await WaitForAsync(() => notifications.Count == 2, "resident mode disable notification");
 
-                AssertContains(notifications[1].Message, "Manual launch", "Resident mode disable notification should explain that manual launch still works.");
-                AssertContains(notifications[1].Message, "tray behavior", "Resident mode disable notification should mention tray behavior.");
+                AssertContains(notifications[1].Message, "手动启动后", "常驻模式 disable notification should explain that manual launch still works.");
+                AssertContains(notifications[1].Message, "托盘模式", "常驻模式 disable notification should mention tray behavior.");
             }
             finally
             {
@@ -3935,10 +4383,10 @@ async Task TestMainViewModelGuideCompletionStatesAsync()
                 AssertContains(viewModel.DailyUseGuideCurrentStepText, "全部完成", "Daily-use guide should summarize that all steps are complete.");
                 AssertContains(viewModel.DailyUseGuideProgressText, "已完成 3/3", "Daily-use guide should report all steps completed.");
                 AssertTrue(viewModel.IsOverallReadinessReady, "Overall readiness should report ready when both homepage guides are complete.");
-                AssertEqual("Ready for daily use", viewModel.OverallReadinessStateText, "Overall readiness should expose the ready state when all guides are complete.");
-                AssertContains(viewModel.OverallReadinessSummaryText, "no urgent issue action is waiting", "Overall readiness summary should confirm that the system is calm once all guides are complete.");
-                AssertContains(viewModel.OverallReadinessRecentActivityText, "Recent activity: QQ Request", "Overall readiness should summarize the latest recent activity in the ready state.");
-                AssertEqual("Review recent activity", viewModel.OverallReadinessActionLabel, "Overall readiness should offer a useful next action even after setup is complete.");
+                AssertEqual("可日常使用", viewModel.OverallReadinessStateText, "Overall readiness should expose the ready state when all guides are complete.");
+                AssertContains(viewModel.OverallReadinessSummaryText, "当前没有需要立即处理的问题", "Overall readiness summary should confirm that the system is calm once all guides are complete.");
+                AssertContains(viewModel.OverallReadinessRecentActivityText, "最近活动：QQ Request", "Overall readiness should summarize the latest recent activity in the ready state.");
+                AssertEqual("查看最近活动", viewModel.OverallReadinessActionLabel, "Overall readiness should offer a useful next action even after setup is complete.");
                 AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, viewModel.OverallReadinessActionKey, "Overall readiness should route to the latest activity review action when ready.");
             }
             finally
@@ -4066,16 +4514,16 @@ async Task TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync()
         ArchivePath = @"D:\snapshots\runtime-state-token-test.zip",
         Lines =
         [
-            ".env: differs from current state",
-            ".env tracked keys changed: QQ_AI_BOT_CONTROL_API_TOKEN",
+            ".env：与当前状态不同",
+            ".env 跟踪键变更：QQ_AI_BOT_CONTROL_API_TOKEN",
             "QQ_AI_BOT_CONTROL_API_TOKEN: ********1111 -> ********2222",
-            "data/: matches current state",
-            "desktop activity state: matches current state"
+            "data/：与当前状态一致",
+            "桌面活动状态：与当前状态一致"
         ],
         Recommendations =
         [
-            "Recommended: export your current state before restoring so you can roll back if needed.",
-            "Caution: this snapshot includes .env secrets. Avoid sharing the archive outside this device."
+            "建议：恢复前先导出当前状态，便于需要时回滚。",
+            "注意：这个快照包含 .env 密钥，请不要把归档分享给当前设备之外的人。"
         ]
     };
 
@@ -4106,13 +4554,13 @@ async Task TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync()
 
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore token guidance restore");
 
-                AssertContains(viewModel.LastStateRestoreIssueText, "local control token", "Restore guidance should explain the token mismatch.");
+                AssertContains(viewModel.LastStateRestoreIssueText, "本地控制令牌", "Restore guidance should explain the token mismatch.");
                 AssertContains(viewModel.LastStateRestoreControlPlaneText, "QQ_AI_BOT_CONTROL_API_TOKEN", "Restore guidance should explain which local control-plane setting changed.");
-                AssertContains(viewModel.LastStateRestoreRuntimeText, "cannot verify QQ or WeChat readiness", "Restore guidance should avoid pretending live runtime state is current when auth is broken.");
-                AssertEqual("Update local control token", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize fixing the local token first.");
+                AssertContains(viewModel.LastStateRestoreRuntimeText, "无法确认 QQ 或微信是否 ready", "Restore guidance should avoid pretending live runtime state is current when auth is broken.");
+                AssertEqual("更新本地控制令牌", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize fixing the local token first.");
                 AssertEqual(DesktopHealthActionKeys.FocusControlApiToken, viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should route the primary action to the local token field.");
-                AssertEqual("Reload config", viewModel.LastStateRestoreSecondaryActionLabel, "Restore guidance should keep reload as the second step.");
-                AssertContains(viewModel.LastStateRestoreNextStepText, "matches the restored backend .env", "Restore guidance should explain why the local token action comes first.");
+                AssertEqual("重新加载配置", viewModel.LastStateRestoreSecondaryActionLabel, "Restore guidance should keep reload as the second step.");
+                AssertContains(viewModel.LastStateRestoreNextStepText, "和恢复后的 backend .env 保持一致", "Restore guidance should explain why the local token action comes first.");
             }
             finally
             {
@@ -4178,11 +4626,11 @@ async Task TestMainViewModelRestoreGuidancePrioritizesNapCatReviewAsync()
 
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore napcat guidance restore");
 
-                AssertContains(viewModel.LastStateRestoreIssueText, "changed NapCat settings", "Restore guidance should explain when the restored snapshot changed NapCat settings.");
-                AssertContains(viewModel.LastStateRestoreRuntimeText, "saved URL and token", "Restore runtime text should explain what to verify in NapCat.");
-                AssertEqual("Review restored NapCat settings", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize NapCat review when QQ is the blocker.");
+                AssertContains(viewModel.LastStateRestoreIssueText, "改动了 NapCat 设置", "Restore guidance should explain when the restored snapshot changed NapCat settings.");
+                AssertContains(viewModel.LastStateRestoreRuntimeText, "URL 和令牌", "Restore runtime text should explain what to verify in NapCat.");
+                AssertEqual("查看恢复后的 NapCat 设置", viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should prioritize NapCat review when QQ is the blocker.");
                 AssertEqual(DesktopHealthActionKeys.FocusNapCatUrl, viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should route the primary action to NapCat config.");
-                AssertContains(viewModel.LastStateRestoreNextStepText, "NapCat URL and token", "Restore next-step guidance should explain the expected NapCat follow-up.");
+                AssertContains(viewModel.LastStateRestoreNextStepText, "NapCat URL 和令牌", "Restore next-step guidance should explain the expected NapCat follow-up.");
             }
             finally
             {
@@ -4352,7 +4800,7 @@ async Task TestMainWindowTrayMinimizeBehaviorAsync()
                 AssertTrue(fakeNotifyIcon.Visible, "Tray icon should stay visible while window is hidden.");
 
                 AssertEqual(1, fakeNotifyIcon.ShowBalloonTipCallCount, "First minimize should show one tray balloon.");
-                AssertContains(fakeNotifyIcon.BalloonTipText, "start the backend from the tray", "Minimize-to-tray balloon should explain the stopped-backend case.");
+                AssertContains(fakeNotifyIcon.BalloonTipText, "从托盘启动后端", "Minimize-to-tray balloon should explain the stopped-backend case.");
             }
             finally
             {
@@ -4488,28 +4936,28 @@ async Task TestMainWindowHealthActionsAsync()
                 var restoreSelectedSnapshotFromSafetyButton = window.FindName("RestoreSelectedSnapshotFromSafetyButton") as Button
                     ?? throw new InvalidOperationException("RestoreSelectedSnapshotFromSafetyButton not found.");
 
-                AssertEqual("Start backend", healthPrimaryActionButton.Content?.ToString(), "Health primary action button should expose the next runtime action.");
+                AssertEqual("启动后端", healthPrimaryActionButton.Content?.ToString(), "Health primary action button should expose the next runtime action.");
                 AssertEqual("desktop-token", controlApiTokenTextBox.Text, "Local control-plane token textbox should reflect the local env value.");
                 AssertFalse(string.IsNullOrWhiteSpace(sessionStoreStateTextBlock.Text), "Session state text should be visible.");
                 AssertFalse(string.IsNullOrWhiteSpace(imageCacheStateTextBlock.Text), "Image cache state text should be visible.");
                 await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 2, "state snapshot list load");
-                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "entries", "State snapshot selection should expose a summary.");
-                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "includes secrets", "State snapshot summary should expose secret-risk metadata.");
+                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "项", "State snapshot selection should expose a summary.");
+                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "包含密钥", "State snapshot summary should expose secret-risk metadata.");
                 AssertContains(selectedStateSnapshotImpactTextBlock.Text, ".env", "State snapshot impact text should explain env overwrite risk.");
-                await WaitForAsync(() => selectedStateSnapshotSafetyHeadlineTextBlock.Text.Contains("high caution", StringComparison.Ordinal), "state snapshot safety summary");
-                AssertContains(selectedStateSnapshotSafetyHeadlineTextBlock.Text, "high caution", "Selected snapshot safety summary should elevate overwrite-plus-secret risk.");
-                AssertContains(selectedStateSnapshotSafetyRecommendationTextBlock.Text, "safe rollback snapshot", "Selected snapshot safety recommendation should tell the user the safest first step.");
-                AssertContains(selectedStateSnapshotRollbackHintTextBlock.Text, "without copying .env secrets", "Selected snapshot rollback hint should explain why the safe snapshot is safer.");
-                await WaitForAsync(() => selectedStateSnapshotDiffTextBlock.Text.Contains("differs", StringComparison.Ordinal), "state snapshot diff preview");
+                await WaitForAsync(() => selectedStateSnapshotSafetyHeadlineTextBlock.Text.Contains("高风险", StringComparison.Ordinal), "state snapshot safety summary");
+                AssertContains(selectedStateSnapshotSafetyHeadlineTextBlock.Text, "高风险", "Selected snapshot safety summary should elevate overwrite-plus-secret risk.");
+                AssertContains(selectedStateSnapshotSafetyRecommendationTextBlock.Text, "安全回滚快照", "Selected snapshot safety recommendation should tell the user the safest first step.");
+                AssertContains(selectedStateSnapshotRollbackHintTextBlock.Text, "不会复制 .env 密钥", "Selected snapshot rollback hint should explain why the safe snapshot is safer.");
+                await WaitForAsync(() => selectedStateSnapshotDiffTextBlock.Text.Contains("与当前状态不同", StringComparison.Ordinal), "state snapshot diff preview");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "OPENAI_API_KEY", "State snapshot diff preview should list changed tracked env keys.");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "********1234", "State snapshot diff preview should mask snapshot secret values.");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json", "State snapshot diff preview should list changed data files.");
-                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "data current-only files: none", "State snapshot diff preview should show current-only data summary.");
-                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json conversations: current 3 -> snapshot 2", "State snapshot diff preview should show session count changes.");
-                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "State snapshot diff preview should show latest session activity timestamps.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "仅当前存在的数据文件：无", "State snapshot diff preview should show current-only data summary.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json 会话数：当前 3 -> 快照 2", "State snapshot diff preview should show session count changes.");
+                AssertContains(selectedStateSnapshotDiffTextBlock.Text, "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC", "State snapshot diff preview should show latest session activity timestamps.");
                 AssertContains(selectedStateSnapshotDiffTextBlock.Text, "qq:group-c/user-c", "State snapshot diff preview should show changed conversation keys.");
-                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "export your current state", "State snapshot advice should recommend exporting current state.");
-                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "Avoid sharing", "State snapshot advice should warn about secrets.");
+                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "恢复前先导出当前状态", "State snapshot advice should recommend exporting current state.");
+                AssertContains(selectedStateSnapshotAdviceTextBlock.Text, "不要把归档分享", "State snapshot advice should warn about secrets.");
                 AssertTrue(exportSafeRollbackSnapshotButton.IsEnabled, "Selected snapshot safety action should allow exporting a rollback snapshot.");
                 AssertTrue(restoreSelectedSnapshotFromSafetyButton.IsEnabled, "Selected snapshot safety action should still allow restoring the selected archive.");
 
@@ -4570,38 +5018,38 @@ async Task TestMainWindowHealthActionsAsync()
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "state snapshot restore");
                 AssertContains(lastStateRestoreTextBlock.Text, "runtime-state-older.zip", "Selected snapshot restore should update the latest restore text.");
                 AssertContains(lastStateRestoreSummaryTextBlock.Text, "runtime-state-older.zip", "Restore summary should mention the restored archive.");
-                AssertContains(lastStateRestoreIssueTextBlock.Text, "backend host is currently stopped", "Restore result card should explain the stopped backend issue.");
-                AssertContains(lastStateRestoreSummaryTextBlock.Text, "2 conversations", "Restore summary should mention the snapshot conversation count.");
+                AssertContains(lastStateRestoreIssueTextBlock.Text, "backend 宿主当前已停止", "Restore result card should explain the stopped backend issue.");
+                AssertContains(lastStateRestoreSummaryTextBlock.Text, "2 个会话", "Restore summary should mention the snapshot conversation count.");
                 AssertContains(lastStateRestoreSummaryTextBlock.Text, "2026-03-26 09:00:00 UTC", "Restore summary should mention the snapshot latest activity time.");
                 AssertContains(lastStateRestoreTargetsTextBlock.Text, ".env", "Restore targets should mention env restoration.");
-                AssertContains(lastStateRestoreSessionsTextBlock.Text, "current 3 -> snapshot 2", "Restore session summary should show session count changes.");
+                AssertContains(lastStateRestoreSessionsTextBlock.Text, "当前 3 -> 快照 2", "Restore session summary should show session count changes.");
                 AssertContains(lastStateRestoreLatestActivityTextBlock.Text, "2026-03-26 09:00:00 UTC", "Restore latest activity summary should show the snapshot time.");
-                AssertContains(lastStateRestoreAdviceTextBlock.Text, "export your current state", "Restore advice should carry over into the restore result card.");
-                AssertContains(lastStateRestoreControlPlaneTextBlock.Text, "attached to the local control API", "Restore result card should show control plane availability.");
-                AssertContains(lastStateRestoreRuntimeTextBlock.Text, "restored channel settings and session state are waiting to be applied", "Restore result card should explain that stopped runtime state is not active yet.");
+                AssertContains(lastStateRestoreAdviceTextBlock.Text, "恢复前先导出当前状态", "Restore advice should carry over into the restore result card.");
+                AssertContains(lastStateRestoreControlPlaneTextBlock.Text, "已连上本地 control API", "Restore result card should show control plane availability.");
+                AssertContains(lastStateRestoreRuntimeTextBlock.Text, "恢复后的通道设置和会话状态都还在等待生效", "Restore result card should explain that stopped runtime state is not active yet.");
                 AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreNextStepTextBlock.Text), "Restore result card should surface the next suggested action.");
                 AssertTrue(restoreResultReloadButton.IsEnabled, "Restore result reload button should enable after a restore.");
                 AssertTrue(restoreResultStartBackendButton.IsEnabled, "Restore result start button should enable after a restore.");
                 AssertTrue(restoreResultLocalSettingsButton.IsEnabled, "Restore result local settings button should enable after a restore.");
-                AssertEqual("Start backend", restoreResultReloadButton.Content?.ToString(), "Primary restore action should prefer starting the backend when it is stopped.");
-                AssertEqual("Reload config", restoreResultStartBackendButton.Content?.ToString(), "Secondary restore action should still expose reload.");
-                AssertEqual("Open local control settings", restoreResultLocalSettingsButton.Content?.ToString(), "Tertiary restore action should expose local settings.");
+                AssertEqual("启动后端", restoreResultReloadButton.Content?.ToString(), "Primary restore action should prefer starting the backend when it is stopped.");
+                AssertEqual("重新加载配置", restoreResultStartBackendButton.Content?.ToString(), "Secondary restore action should still expose reload.");
+                AssertEqual("打开本地控制设置", restoreResultLocalSettingsButton.Content?.ToString(), "Tertiary restore action should expose local settings.");
                 AssertContains(fakeLocalStateSnapshotService.LastRestoreArchivePath, "runtime-state-older.zip", "Selected snapshot restore should target the selected archive.");
                 AssertContains(fakeLocalStateSnapshotService.LastPreviewArchivePath, "runtime-state-older.zip", "Restore should compute a preview for the selected archive.");
-                AssertEqual("Restore selected snapshot", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "Recommended before restore", "Restore confirmation should include a dedicated pre-restore safety section.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "safe rollback snapshot", "Restore confirmation should recommend a safe rollback snapshot before overwriting current state.");
+                AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "恢复前建议", "Restore confirmation should include a dedicated pre-restore safety section.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "安全回滚快照", "Restore confirmation should recommend a safe rollback snapshot before overwriting current state.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, ".env", "Restore confirmation should mention env overwrite risk.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "differs from current state", "Restore confirmation should include diff preview lines.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "与当前状态不同", "Restore confirmation should include diff preview lines.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "OPENAI_API_KEY", "Restore confirmation should list tracked env keys that change.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "********1234", "Restore confirmation should keep secret values masked.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json", "Restore confirmation should list changed data files.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "data current-only files: none", "Restore confirmation should include current-only data summary.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json conversations: current 3 -> snapshot 2", "Restore confirmation should include session count changes.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC", "Restore confirmation should include latest session activity timestamps.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "仅当前存在的数据文件：无", "Restore confirmation should include current-only data summary.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json 会话数：当前 3 -> 快照 2", "Restore confirmation should include session count changes.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC", "Restore confirmation should include latest session activity timestamps.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "qq:group-c/user-c", "Restore confirmation should include changed conversation keys.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "export your current state", "Restore confirmation should include restore advice.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "Avoid sharing", "Restore confirmation should include secret handling advice.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "恢复前先导出当前状态", "Restore confirmation should include restore advice.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "不要把归档分享", "Restore confirmation should include secret handling advice.");
 
                 fakeConfirmationDialogService.Results.Enqueue(false);
                 deleteSelectedStateSnapshotButton.Command.Execute(null);
@@ -4612,8 +5060,8 @@ async Task TestMainWindowHealthActionsAsync()
                 await WaitForAsync(() => fakeLocalStateSnapshotService.DeleteCallCount == 1, "state snapshot delete");
                 AssertContains(fakeLocalStateSnapshotService.LastDeletedArchivePath, "runtime-state-older.zip", "Selected snapshot delete should target the selected archive.");
                 await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 1, "state snapshot list after delete");
-                AssertEqual("Delete selected snapshot", fakeConfirmationDialogService.LastTitle, "Deleting a snapshot should show a delete confirmation title.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "permanently removes", "Delete confirmation should explain permanence.");
+                AssertEqual("删除选中快照", fakeConfirmationDialogService.LastTitle, "Deleting a snapshot should show a delete confirmation title.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "永久移除", "Delete confirmation should explain permanence.");
 
                 openStateSnapshotFolderButton.Command.Execute(null);
                 AssertContains(fakeLocalPathOperationsService.OpenedFolders[^1], "state-snapshots", "Open snapshot folder should target the snapshot directory.");
@@ -4671,7 +5119,7 @@ async Task TestMainWindowTrayCloseBehaviorAsync()
                 await WaitForAsync(() => !window.IsVisible, "window hidden to tray after close");
 
                 AssertEqual("Local AI Runtime", fakeNotifyIcon.BalloonTipTitle, "Closing to tray should set balloon title.");
-                AssertContains(fakeNotifyIcon.BalloonTipText, "start the backend from the tray", "Closing to tray should explain how to resume from the tray when backend is stopped.");
+                AssertContains(fakeNotifyIcon.BalloonTipText, "从托盘启动后端", "Closing to tray should explain how to resume from the tray when backend is stopped.");
                 AssertEqual(1, fakeNotifyIcon.ShowBalloonTipCallCount, "Closing to tray should show one balloon tip.");
                 AssertTrue(fakeNotifyIcon.Visible, "Tray icon should remain visible after close-to-tray.");
             }
@@ -4737,9 +5185,9 @@ async Task TestMainWindowTrayExitConfirmsRunningBackendAsync()
                 var declinedExit = window.InvokeTrayExitForTests();
                 AssertFalse(declinedExit, "Tray exit should stay open when the user declines the running-backend confirmation.");
                 AssertTrue(window.IsVisible, "Window should remain open when tray exit confirmation is declined.");
-                AssertEqual("Exit Desktop", fakeConfirmationDialogService.LastTitle, "Tray exit confirmation should explain that only the desktop shell exits.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "will stay online", "Tray exit confirmation should explain that the backend keeps running.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "desktop shortcut or Start menu", "Tray exit confirmation should explain how to reopen the desktop shell later.");
+                AssertEqual("退出控制台", fakeConfirmationDialogService.LastTitle, "Tray exit confirmation should explain that only the desktop shell exits.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "会继续保持在线", "Tray exit confirmation should explain that the backend keeps running.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "桌面快捷方式或开始菜单", "Tray exit confirmation should explain how to reopen the desktop shell later.");
 
                 fakeConfirmationDialogService.Results.Enqueue(true);
                 var confirmedExit = window.InvokeTrayExitForTests();
@@ -4813,8 +5261,8 @@ async Task TestMainWindowToolbarExitConfirmsRunningBackendAsync()
                 fakeConfirmationDialogService.Results.Enqueue(false);
                 exitDesktopButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 AssertTrue(window.IsVisible, "Toolbar exit should keep the window open when the running-backend confirmation is declined.");
-                AssertEqual("Exit Desktop", fakeConfirmationDialogService.LastTitle, "Toolbar exit should reuse the same confirmation title as tray exit.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "will stay online", "Toolbar exit confirmation should explain that the backend keeps running.");
+                AssertEqual("退出控制台", fakeConfirmationDialogService.LastTitle, "Toolbar exit should reuse the same confirmation title as tray exit.");
+                AssertContains(fakeConfirmationDialogService.LastMessage, "会继续保持在线", "Toolbar exit confirmation should explain that the backend keeps running.");
 
                 fakeConfirmationDialogService.Results.Enqueue(true);
                 exitDesktopButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -4884,7 +5332,7 @@ async Task TestMainWindowTrayBalloonExplainsRunningBackendAsync()
                 window.WindowState = WindowState.Minimized;
                 await WaitForAsync(() => !window.IsVisible, "window hidden to tray after minimize with running backend");
 
-                AssertContains(fakeNotifyIcon.BalloonTipText, "Backend keeps running until you stop it", "Tray balloon should explain that hiding desktop does not stop an already-running backend.");
+                AssertContains(fakeNotifyIcon.BalloonTipText, "Backend 会继续运行，直到你主动停止它", "Tray balloon should explain that hiding desktop does not stop an already-running backend.");
             }
             finally
             {
@@ -4940,7 +5388,7 @@ async Task TestMainWindowTrayMenuActionsAsync()
                 AssertEqual("Open", labels[0], "First tray menu action should be Open.");
                 AssertEqual("Start Backend", labels[1], "Second tray menu action should be Start Backend.");
                 AssertEqual("Stop Backend", labels[2], "Third tray menu action should be Stop Backend.");
-                AssertEqual("Exit Desktop", window.GetTrayExitLabelForTests(), "Tray exit label should clarify that it closes only the desktop shell.");
+                AssertEqual("退出控制台", window.GetTrayExitLabelForTests(), "Tray exit label should clarify that it closes only the desktop shell.");
 
                 window.WindowState = WindowState.Minimized;
                 await WaitForAsync(() => !window.IsVisible, "window hidden before tray open action");
@@ -5755,7 +6203,7 @@ sealed class FakeLocalStateSnapshotService : ILocalStateSnapshotService
             ArchivePath = @"D:\snapshots\runtime-state-test.zip",
             FileName = "runtime-state-test.zip",
             CreatedAtText = "2026-03-26 20:00:00",
-            Summary = "2026-03-26 20:00:00 | 2 entries | includes secrets",
+            Summary = "2026-03-26 20:00:00 | 2 项 | 包含密钥",
             Detail = "app/.env\napp/data/sessions.json",
             IncludesSecrets = true,
             IncludedEntries = ["app/.env", "app/data/sessions.json"]
@@ -5765,7 +6213,7 @@ sealed class FakeLocalStateSnapshotService : ILocalStateSnapshotService
             ArchivePath = @"D:\snapshots\runtime-state-older.zip",
             FileName = "runtime-state-older.zip",
             CreatedAtText = "2026-03-25 20:00:00",
-            Summary = "2026-03-25 20:00:00 | 1 entry | includes secrets",
+            Summary = "2026-03-25 20:00:00 | 1 项 | 包含密钥",
             Detail = "app/.env",
             IncludesSecrets = true,
             IncludedEntries = ["app/.env"]
@@ -5777,22 +6225,22 @@ sealed class FakeLocalStateSnapshotService : ILocalStateSnapshotService
         ArchivePath = @"D:\snapshots\runtime-state-test.zip",
         Lines =
         [
-            ".env: differs from current state",
-            ".env tracked keys changed: OPENAI_API_KEY, NAPCAT_TOKEN",
+            ".env：与当前状态不同",
+            ".env 跟踪键变更：OPENAI_API_KEY, NAPCAT_TOKEN",
             "OPENAI_API_KEY: ********9999 -> ********1234",
             "NAPCAT_TOKEN: ********5678 -> ********5678",
-            "data/: differs from current state",
-            "data files restored: sessions.json (changed)",
-            "data current-only files: none",
-            "sessions.json conversations: current 3 -> snapshot 2",
-            "sessions.json latest activity: current 2026-03-27 11:00:00 UTC -> snapshot 2026-03-26 09:00:00 UTC",
-            "sessions.json changed conversations: qq:group-c/user-c (current-only), qq:group-b/user-b (changed)",
-            "desktop activity state: matches current state"
+            "data/：与当前状态不同",
+            "将恢复的数据文件：sessions.json（已变化）",
+            "仅当前存在的数据文件：无",
+            "sessions.json 会话数：当前 3 -> 快照 2",
+            "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC",
+            "sessions.json 变更会话：qq:group-c/user-c (仅当前存在), qq:group-b/user-b (已变化)",
+            "桌面活动状态：与当前状态一致"
         ],
         Recommendations =
         [
-            "Recommended: export your current state before restoring so you can roll back if needed.",
-            "Caution: this snapshot includes .env secrets. Avoid sharing the archive outside this device."
+            "建议：恢复前先导出当前状态，便于需要时回滚。",
+            "注意：这个快照包含 .env 密钥，请不要把归档分享给当前设备之外的人。"
         ]
     };
 

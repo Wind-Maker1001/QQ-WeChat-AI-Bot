@@ -20,18 +20,18 @@ public static class DesktopOperationErrorFormatter
             return new DesktopUserFacingOperationError
             {
                 StatusText = fallbackStatusText,
-                DialogTitle = $"{operationLabel} failed",
+                DialogTitle = $"{operationLabel}失败",
                 DialogMessage = BuildDialogMessage(
-                    whatHappened: $"{operationLabel} could not update this machine's local desktop attachment settings.",
-                    whyText: "This action only changes how the desktop reattaches to the local control API. It does not change QQ, WeChat, or model settings by itself.",
-                    doNowText: "Check whether the backend .env file is writable, then save the local control settings again.",
-                    improvementText: "This window can reattach to the local runtime again without changing the channel config.",
+                    whatHappened: $"{operationLabel}无法更新这台机器上的本地 desktop 附着设置。",
+                    whyText: "这个动作只会改 desktop 如何重新接回本地 control API，本身不会修改 QQ、微信或模型设置。",
+                    doNowText: "检查 backend 的 .env 文件是否可写，然后重新保存本地控制设置。",
+                    improvementText: "完成后，这个窗口就能在不改通道配置的前提下重新附着到本地 runtime。",
                     technicalDetail: detail,
                     additionalContext:
                     [
-                        string.IsNullOrWhiteSpace(envPath) ? null : $"Target file: {envPath}"
+                        string.IsNullOrWhiteSpace(envPath) ? null : $"目标文件：{envPath}"
                     ]),
-                SuggestedActionLabel = "Go to local token",
+                SuggestedActionLabel = "查看本机令牌",
                 SuggestedActionKey = DesktopHealthActionKeys.FocusControlApiToken
             };
         }
@@ -61,14 +61,14 @@ public static class DesktopOperationErrorFormatter
             _ => new DesktopUserFacingOperationError
             {
                 StatusText = fallbackStatusText,
-                DialogTitle = $"{operationLabel} failed",
+                DialogTitle = $"{operationLabel}失败",
                 DialogMessage = BuildDialogMessage(
-                    whatHappened: $"{operationLabel} failed.",
-                    whyText: "Desktop did not receive enough information to classify the failure cleanly.",
-                    doNowText: "Review the log panel, then retry from this window.",
-                    improvementText: "The desktop can resume normal control once the failing step succeeds.",
-                    technicalDetail: DefaultIfBlank(technicalMessage, "No extra error detail was captured.")),
-                SuggestedActionLabel = "Show logs",
+                    whatHappened: $"{operationLabel}失败。",
+                    whyText: "Desktop 当前拿到的信息不足，无法把这次失败清楚归类。",
+                    doNowText: "先查看日志面板，再从这个窗口重试。",
+                    improvementText: "只要失败步骤恢复正常，desktop 就能继续正常控制。",
+                    technicalDetail: DefaultIfBlank(technicalMessage, "没有捕获到额外错误细节。")),
+                SuggestedActionLabel = "查看日志",
                 SuggestedActionKey = DesktopHealthActionKeys.ShowLogs
             }
         };
@@ -82,19 +82,19 @@ public static class DesktopOperationErrorFormatter
     {
         return new DesktopUserFacingOperationError
         {
-            StatusText = $"{fallbackStatusText}: local control token mismatch",
-            DialogTitle = "Local control token required",
+            StatusText = $"{fallbackStatusText}：本地控制令牌不一致",
+            DialogTitle = "需要本地控制令牌",
             DialogMessage = BuildDialogMessage(
-                whatHappened: $"{operationLabel} could not continue because desktop authentication to the local control API failed.",
-                whyText: "The backend .env and this desktop window are using different QQ_AI_BOT_CONTROL_API_TOKEN values.",
-                doNowText: "Open the local desktop attachment settings (本机连接设置) in this window, make QQ_AI_BOT_CONTROL_API_TOKEN match the backend .env, then retry.",
-                improvementText: "This window can verify live runtime state and send start, stop, load, or save actions again.",
+                whatHappened: $"{operationLabel}无法继续，因为 desktop 对本地 control API 的鉴权失败了。",
+                whyText: "backend 的 .env 和这个 desktop 窗口当前保存的是不同的 QQ_AI_BOT_CONTROL_API_TOKEN。",
+                doNowText: "打开这个窗口里的本机连接设置，让 QQ_AI_BOT_CONTROL_API_TOKEN 与 backend .env 保持一致，然后再重试。",
+                improvementText: "完成后，这个窗口就能再次验证实时 runtime 状态，并继续发送启动、停止、加载或保存动作。",
                 technicalDetail: detail,
                 additionalContext:
                 [
-                    string.IsNullOrWhiteSpace(envPath) ? null : $"Local config file: {envPath}"
+                    string.IsNullOrWhiteSpace(envPath) ? null : $"本地配置文件：{envPath}"
                 ]),
-            SuggestedActionLabel = "Go to local token",
+            SuggestedActionLabel = "查看本机令牌",
             SuggestedActionKey = DesktopHealthActionKeys.FocusControlApiToken
         };
     }
@@ -108,12 +108,12 @@ public static class DesktopOperationErrorFormatter
 
         return new DesktopUserFacingOperationError
         {
-            StatusText = $"{fallbackStatusText}: control API rejected the request",
-            DialogTitle = $"{operationLabel} rejected",
+            StatusText = $"{fallbackStatusText}：control API 拒绝了请求",
+            DialogTitle = $"{operationLabel}被拒绝",
             DialogMessage = BuildDialogMessage(
-                whatHappened: $"{operationLabel} reached the local control API, but the backend refused the current values.",
+                whatHappened: $"{operationLabel}已经到达本地 control API，但 backend 拒绝了当前值。",
                 whyText: guidance.WhyText,
-                doNowText: $"Check the field mentioned below, then retry. {guidance.NextStepText}",
+                doNowText: $"先检查下面提到的字段，再重试。{guidance.NextStepText}",
                 improvementText: guidance.ImprovementText,
                 technicalDetail: detail),
             SuggestedActionLabel = guidance.Label,
@@ -128,15 +128,15 @@ public static class DesktopOperationErrorFormatter
     {
         return new DesktopUserFacingOperationError
         {
-            StatusText = $"{fallbackStatusText}: unexpected control API response",
-            DialogTitle = $"{operationLabel} returned an unexpected response",
+            StatusText = $"{fallbackStatusText}：control API 响应异常",
+            DialogTitle = $"{operationLabel}返回了意外响应",
             DialogMessage = BuildDialogMessage(
-                whatHappened: $"{operationLabel} reached the local control API, but the response could not be understood.",
-                whyText: "Desktop expected a normal control-plane response, but the backend returned something incomplete or unexpected.",
-                doNowText: "Reload config from this window, then retry the same action.",
-                improvementText: "Desktop can rebuild a clean picture of the runtime before you act again.",
+                whatHappened: $"{operationLabel}已经到达本地 control API，但返回结果无法被正确识别。",
+                whyText: "Desktop 原本预期收到正常的控制面响应，但 backend 返回了不完整或意外的数据。",
+                doNowText: "先从这个窗口重新加载配置，然后再重试同一个动作。",
+                improvementText: "完成后，desktop 可以先重建一份干净的 runtime 视图，再继续操作。",
                 technicalDetail: detail),
-            SuggestedActionLabel = "Reload config",
+            SuggestedActionLabel = "重新加载配置",
             SuggestedActionKey = DesktopHealthActionKeys.ReloadConfig
         };
     }
@@ -149,19 +149,19 @@ public static class DesktopOperationErrorFormatter
     {
         return new DesktopUserFacingOperationError
         {
-            StatusText = $"{fallbackStatusText}: control API not reachable",
-            DialogTitle = $"{operationLabel} could not reach the local control API",
+            StatusText = $"{fallbackStatusText}：无法连接 control API",
+            DialogTitle = $"{operationLabel}无法连接本地 control API",
             DialogMessage = BuildDialogMessage(
-                whatHappened: $"{operationLabel} could not continue because the desktop is not attached to a live control API.",
+                whatHappened: $"{operationLabel}无法继续，因为 desktop 当前没有附着到一个在线的 control API。",
                 whyText: canStartBackend
-                    ? "The backend is likely stopped, so this window can only see the last local file state right now."
-                    : "The backend may still be recovering or the desktop may be temporarily detached from live runtime state.",
+                    ? "backend 很可能已经停止，所以这个窗口现在只能看到最近一次的本地文件状态。"
+                    : "backend 可能还在恢复中，或者 desktop 暂时从实时 runtime 状态上脱开了。",
                 doNowText: canStartBackend
-                    ? "Start the backend from this window, wait for the status to refresh, then retry."
-                    : "Reload config after the backend comes back. If it should already be online, inspect the log panel next.",
-                improvementText: "Desktop can refresh live state and continue controlling the runtime again.",
+                    ? "先从这个窗口启动 backend，等状态刷新后再重试。"
+                    : "等 backend 恢复后重新加载配置；如果它本来就该在线，那下一步请检查日志面板。",
+                improvementText: "完成后，desktop 就能刷新实时状态并继续控制 runtime。",
                 technicalDetail: detail),
-            SuggestedActionLabel = canStartBackend ? "Start backend" : "Reload config",
+            SuggestedActionLabel = canStartBackend ? "启动后端" : "重新加载配置",
             SuggestedActionKey = canStartBackend ? DesktopHealthActionKeys.StartBackend : DesktopHealthActionKeys.ReloadConfig
         };
     }
@@ -173,31 +173,31 @@ public static class DesktopOperationErrorFormatter
             detail.Contains("WECHAT_BOT_PREFIX", StringComparison.OrdinalIgnoreCase))
         {
             return new RejectedGuidance(
-                "Go to WeChat config",
+                "查看微信配置",
                 DesktopHealthActionKeys.FocusWechatUrl,
-                "The saved WeChat bridge settings do not pass backend validation yet.",
-                "Open WeChat bridge settings in this window, fix the saved value, then save again.",
-                "The WeChat worker can start once the saved bridge settings match a valid live bridge service.");
+                "当前保存的微信桥接设置还没有通过 backend 校验。",
+                "打开这个窗口里的微信桥接设置，修正保存值后再重新保存。",
+                "保存的桥接设置与有效在线桥接服务一致后，微信 worker 就能启动。");
         }
 
         if (detail.Contains("NAPCAT_WS_URL", StringComparison.OrdinalIgnoreCase))
         {
             return new RejectedGuidance(
-                "Go to NapCat URL",
+                "查看 NapCat 地址",
                 DesktopHealthActionKeys.FocusNapCatUrl,
-                "The saved NapCat websocket address is not valid yet.",
-                "Open NapCat settings, fix NAPCAT_WS_URL, then save again.",
-                "QQ can try to connect once the saved NapCat address is valid.");
+                "当前保存的 NapCat websocket 地址还无效。",
+                "打开 NapCat 设置，修正 NAPCAT_WS_URL，然后重新保存。",
+                "保存的 NapCat 地址有效后，QQ 才能尝试连接。");
         }
 
         if (detail.Contains("NAPCAT_TOKEN", StringComparison.OrdinalIgnoreCase))
         {
             return new RejectedGuidance(
-                "Go to NapCat token",
+                "查看 NapCat Token",
                 DesktopHealthActionKeys.FocusNapCatToken,
-                "QQ is still missing the credential it needs to authenticate to NapCat.",
-                "Open NapCat settings, add NAPCAT_TOKEN, then save again.",
-                "QQ has the credential it needs before startup.");
+                "QQ 仍然缺少向 NapCat 鉴权所需的凭据。",
+                "打开 NapCat 设置，补上 NAPCAT_TOKEN，然后重新保存。",
+                "完成后，QQ 在启动前就具备了所需凭据。");
         }
 
         if (detail.Contains("OPENAI_API_KEY", StringComparison.OrdinalIgnoreCase) ||
@@ -206,29 +206,29 @@ public static class DesktopOperationErrorFormatter
             detail.Contains("OPENAI_ADVANCED_MODEL", StringComparison.OrdinalIgnoreCase))
         {
             return new RejectedGuidance(
-                "Go to API keys",
+                "查看 API 密钥",
                 DesktopHealthActionKeys.FocusOpenAiDefaultKey,
-                "The saved model route is missing a required API or model value.",
-                "Open the API key section, fill the missing model or key value, then save again.",
-                "The runtime can call the configured model route once the required value is present.");
+                "当前保存的模型路由还缺少必需的 API 或模型值。",
+                "打开 API 密钥区域，补齐缺失的模型或密钥值后再保存。",
+                "必需值补齐后，runtime 才能调用配置好的模型路由。");
         }
 
         if (detail.Contains("QQ_AI_BOT_CONTROL_API_TOKEN", StringComparison.OrdinalIgnoreCase))
         {
             return new RejectedGuidance(
-                "Go to local token",
+                "查看本机令牌",
                 DesktopHealthActionKeys.FocusControlApiToken,
-                "The backend rejected the saved local control token value.",
-                "Open the local desktop attachment settings, fix QQ_AI_BOT_CONTROL_API_TOKEN, then retry.",
-                "This desktop can reattach to the runtime again.");
+                "backend 拒绝了当前保存的本地控制令牌值。",
+                "打开本机连接设置，修正 QQ_AI_BOT_CONTROL_API_TOKEN，然后重试。",
+                "完成后，这个 desktop 就能重新接回 runtime。");
         }
 
         return new RejectedGuidance(
-            "Reload config",
+            "重新加载配置",
             DesktopHealthActionKeys.ReloadConfig,
-            "The current values do not pass backend validation yet.",
-            "Reload config, inspect the field named in the technical detail, then retry.",
-            "Desktop can save a clean config once the invalid value is corrected.");
+            "当前值还没有通过 backend 校验。",
+            "先重新加载配置，再检查技术细节里提到的字段，然后重试。",
+            "无效值修正后，desktop 就能保存一份干净的配置。");
     }
 
     private static string BuildDialogMessage(
@@ -241,7 +241,7 @@ public static class DesktopOperationErrorFormatter
     {
         var lines = new List<string>
         {
-            "What happened",
+            "发生了什么",
             whatHappened
         };
 
@@ -251,17 +251,17 @@ public static class DesktopOperationErrorFormatter
         }
 
         lines.Add(string.Empty);
-        lines.Add("Why");
+        lines.Add("原因");
         lines.Add(whyText);
         lines.Add(string.Empty);
-        lines.Add("Do this now");
+        lines.Add("现在这样做");
         lines.Add(doNowText);
         lines.Add(string.Empty);
-        lines.Add("What improves after this");
+        lines.Add("完成后会改善什么");
         lines.Add(improvementText);
         lines.Add(string.Empty);
-        lines.Add("Technical detail");
-        lines.Add(DefaultIfBlank(technicalDetail, "No extra error detail was captured."));
+        lines.Add("技术细节");
+        lines.Add(DefaultIfBlank(technicalDetail, "没有捕获到额外错误细节。"));
 
         return string.Join(Environment.NewLine, lines);
     }

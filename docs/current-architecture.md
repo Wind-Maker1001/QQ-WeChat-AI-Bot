@@ -178,6 +178,13 @@ The desktop side now has a clearer layering model.
 - `desktop/QQAIBot.Desktop/Services/BackendRuntimeSnapshotCoordinator.cs`
 - `desktop/QQAIBot.Desktop/Services/BackendRuntimeSnapshotViewHelper.cs`
 
+### Snapshot Presentation
+
+- `desktop/QQAIBot.Desktop/Services/LocalStateSnapshotPresentationBuilder.cs`
+
+Snapshot archive IO and diff generation should stay in `LocalStateSnapshotService`.
+User-facing restore impact, safety, and post-restore action guidance should be derived in the presentation builder, not rebuilt inside `MainViewModel`.
+
 ### Control-Plane Coordination
 
 - `desktop/QQAIBot.Desktop/Models/BackendControlApiPollState.cs`
@@ -187,6 +194,26 @@ The desktop side now has a clearer layering model.
 - `desktop/QQAIBot.Desktop/Services/BackendRuntimeControlCoordinator.cs`
 - `desktop/QQAIBot.Desktop/Services/BackendControlPlaneFacade.cs`
 - `desktop/QQAIBot.Desktop/Services/DesktopControlPlaneFeedback.cs`
+
+### Health Guidance
+
+- `desktop/QQAIBot.Desktop/Services/DesktopHealthGuidanceBuilder.cs`
+
+Health checks and overall readiness can still compose into one report, but latest-issue explanation and action-priority rules should stay in the guidance builder instead of drifting back into the report builder or `MainViewModel`.
+
+### Health Checklist And Status
+
+- `desktop/QQAIBot.Desktop/Services/DesktopHealthChecklistBuilder.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopHealthStatusBuilder.cs`
+
+Checklist item construction and checklist-summary text should stay in the checklist builder.
+Overall readiness state, primary action, ready-now text, and runtime explanation should stay in the status builder.
+
+### Guide Presentation
+
+- `desktop/QQAIBot.Desktop/Services/DesktopGuideFlowBuilder.cs`
+
+Homepage first-run guidance, daily-use guidance, and overall-readiness action selection should be derived in the guide builder instead of being rebuilt inline inside `MainViewModel`.
 
 This is the current intended shape:
 
@@ -305,6 +332,11 @@ When changing the desktop shell:
 - prefer adding logic to the existing facade/coordinator/helper layers
 - avoid putting new control-plane state machines back into `MainViewModel`
 - prefer projection helpers over inline string assembly in the ViewModel
+- keep snapshot restore explanation and action-priority rules in `LocalStateSnapshotPresentationBuilder`
+- keep health latest-issue and next-action prioritization in `DesktopHealthGuidanceBuilder`
+- keep homepage first-run / daily-use guide synthesis in `DesktopGuideFlowBuilder`
+- keep checklist-item construction in `DesktopHealthChecklistBuilder`
+- keep overall readiness / ready-now / runtime explanation in `DesktopHealthStatusBuilder`
 - prefer extending existing desktop coordinators before adding one-off private methods to the ViewModel
 - if a new helper is introduced, add a direct regression test for that helper instead of relying only on smoke coverage
 

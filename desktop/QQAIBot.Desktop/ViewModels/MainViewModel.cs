@@ -81,7 +81,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _isProcessRunning;
     private bool _hasUnsavedChanges;
     private string _backendRootPath = string.Empty;
-    private string _statusText = "Waiting to load";
+    private string _statusText = "等待加载";
     private string _openAiApiKey = string.Empty;
     private string _openAiDefaultApiKey = string.Empty;
     private string _openAiDefaultModel = "gpt-5.4";
@@ -108,30 +108,34 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _maxOutputChars = "800";
     private string _allowedChatIds = string.Empty;
     private string _allowedUserIds = string.Empty;
-    private string _lastLoadedAtText = "Not loaded";
-    private string _lastSavedAtText = "Not saved";
+    private string _lastLoadedAtText = "未加载";
+    private string _lastSavedAtText = "未保存";
     private string _logText = string.Empty;
     private bool _logDirty;
     private string _controlApiToken = string.Empty;
-    private string _lastStateSnapshotText = "No state snapshot exported yet";
-    private string _lastStateRestoreText = "No state snapshot restored yet";
-    private string _lastStateRestoreSummaryText = "Restore result summary will appear here.";
-    private string _lastStateRestoreIssueText = "Post-restore issue summary will appear here.";
-    private string _lastStateRestoreTargetsText = "Restore targets will appear here.";
-    private string _lastStateRestoreSessionsText = "Session summary will appear here.";
-    private string _lastStateRestoreLatestActivityText = "Latest activity summary will appear here.";
-    private string _lastStateRestoreAdviceText = "Post-restore advice will appear here.";
-    private string _lastStateRestoreControlPlaneText = "Post-restore control plane check will appear here.";
-    private string _lastStateRestoreRuntimeText = "Post-restore runtime check will appear here.";
-    private string _lastStateRestoreNextStepText = "Post-restore next step will appear here.";
+    private string _lastStateSnapshotText = "尚未导出状态快照";
+    private string _lastStateRestoreText = "尚未恢复状态快照";
+    private string _lastStateRestoreSummaryText = "恢复结果摘要会显示在这里。";
+    private string _lastStateRestoreIssueText = "恢复后的问题摘要会显示在这里。";
+    private string _lastStateRestoreTargetsText = "恢复目标会显示在这里。";
+    private string _lastStateRestoreSessionsText = "会话摘要会显示在这里。";
+    private string _lastStateRestoreLatestActivityText = "最近活动摘要会显示在这里。";
+    private string _lastStateRestoreAdviceText = "恢复后的建议会显示在这里。";
+    private string _lastStateRestoreControlPlaneText = "恢复后的控制面检查会显示在这里。";
+    private string _lastStateRestoreRuntimeText = "恢复后的运行时检查会显示在这里。";
+    private string _lastStateRestoreNextStepText = "恢复后的下一步建议会显示在这里。";
     private string _lastStateRestorePrimaryActionLabel = string.Empty;
     private string _lastStateRestorePrimaryActionKey = string.Empty;
     private string _lastStateRestoreSecondaryActionLabel = string.Empty;
     private string _lastStateRestoreSecondaryActionKey = string.Empty;
     private string _lastStateRestoreTertiaryActionLabel = string.Empty;
     private string _lastStateRestoreTertiaryActionKey = string.Empty;
-    private string _selectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
-    private string _selectedStateSnapshotAdviceText = "Restore advice will appear here.";
+    private string _selectedStateSnapshotImpactText = "恢复会覆盖这个快照中展示的状态。删除会永久移除当前选中的归档。";
+    private string _selectedStateSnapshotDiffText = "选择一个快照以预览差异。";
+    private string _selectedStateSnapshotAdviceText = "恢复建议会显示在这里。";
+    private string _selectedStateSnapshotSafetyHeadlineText = "恢复前检查：先选择一个快照，看看会覆盖哪些当前状态。";
+    private string _selectedStateSnapshotSafetyRecommendationText = "建议的第一步：先选中快照查看覆盖风险，再决定是否恢复。";
+    private string _selectedStateSnapshotRollbackHintText = "安全回滚快照会保留当前状态的回退点，并且不复制 .env 密钥。";
     private LocalStateSnapshotDescriptor? _selectedStateSnapshot;
     private LocalStateSnapshotPreviewResult? _selectedStateSnapshotPreview;
     private LocalStateSnapshotRestoreResult? _lastStateRestoreResult;
@@ -139,6 +143,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private BackendRuntimeSnapshotViewState _runtimeSnapshot = new();
     private DesktopLatestTurnOverview _latestTurnOverview = new();
     private DesktopHealthReport _healthReport = new();
+    private DesktopGuideFlow _guideFlow = new();
     private BackendControlApiPollState _controlApiPollState = new();
     private bool _controlApiRecoveryInProgress;
     private bool _restoringActivityState;
@@ -250,7 +255,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         AutoDetectBackendRoot();
         RefreshLatestTurnOverview();
         RefreshHealthReport();
-        AddLog("Desktop UI initialized.");
+        AddLog("Desktop 控制台已初始化。");
     }
 
     public ICommand ReloadCommand => _reloadCommand;
@@ -297,7 +302,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (SetProperty(ref _backendRootPath, value))
             {
-                LastStateSnapshotText = "No state snapshot exported yet";
+                LastStateSnapshotText = "尚未导出状态快照";
                 ResetRestoreResultState();
                 ReplaceStateSnapshots([]);
                 SelectedStateSnapshot = null;
@@ -316,8 +321,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public bool IsBackendRootValid => PathDiscoveryService.IsBackendRoot(BackendRootPath);
 
     public string BackendRootStateText => IsBackendRootValid
-        ? (_backendRootDetected ? "Backend root auto-detected" : "Backend root is valid")
-        : "Backend root is invalid";
+        ? (_backendRootDetected ? "已自动检测到 backend 根目录" : "backend 根目录有效")
+        : "backend 根目录无效";
 
     public string OpenAiApiKey
     {
@@ -552,54 +557,36 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(ExitDesktopBehaviorText));
                 OnPropertyChanged(nameof(StopBackendBehaviorText));
                 OnPropertyChanged(nameof(ReopenDesktopBehaviorText));
-                OnPropertyChanged(nameof(IsOverallReadinessReady));
-                OnPropertyChanged(nameof(IsOverallReadinessSetupComplete));
-                OnPropertyChanged(nameof(OverallReadinessStateText));
-                OnPropertyChanged(nameof(OverallReadinessSummaryText));
-                OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
-                OnPropertyChanged(nameof(OverallReadinessActionLabel));
-                OnPropertyChanged(nameof(OverallReadinessActionKey));
-                OnPropertyChanged(nameof(FirstRunGuideSteps));
-                OnPropertyChanged(nameof(FirstRunGuideProgressText));
-                OnPropertyChanged(nameof(FirstRunGuideCurrentStepText));
-                OnPropertyChanged(nameof(IsFirstRunGuideComplete));
-                OnPropertyChanged(nameof(FirstRunGuideCompletionText));
-                OnPropertyChanged(nameof(DailyUseGuideText));
-                OnPropertyChanged(nameof(DailyUseGuideSteps));
-                OnPropertyChanged(nameof(DailyUseGuideProgressText));
-                OnPropertyChanged(nameof(DailyUseGuideCurrentStepText));
-                OnPropertyChanged(nameof(IsDailyUseGuideComplete));
-                OnPropertyChanged(nameof(DailyUseGuideCompletionText));
-                OnPropertyChanged(nameof(DailyUseStepsText));
+                RefreshGuideFlow();
                 UpdateCommandStates();
             }
         }
     }
 
-    public string ProcessStateText => IsProcessRunning ? "Running" : "Stopped";
+    public string ProcessStateText => IsProcessRunning ? "运行中" : "已停止";
 
     public string WechatRuntimeStateText =>
         _runtimeSnapshot.WechatConfigured != true
-            ? "WeChat disabled"
+            ? "微信已关闭"
             : _runtimeSnapshot.WechatRuntimeActive == true
-                ? "WeChat runtime active"
-                : "WeChat runtime stopped";
+                ? "微信 runtime 运行中"
+                : "微信 runtime 已停止";
 
     public string RuntimeReadyText =>
-        _runtimeSnapshot.RuntimeReady == true ? "QQ channel ready" : "QQ channel not ready";
+        _runtimeSnapshot.RuntimeReady == true ? "QQ 通道已就绪" : "QQ 通道未就绪";
 
     public string WechatRuntimeReadyText =>
         _runtimeSnapshot.WechatConfigured != true
-            ? "WeChat channel disabled"
+            ? "微信通道已关闭"
             : _runtimeSnapshot.WechatRuntimeReady == true
-                ? "WeChat channel ready"
-                : "WeChat channel not ready";
+                ? "微信通道已就绪"
+                : "微信通道未就绪";
 
     public string WechatBridgeStateText =>
-        _runtimeSnapshot.WechatBridgeConnected == true ? "WeChat bridge connected" : "WeChat bridge disconnected";
+        _runtimeSnapshot.WechatBridgeConnected == true ? "微信桥接已连接" : "微信桥接未连接";
 
     public string WechatWorkerProcessText =>
-        _runtimeSnapshot.WechatWorkerProcessId is int workerPid ? $"WeChat worker PID {workerPid}" : "WeChat worker not running";
+        _runtimeSnapshot.WechatWorkerProcessId is int workerPid ? $"微信 worker PID {workerPid}" : "微信 worker 未运行";
 
     public string HealthStateText => _healthReport.StateText;
 
@@ -702,13 +689,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public string SelectedQqRecentActivitySummaryText =>
-        _selectedQqRecentActivity?.Summary ?? "Select a QQ activity event";
+        _selectedQqRecentActivity?.Summary ?? "请选择一条 QQ 活动记录";
 
     public string SelectedQqRecentActivityMetaText =>
-        _selectedQqRecentActivity?.Meta ?? "No event selected";
+        _selectedQqRecentActivity?.Meta ?? "当前未选择活动";
 
     public string SelectedQqRecentActivityDetailText =>
-        _selectedQqRecentActivity?.Detail ?? "Select a QQ activity event";
+        _selectedQqRecentActivity?.Detail ?? "请选择一条 QQ 活动记录";
 
     public string LatestQqActivityStateText =>
         BackendActivityProjectionFormatter.FormatActivityState(_runtimeSnapshot.LastQqLlmRequest, _runtimeSnapshot.LastQqLlmFailure);
@@ -794,13 +781,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public string SelectedWechatRecentActivitySummaryText =>
-        _selectedWechatRecentActivity?.Summary ?? "Select a WeChat activity event";
+        _selectedWechatRecentActivity?.Summary ?? "请选择一条 WeChat 活动记录";
 
     public string SelectedWechatRecentActivityMetaText =>
-        _selectedWechatRecentActivity?.Meta ?? "No event selected";
+        _selectedWechatRecentActivity?.Meta ?? "当前未选择活动";
 
     public string SelectedWechatRecentActivityDetailText =>
-        _selectedWechatRecentActivity?.Detail ?? "Select a WeChat activity event";
+        _selectedWechatRecentActivity?.Detail ?? "请选择一条 WeChat 活动记录";
 
     public string LatestWechatActivityStateText =>
         BackendActivityProjectionFormatter.FormatActivityState(_runtimeSnapshot.LastWechatLlmRequest, _runtimeSnapshot.LastWechatLlmFailure);
@@ -882,510 +869,80 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public string AutoStartStateText => AutoStartEnabled ? "Starts with Windows" : "Manual launch";
+    public string AutoStartStateText => AutoStartEnabled ? "随 Windows 启动" : "手动启动";
 
-    public string AutoStartButtonText => AutoStartEnabled ? "Disable startup" : "Enable startup";
+    public string AutoStartButtonText => AutoStartEnabled ? "关闭开机启动" : "启用开机启动";
 
     public string ResidentModeDetailText => AutoStartEnabled
-        ? "Resident mode: starts at Windows sign-in, reopens minimized, and keeps the tray entry available for quick control. Closing the desktop window still hides it to the tray; use Stop backend if you want the runtime offline."
-        : "Resident mode: launch manually for now. Minimize or close still hides this window to the tray, and Exit Desktop closes only this window. Enable startup if you want it back automatically after sign-in.";
+        ? "常驻模式：会在 Windows 登录时启动，以最小化方式恢复，并保留托盘入口便于快速控制。关闭窗口仍只会收进托盘；如果你要让 runtime 真正离线，请使用“停止后端”。"
+        : "常驻模式：当前仍需手动启动。最小化或关闭窗口仍会收进托盘，“退出控制台”只会关闭桌面壳；如果你希望登录后自动恢复，请启用开机启动。";
 
     public string ShellRuntimeBoundaryText => IsProcessRunning
-        ? "Close to tray: hides this desktop window and leaves the backend running." + Environment.NewLine +
-          "Exit Desktop: closes only the desktop shell and tray icon. The runtime keeps running until you stop it." + Environment.NewLine +
-          "Stop Backend: stops the local runtime and takes QQ/WeChat offline."
-        : "Close to tray: hides this desktop window and keeps the tray entry available." + Environment.NewLine +
-          "Exit Desktop: closes only the desktop shell. You can reopen it later without changing saved state." + Environment.NewLine +
-          "Stop Backend: no effect while the runtime is already offline.";
+        ? "收进托盘：隐藏这个控制台窗口，但 backend 会继续运行。" + Environment.NewLine +
+          "退出控制台：只关闭桌面壳和托盘图标，runtime 会继续运行，直到你主动停止。" + Environment.NewLine +
+          "停止后端：停止本地 runtime，让 QQ / WeChat 下线。"
+        : "收进托盘：隐藏这个控制台窗口，并保留托盘入口。" + Environment.NewLine +
+          "退出控制台：只关闭桌面壳，你之后可以重新打开，不会改动本地状态。" + Environment.NewLine +
+          "停止后端：当前 runtime 已离线，所以不会产生额外效果。";
 
     public string CloseToTrayBehaviorText => IsProcessRunning
-        ? "Hides this desktop window and leaves the backend running."
-        : "Hides this desktop window and keeps the tray entry available.";
+        ? "隐藏这个控制台窗口，但 backend 会继续运行。"
+        : "隐藏这个控制台窗口，并保留托盘入口。";
 
     public string ExitDesktopBehaviorText => IsProcessRunning
-        ? "Closes only the desktop shell and tray icon. The runtime keeps running until you stop it."
-        : "Closes only the desktop shell. You can reopen it later without changing saved state.";
+        ? "只关闭桌面壳和托盘图标。runtime 会继续运行，直到你主动停止。"
+        : "只关闭桌面壳。之后可以重新打开，不会改动本地状态。";
 
     public string StopBackendBehaviorText => IsProcessRunning
-        ? "Stops the local runtime and takes QQ/WeChat offline."
-        : "No effect while the runtime is already offline.";
+        ? "停止本地 runtime，让 QQ / 微信下线。"
+        : "当前 runtime 已离线，所以不会产生额外效果。";
 
     public string ReopenDesktopBehaviorText => IsProcessRunning
-        ? "Use the desktop shortcut or Start menu to reopen Local AI Runtime. It restores this desktop window and reattaches to the same running runtime instead of starting a second desktop shell."
-        : "Use the desktop shortcut or Start menu to reopen Local AI Runtime. It restores this desktop window instead of starting a second desktop shell. If the runtime is offline, reopen the shell and start it manually.";
-
-    public bool IsOverallReadinessReady => IsDailyUseGuideComplete;
-
-    public bool IsOverallReadinessSetupComplete => IsFirstRunGuideComplete;
-
-    public string OverallReadinessStateText => IsDailyUseGuideComplete
-        ? "Ready for daily use"
-        : IsFirstRunGuideComplete
-            ? "Setup complete"
-            : "Setup in progress";
-
-    public string OverallReadinessSummaryText => IsDailyUseGuideComplete
-        ? "Runtime is online, resident-mode basics are configured, and no urgent issue action is waiting right now."
-        : IsFirstRunGuideComplete
-            ? "Required setup is complete. Finish the highlighted daily-use step below to make long-term use smoother."
-            : "Finish the highlighted first-run step below. After that, this window can stay in the tray as your daily control plane.";
-
-    public string OverallReadinessRecentActivityText => BuildOverallReadinessRecentActivityText();
-
-    public string OverallReadinessActionLabel
-    {
-        get
-        {
-            if (IsOverallReadinessReady)
-            {
-                return HasAnyRecentActivity() ? "Review recent activity" : string.Empty;
-            }
-
-            var actionStep = !IsFirstRunGuideComplete
-                ? FirstRunGuideSteps.FirstOrDefault(static step => step.IsCurrent)
-                : DailyUseGuideSteps.FirstOrDefault(static step => step.IsCurrent);
-            return actionStep?.ActionLabel ?? string.Empty;
-        }
-    }
-
-    public string OverallReadinessActionKey
-    {
-        get
-        {
-            if (IsOverallReadinessReady)
-            {
-                return HasAnyRecentActivity() ? DesktopHealthActionKeys.FocusLatestActivity : string.Empty;
-            }
-
-            var actionStep = !IsFirstRunGuideComplete
-                ? FirstRunGuideSteps.FirstOrDefault(static step => step.IsCurrent)
-                : DailyUseGuideSteps.FirstOrDefault(static step => step.IsCurrent);
-            return actionStep?.ActionKey ?? string.Empty;
-        }
-    }
-
-    public string FirstRunGuideText
-    {
-        get
-        {
-            if (!IsBackendRootValid)
-            {
-                return "首次打开只看这 3 步。";
-            }
-
-            var blockingChecks = _healthReport.Checks
-                .Where(static check => check.IsBlocking)
-                .Select(static check => check.Title)
-                .ToArray();
-
-            if (blockingChecks.Length > 0)
-            {
-                return $"首次打开：先补齐 {string.Join("、", blockingChecks)}。";
-            }
-
-            if (StartCommand.CanExecute(null))
-            {
-                return "首次打开：必填项已经齐了。";
-            }
-
-            return "首次打开：现在可以直接进入常驻使用。";
-        }
-    }
-
-    public IReadOnlyList<DesktopGuideStepItem> FirstRunGuideSteps => BuildFirstRunGuideSteps();
-
-    public string FirstRunGuideProgressText => BuildGuideProgressText(FirstRunGuideSteps);
-
-    public string FirstRunGuideCurrentStepText => BuildGuideCurrentStepText(FirstRunGuideSteps);
-
-    public bool IsFirstRunGuideComplete => AreGuideStepsComplete(FirstRunGuideSteps);
-
-    public string FirstRunGuideCompletionText => IsFirstRunGuideComplete
-        ? "首次安装已完成，现在可以把 Local AI Runtime 当作日常常驻控制台使用。"
-        : string.Empty;
-
-    public string FirstRunStepsText
-    {
-        get
-        {
-            if (!IsBackendRootValid)
-            {
-                return "1. 选择本地 runtime 目录。" + Environment.NewLine +
-                       "2. 点击重新加载，确认配置已读到这台机器。" + Environment.NewLine +
-                       "3. 再补 API key 和通道配置。";
-            }
-
-            var blockingChecks = _healthReport.Checks
-                .Where(static check => check.IsBlocking)
-                .Select(static check => check.Title)
-                .ToArray();
-
-            if (blockingChecks.Length > 0)
-            {
-                return "1. 先补齐必填项：" + string.Join("、", blockingChecks) + "。" + Environment.NewLine +
-                       "2. 保存配置，让当前窗口里的改动真正生效。" + Environment.NewLine +
-                       "3. 启动后端，再在 System Check 里确认 QQ ready。";
-            }
-
-            if (StartCommand.CanExecute(null))
-            {
-                return "1. 保存当前配置，保持窗口显示的状态为最新。" + Environment.NewLine +
-                       "2. 启动后端，让 control API、QQ runtime 和可选 WeChat runtime 上线。" + Environment.NewLine +
-                       "3. 在 System Check 里确认 QQ ready，再开始日常使用。";
-            }
-
-            return "1. 必填项已经齐了，当前 runtime 可继续使用。" + Environment.NewLine +
-                   "2. 之后最小化或关闭窗口都会进托盘。" + Environment.NewLine +
-                   "3. 需要重新接回时，从 Local AI Runtime 快捷方式或开始菜单打开即可。";
-        }
-    }
-
-    public string DailyUseGuideText => IsProcessRunning
-        ? "日常常驻只记住这 3 件事。"
-        : "日常常驻：先把入口和托盘规则记住。";
-
-    public IReadOnlyList<DesktopGuideStepItem> DailyUseGuideSteps => BuildDailyUseGuideSteps();
-
-    public string DailyUseGuideProgressText => BuildGuideProgressText(DailyUseGuideSteps);
-
-    public string DailyUseGuideCurrentStepText => BuildGuideCurrentStepText(DailyUseGuideSteps);
-
-    public bool IsDailyUseGuideComplete => AreGuideStepsComplete(DailyUseGuideSteps);
-
-    public string DailyUseGuideCompletionText => IsDailyUseGuideComplete
-        ? "已进入日常常驻模式。之后从 Local AI Runtime 重新接回即可。"
-        : string.Empty;
-
-    public string DailyUseStepsText => IsProcessRunning
-        ? "1. 最小化或关闭窗口：只会进托盘，backend 继续运行。" + Environment.NewLine +
-          "2. Exit Desktop：只退出桌面壳；Stop Backend 才会让 QQ / WeChat 下线。" + Environment.NewLine +
-          "3. 之后从桌面快捷方式或开始菜单里的 Local AI Runtime 重新接回控制面。"
-        : "1. 先从这个窗口启动后端，再开始常驻使用。" + Environment.NewLine +
-          "2. 之后最小化或关闭窗口都会进托盘，不会清掉本地状态。" + Environment.NewLine +
-          "3. 需要重新打开时，从桌面快捷方式或开始菜单里的 Local AI Runtime 重新接回。";
-
-    private IReadOnlyList<DesktopGuideStepItem> BuildFirstRunGuideSteps()
-    {
-        var steps = new List<DesktopGuideStepItem>();
-        var blockingChecks = _healthReport.Checks
-            .Where(static check => check.IsBlocking)
-            .ToArray();
-        var firstBlockingCheck = blockingChecks.FirstOrDefault();
-        var hasUnsavedBlockingWork = IsBackendRootValid && HasUnsavedChanges;
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Attach runtime folder",
-                Detail = IsBackendRootValid
-                    ? "This window is already pointed at a usable local runtime folder."
-                    : "Choose the installed local runtime folder that contains package.json and src\\index.mjs.",
-                StatusText = IsBackendRootValid ? "Done" : "Next",
-                IsComplete = IsBackendRootValid,
-                ActionLabel = IsBackendRootValid ? string.Empty : "Choose folder",
-                ActionKey = IsBackendRootValid ? string.Empty : DesktopHealthActionKeys.FocusBackendRoot
-            });
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Complete required setup",
-                Detail = BuildFirstRunSetupStepDetail(blockingChecks, hasUnsavedBlockingWork),
-                StatusText = blockingChecks.Length == 0 && !hasUnsavedBlockingWork ? "Done" : "Next",
-                IsComplete = blockingChecks.Length == 0 && !hasUnsavedBlockingWork,
-                ActionLabel = BuildFirstRunSetupStepActionLabel(firstBlockingCheck, hasUnsavedBlockingWork),
-                ActionKey = BuildFirstRunSetupStepActionKey(firstBlockingCheck, hasUnsavedBlockingWork)
-            });
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Bring the runtime online",
-                Detail = BuildFirstRunRuntimeStepDetail(blockingChecks.Length > 0 || hasUnsavedBlockingWork),
-                StatusText = IsFirstRunRuntimeStepComplete() ? "Done" : "Next",
-                IsComplete = IsFirstRunRuntimeStepComplete(),
-                ActionLabel = BuildFirstRunRuntimeStepActionLabel(blockingChecks.Length > 0 || hasUnsavedBlockingWork),
-                ActionKey = BuildFirstRunRuntimeStepActionKey(blockingChecks.Length > 0 || hasUnsavedBlockingWork)
-            });
-
-        return FinalizeGuideSteps(steps);
-    }
-
-    private string BuildFirstRunSetupStepDetail(
-        IReadOnlyList<DesktopHealthCheckItem> blockingChecks,
-        bool hasUnsavedBlockingWork)
-    {
-        if (!IsBackendRootValid)
-        {
-            return "After choosing the folder, fill in the API key and channel settings shown in System Check.";
-        }
-
-        if (hasUnsavedBlockingWork)
-        {
-            return "Save the edits currently shown in this window before trying to start the runtime.";
-        }
-
-        if (blockingChecks.Count == 0)
-        {
-            return "Required API key and channel settings already look complete.";
-        }
-
-        return $"Finish the required setup items first: {string.Join("、", blockingChecks.Select(static check => check.Title))}.";
-    }
-
-    private string BuildFirstRunSetupStepActionLabel(
-        DesktopHealthCheckItem? firstBlockingCheck,
-        bool hasUnsavedBlockingWork)
-    {
-        if (!IsBackendRootValid)
-        {
-            return string.Empty;
-        }
-
-        if (hasUnsavedBlockingWork)
-        {
-            return "Save config";
-        }
-
-        return firstBlockingCheck?.ActionLabel ?? string.Empty;
-    }
-
-    private string BuildFirstRunSetupStepActionKey(
-        DesktopHealthCheckItem? firstBlockingCheck,
-        bool hasUnsavedBlockingWork)
-    {
-        if (!IsBackendRootValid)
-        {
-            return string.Empty;
-        }
-
-        if (hasUnsavedBlockingWork)
-        {
-            return DesktopHealthActionKeys.SaveConfig;
-        }
-
-        return firstBlockingCheck?.ActionKey ?? string.Empty;
-    }
-
-    private string BuildFirstRunRuntimeStepDetail(bool isBlockedBySetup)
-    {
-        if (!IsBackendRootValid)
-        {
-            return "Runtime start becomes available after the folder and required setup above are complete.";
-        }
-
-        if (isBlockedBySetup)
-        {
-            return "Finish the setup step above first. Then start the backend from this window.";
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            return "Start the backend to bring the control API and QQ runtime online.";
-        }
-
-        if (!string.Equals(RuntimeReadyText, "QQ channel ready", StringComparison.Ordinal))
-        {
-            return "Backend is already running. Confirm NapCat is connected, then check System Check again.";
-        }
-
-        return "QQ is ready. You can now use this as a daily desktop control plane.";
-    }
-
-    private string BuildFirstRunRuntimeStepActionLabel(bool isBlockedBySetup)
-    {
-        if (!IsBackendRootValid || isBlockedBySetup)
-        {
-            return string.Empty;
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            return "Start backend";
-        }
-
-        if (!string.Equals(RuntimeReadyText, "QQ channel ready", StringComparison.Ordinal))
-        {
-            return "Check NapCat config";
-        }
-
-        return string.Empty;
-    }
-
-    private string BuildFirstRunRuntimeStepActionKey(bool isBlockedBySetup)
-    {
-        if (!IsBackendRootValid || isBlockedBySetup)
-        {
-            return string.Empty;
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            return DesktopHealthActionKeys.StartBackend;
-        }
-
-        if (!string.Equals(RuntimeReadyText, "QQ channel ready", StringComparison.Ordinal))
-        {
-            return DesktopHealthActionKeys.FocusNapCatUrl;
-        }
-
-        return string.Empty;
-    }
-
-    private bool IsFirstRunRuntimeStepComplete()
-    {
-        return IsBackendRootValid &&
-               !StartCommand.CanExecute(null) &&
-               string.Equals(RuntimeReadyText, "QQ channel ready", StringComparison.Ordinal);
-    }
-
-    private IReadOnlyList<DesktopGuideStepItem> BuildDailyUseGuideSteps()
-    {
-        var steps = new List<DesktopGuideStepItem>();
-        var latestIssueActionLabel = HealthLatestIssueActionLabel;
-        var latestIssueActionKey = HealthLatestIssueActionKey;
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Keep the runtime reachable",
-                Detail = IsProcessRunning
-                    ? "Backend is already online. You can leave this window in the tray and reconnect later."
-                    : "Start the backend before switching into regular tray-based use.",
-                StatusText = IsProcessRunning ? "Done" : "Next",
-                IsComplete = IsProcessRunning,
-                ActionLabel = IsProcessRunning ? string.Empty : "Start backend",
-                ActionKey = IsProcessRunning ? string.Empty : DesktopHealthActionKeys.StartBackend
-            });
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Decide whether it should return after sign-in",
-                Detail = AutoStartEnabled
-                    ? "Resident mode startup is already enabled. Local AI Runtime will reopen minimized after Windows sign-in."
-                    : "Enable startup if you want Local AI Runtime to return automatically after Windows sign-in.",
-                StatusText = AutoStartEnabled ? "Done" : "Optional",
-                IsComplete = AutoStartEnabled,
-                ActionLabel = AutoStartEnabled ? string.Empty : "Enable startup",
-                ActionKey = AutoStartEnabled ? string.Empty : DesktopHealthActionKeys.ToggleAutoStart
-            });
-
-        steps.Add(
-            new DesktopGuideStepItem
-            {
-                Title = "Check the latest issue when something feels wrong",
-                Detail = string.IsNullOrWhiteSpace(latestIssueActionLabel)
-                    ? "No urgent issue action is waiting right now. Use the tray, recent activity, or System Check as needed."
-                    : HealthLatestIssueText,
-                StatusText = string.IsNullOrWhiteSpace(latestIssueActionLabel) ? "Ready" : "Review",
-                IsComplete = string.IsNullOrWhiteSpace(latestIssueActionLabel),
-                ActionLabel = latestIssueActionLabel,
-                ActionKey = latestIssueActionKey
-            });
-
-        return FinalizeGuideSteps(steps);
-    }
-
-    private static IReadOnlyList<DesktopGuideStepItem> FinalizeGuideSteps(IReadOnlyList<DesktopGuideStepItem> steps)
-    {
-        var currentStepIndex = steps
-            .Select((step, index) => new { Step = step, Index = index })
-            .FirstOrDefault(static item => !item.Step.IsComplete)
-            ?.Index;
-
-        return steps
-            .Select((step, index) => step with
-            {
-                StepNumber = (index + 1).ToString(),
-                IsCurrent = currentStepIndex is int currentIndex && currentIndex == index
-            })
-            .ToArray();
-    }
-
-    private static string BuildGuideProgressText(IReadOnlyList<DesktopGuideStepItem> steps)
-    {
-        if (steps.Count == 0)
-        {
-            return "已完成 0/0";
-        }
-
-        var completedCount = steps.Count(static step => step.IsComplete);
-        return $"已完成 {completedCount}/{steps.Count}";
-    }
-
-    private static string BuildGuideCurrentStepText(IReadOnlyList<DesktopGuideStepItem> steps)
-    {
-        if (steps.Count == 0)
-        {
-            return "当前步骤：无";
-        }
-
-        var currentStep = steps.FirstOrDefault(static step => step.IsCurrent);
-        return currentStep is null
-            ? "当前步骤：全部完成"
-            : $"当前步骤：{currentStep.Title}";
-    }
-
-    private static bool AreGuideStepsComplete(IReadOnlyList<DesktopGuideStepItem> steps)
-    {
-        return steps.Count > 0 && steps.All(static step => step.IsComplete);
-    }
-
-    private bool HasAnyRecentActivity() => QqRecentActivities.Count > 0 || WechatRecentActivities.Count > 0;
-
-    private string BuildOverallReadinessRecentActivityText()
-    {
-        var latestActivity = GetLatestRecentActivity();
-        if (latestActivity is null)
-        {
-            return "Recent activity: no recent QQ / WeChat activity captured yet.";
-        }
-
-        var (channel, item) = latestActivity.Value;
-        var eventType = string.IsNullOrWhiteSpace(item.EventType) ? "Activity" : item.EventType;
-        var summary = string.IsNullOrWhiteSpace(item.Summary) ? "No summary" : item.Summary;
-        var capturedAt = string.IsNullOrWhiteSpace(item.Meta) ? item.CapturedAt : item.Meta;
-        var capturedAtText = string.IsNullOrWhiteSpace(capturedAt) ? "unknown time" : capturedAt;
-
-        return $"Recent activity: {channel} {eventType} | {summary} | {capturedAtText}";
-    }
-
-    private (string Channel, BackendRecentActivityItem Item)? GetLatestRecentActivity()
-    {
-        var latestQqItem = QqRecentActivities
-            .OrderByDescending(static item => ParseCapturedAt(item.CapturedAt))
-            .FirstOrDefault();
-        var latestWechatItem = WechatRecentActivities
-            .OrderByDescending(static item => ParseCapturedAt(item.CapturedAt))
-            .FirstOrDefault();
-
-        if (latestQqItem is null && latestWechatItem is null)
-        {
-            return null;
-        }
-
-        if (latestWechatItem is null)
-        {
-            return ("QQ", latestQqItem!);
-        }
-
-        if (latestQqItem is null)
-        {
-            return ("WeChat", latestWechatItem);
-        }
-
-        return ParseCapturedAt(latestQqItem.CapturedAt) >= ParseCapturedAt(latestWechatItem.CapturedAt)
-            ? ("QQ", latestQqItem)
-            : ("WeChat", latestWechatItem);
-    }
-
-    private static DateTimeOffset ParseCapturedAt(string? capturedAt)
-    {
-        return DateTimeOffset.TryParse(capturedAt, out var parsedCapturedAt)
-            ? parsedCapturedAt
-            : DateTimeOffset.MinValue;
-    }
+        ? "之后可以从桌面快捷方式或开始菜单重新打开 Local AI Runtime。它会恢复这个控制台窗口，并重新附着到同一个正在运行的 runtime，而不是再启动一个新的桌面壳。"
+        : "之后可以从桌面快捷方式或开始菜单重新打开 Local AI Runtime。它会恢复这个控制台窗口，而不是再启动一个新的桌面壳；如果 runtime 当前离线，再手动启动即可。";
+
+    public bool IsOverallReadinessReady => _guideFlow.IsOverallReadinessReady;
+
+    public bool IsOverallReadinessSetupComplete => _guideFlow.IsOverallReadinessSetupComplete;
+
+    public string OverallReadinessStateText => _guideFlow.OverallReadinessStateText;
+
+    public string OverallReadinessSummaryText => _guideFlow.OverallReadinessSummaryText;
+
+    public string OverallReadinessRecentActivityText => _guideFlow.OverallReadinessRecentActivityText;
+
+    public string OverallReadinessActionLabel => _guideFlow.OverallReadinessActionLabel;
+
+    public string OverallReadinessActionKey => _guideFlow.OverallReadinessActionKey;
+
+
+    public string FirstRunGuideText => _guideFlow.FirstRunGuideText;
+
+    public IReadOnlyList<DesktopGuideStepItem> FirstRunGuideSteps => _guideFlow.FirstRunGuideSteps;
+
+    public string FirstRunGuideProgressText => _guideFlow.FirstRunGuideProgressText;
+
+    public string FirstRunGuideCurrentStepText => _guideFlow.FirstRunGuideCurrentStepText;
+
+    public bool IsFirstRunGuideComplete => _guideFlow.IsFirstRunGuideComplete;
+
+    public string FirstRunGuideCompletionText => _guideFlow.FirstRunGuideCompletionText;
+
+    public string FirstRunStepsText => _guideFlow.FirstRunStepsText;
+
+    public string DailyUseGuideText => _guideFlow.DailyUseGuideText;
+
+    public IReadOnlyList<DesktopGuideStepItem> DailyUseGuideSteps => _guideFlow.DailyUseGuideSteps;
+
+    public string DailyUseGuideProgressText => _guideFlow.DailyUseGuideProgressText;
+
+    public string DailyUseGuideCurrentStepText => _guideFlow.DailyUseGuideCurrentStepText;
+
+    public bool IsDailyUseGuideComplete => _guideFlow.IsDailyUseGuideComplete;
+
+    public string DailyUseGuideCompletionText => _guideFlow.DailyUseGuideCompletionText;
+
+    public string DailyUseStepsText => _guideFlow.DailyUseStepsText;
 
     public bool HasUnsavedChanges
     {
@@ -1400,7 +957,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public string ConfigStateText => HasUnsavedChanges ? "Unsaved changes" : "Config synced";
+    public string ConfigStateText => HasUnsavedChanges ? "有未保存修改" : "配置已同步";
 
     public string StatusText
     {
@@ -1440,10 +997,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string ControlApiTokenStateText =>
         string.IsNullOrWhiteSpace(ControlApiToken)
-            ? "Local token not set"
+            ? "本机令牌未设置"
             : _backendControlApiService.LastFailure.Kind == BackendControlApiFailureKind.Unauthorized
-                ? "Local token saved, but the backend still rejects it"
-                : "Local token configured";
+                ? "本机令牌已保存，但后端仍然拒绝它"
+                : "本机令牌已配置";
 
     public string ControlApiEndpointText
     {
@@ -1574,7 +1131,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public bool HasStateRestoreResult =>
         !string.Equals(
             LastStateRestoreText,
-            "No state snapshot restored yet",
+            "尚未恢复状态快照",
             StringComparison.Ordinal);
 
     public LocalStateSnapshotDescriptor? SelectedStateSnapshot
@@ -1587,10 +1144,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 _selectedStateSnapshotPreview = null;
                 OnPropertyChanged(nameof(SelectedStateSnapshotSummaryText));
                 OnPropertyChanged(nameof(SelectedStateSnapshotDetailText));
-                OnPropertyChanged(nameof(SelectedStateSnapshotImpactText));
-                OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
-                OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
-                OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
+                ApplySelectedStateSnapshotPresentation();
                 _ = RefreshSelectedStateSnapshotPreviewAsync();
                 UpdateCommandStates();
             }
@@ -1598,15 +1152,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public string SelectedStateSnapshotSummaryText =>
-        SelectedStateSnapshot?.Summary ?? "Select a snapshot to inspect or restore.";
+        SelectedStateSnapshot?.Summary ?? "选择一个快照以查看或恢复。";
 
     public string SelectedStateSnapshotDetailText =>
-        SelectedStateSnapshot?.Detail ?? "Snapshot details will appear here.";
+        SelectedStateSnapshot?.Detail ?? "快照详情会显示在这里。";
 
-    public string SelectedStateSnapshotImpactText =>
-        SelectedStateSnapshot is null
-            ? "Restore will overwrite the state shown in this snapshot. Delete permanently removes the selected archive."
-            : BuildSelectedStateSnapshotImpactText(SelectedStateSnapshot);
+    public string SelectedStateSnapshotImpactText
+    {
+        get => _selectedStateSnapshotImpactText;
+        private set => SetProperty(ref _selectedStateSnapshotImpactText, value);
+    }
 
     public string SelectedStateSnapshotDiffText
     {
@@ -1620,24 +1175,33 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         private set => SetProperty(ref _selectedStateSnapshotAdviceText, value);
     }
 
-    public string SelectedStateSnapshotSafetyHeadlineText =>
-        BuildSelectedStateSnapshotSafetyHeadline(SelectedStateSnapshot, _selectedStateSnapshotPreview);
+    public string SelectedStateSnapshotSafetyHeadlineText
+    {
+        get => _selectedStateSnapshotSafetyHeadlineText;
+        private set => SetProperty(ref _selectedStateSnapshotSafetyHeadlineText, value);
+    }
 
-    public string SelectedStateSnapshotSafetyRecommendationText =>
-        BuildSelectedStateSnapshotSafetyRecommendation(SelectedStateSnapshot, _selectedStateSnapshotPreview);
+    public string SelectedStateSnapshotSafetyRecommendationText
+    {
+        get => _selectedStateSnapshotSafetyRecommendationText;
+        private set => SetProperty(ref _selectedStateSnapshotSafetyRecommendationText, value);
+    }
 
-    public string SelectedStateSnapshotRollbackHintText =>
-        BuildSelectedStateSnapshotRollbackHint(SelectedStateSnapshot, _selectedStateSnapshotPreview);
+    public string SelectedStateSnapshotRollbackHintText
+    {
+        get => _selectedStateSnapshotRollbackHintText;
+        private set => SetProperty(ref _selectedStateSnapshotRollbackHintText, value);
+    }
 
     public string SnapshotRetentionHintText =>
-        "Snapshots are kept until you delete them. Older snapshots may still include secrets from .env.";
+        "快照会一直保留，直到你手动删除。较早的快照仍可能包含 .env 密钥。";
 
     public string SessionStoreStateText =>
         !IsBackendRootValid
-            ? "State path unavailable until backend root is valid"
+            ? "后端目录有效后才能显示会话路径"
             : File.Exists(SessionStorePathText)
-                ? "Session history file is present"
-                : "Session history file will be created after the first saved conversation";
+                ? "会话历史文件已存在"
+                : "首次保存会话后会创建历史文件";
 
     public string ImageCacheStateText
     {
@@ -1645,18 +1209,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (!IsBackendRootValid)
             {
-                return "Cache path unavailable until backend root is valid";
+                return "后端目录有效后才能显示缓存路径";
             }
 
             if (!Directory.Exists(ImageCachePathText))
             {
-                return "Image cache is empty";
+                return "图片缓存为空";
             }
 
             var cachedFileCount = Directory.GetFiles(ImageCachePathText, "*", SearchOption.AllDirectories).Length;
             return cachedFileCount == 0
-                ? "Image cache is empty"
-                : $"{cachedFileCount} cached image file{(cachedFileCount == 1 ? string.Empty : "s")}";
+                ? "图片缓存为空"
+                : $"{cachedFileCount} 个缓存图片文件";
         }
     }
 
@@ -1730,7 +1294,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             _suspendDirtyTracking = true;
-            StatusText = "Loading config...";
+            StatusText = "正在加载配置...";
             var localEnvDocument = await LoadLocalEnvDocumentAsync();
             var loadResult = await LoadConfigFromAuthoritativeSourceAsync();
             var apiConfig = loadResult.ApiConfig;
@@ -1758,8 +1322,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             HasUnsavedChanges = false;
             DesktopControlPlaneFeedback.ApplyOutcome(
                 statusText: apiConfig?.RestartRequired == true
-                    ? "Config loaded (restart required)"
-                    : "Config loaded",
+                    ? "配置已加载（需要重启）"
+                    : "配置已加载",
                 logMessages:
                 [
                     apiConfig is not null
@@ -1881,14 +1445,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            StatusText = "Saving config...";
+            StatusText = "正在保存配置...";
             var submittedConfig = BuildConfig();
             _envDocument.Config = submittedConfig;
             var apiResult = await SaveConfigThroughControlApiAsync(submittedConfig);
             _envDocument.Config = MergeSavedConfig(submittedConfig, apiResult);
             ApplyConfigToView(_envDocument.Config);
             DesktopControlPlaneFeedback.ApplyOutcome(
-                statusText: apiResult.RestartRequired ? "Config saved (restart required)" : "Config saved",
+                statusText: apiResult.RestartRequired ? "配置已保存（需要重启）" : "配置已保存",
                 logMessages: [$"Saved config via control API: {apiResult.EnvPath}"],
                 notifications: [],
                 setStatusText: (statusText) => StatusText = statusText,
@@ -2052,28 +1616,28 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             var nextValue = !AutoStartEnabled;
             _autoStartService.SetEnabled(nextValue);
             AutoStartEnabled = nextValue;
-            StatusText = nextValue ? "Startup enabled for resident mode" : "Startup disabled";
+            StatusText = nextValue ? "已启用常驻模式开机启动" : "已关闭开机启动";
             AddLog(nextValue
-                ? "Enabled resident mode startup at Windows sign-in."
-                : "Disabled startup at Windows sign-in. The tray behavior still works after manual launch.");
+                ? "已启用常驻模式开机启动。"
+                : "已关闭开机启动。手动启动后，托盘行为仍然可用。");
             NotificationRequested?.Invoke(
                 this,
                 new TrayNotification
                 {
                     Title = "Local AI Runtime",
                     Message = nextValue
-                        ? "Resident mode enabled. It will start minimized and ensure the runtime after Windows sign-in."
-                        : "Resident mode startup disabled. Manual launch still supports tray behavior.",
+                        ? "已启用常驻模式。Windows 登录后会以最小化方式启动并确保 runtime 运行。"
+                        : "已关闭常驻模式开机启动。手动启动后仍可使用托盘模式。",
                     Icon = Forms.ToolTipIcon.Info
                 });
         }
         catch (Exception ex)
         {
-            StatusText = "Auto-start update failed";
-            AddLog($"Auto-start update failed: {ex.Message}");
+            StatusText = "更新开机启动失败";
+            AddLog($"更新开机启动失败: {ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Auto-start update failed:\n{ex.Message}",
-                "Auto-start failed",
+                $"更新开机启动失败：\n{ex.Message}",
+                "更新开机启动失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error
             );
@@ -2086,10 +1650,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _backendRootDetected = PathDiscoveryService.TryDiscoverBackendRoot(out var detectedPath);
         BackendRootPath = detectedPath;
-        StatusText = _backendRootDetected ? "Backend root detected" : "Backend root not detected";
+        StatusText = _backendRootDetected ? "已检测到 backend 根目录" : "未检测到 backend 根目录";
         AddLog(_backendRootDetected
-            ? $"Auto-detected backend root: {BackendRootPath}"
-            : $"Using current backend root: {BackendRootPath}");
+            ? $"自动检测到 backend 根目录: {BackendRootPath}"
+            : $"继续使用当前 backend 根目录: {BackendRootPath}");
         UpdateCommandStates();
     }
 
@@ -2140,20 +1704,20 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var removedEntries = _localPathOperationsService.ClearDirectoryContents(ImageCachePathText);
-            StatusText = removedEntries > 0 ? "Image cache cleared" : "Image cache already empty";
+            StatusText = removedEntries > 0 ? "图片缓存已清理" : "图片缓存本来就是空的";
             AddLog(
                 removedEntries > 0
-                    ? $"Cleared image cache at {ImageCachePathText}, removed {removedEntries} entr{(removedEntries == 1 ? "y" : "ies")}."
-                    : $"Image cache already empty: {ImageCachePathText}");
+                    ? $"已清理图片缓存 {ImageCachePathText}，移除了 {removedEntries} 个条目。"
+                    : $"图片缓存本来就是空的: {ImageCachePathText}");
             OnPropertyChanged(nameof(ImageCacheStateText));
         }
         catch (Exception ex)
         {
-            StatusText = "Image cache clear failed";
-            AddLog($"Clearing image cache failed: {ex.Message}");
+            StatusText = "清空图片缓存失败";
+            AddLog($"清空图片缓存失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Clearing image cache failed:\n{ex.Message}",
-                "Clear image cache failed",
+                $"清空图片缓存失败：\n{ex.Message}",
+                "清空图片缓存失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2163,29 +1727,28 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!IsBackendRootValid)
         {
-            StatusText = "Backend root is invalid";
-            AddLog("Cannot export state snapshot because backend root is invalid.");
+            StatusText = "后端目录无效";
+            AddLog("后端目录无效，无法导出状态快照。");
             return;
         }
 
         try
         {
-            StatusText = "Exporting state snapshot...";
+            StatusText = "正在导出状态快照...";
             var result = await _localStateSnapshotService.ExportAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(result.ArchivePath);
-            StatusText = "State snapshot exported";
-            AddLog(
-                $"Exported local state snapshot to {result.ArchivePath} with {result.IncludedEntries.Count} entr{(result.IncludedEntries.Count == 1 ? "y" : "ies")}.");
+            StatusText = "状态快照已导出";
+            AddLog($"已导出本地状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
         }
         catch (Exception ex)
         {
-            StatusText = "State snapshot export failed";
-            AddLog($"Exporting state snapshot failed: {ex.Message}");
+            StatusText = "导出状态快照失败";
+            AddLog($"导出状态快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Exporting state snapshot failed:\n{ex.Message}",
-                "Export state snapshot failed",
+                $"导出状态快照失败：\n{ex.Message}",
+                "导出状态快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2199,29 +1762,28 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!IsBackendRootValid)
         {
-            StatusText = "Backend root is invalid";
-            AddLog("Cannot export safe state snapshot because backend root is invalid.");
+            StatusText = "后端目录无效";
+            AddLog("后端目录无效，无法导出安全状态快照。");
             return;
         }
 
         try
         {
-            StatusText = "Exporting safe state snapshot...";
+            StatusText = "正在导出安全状态快照...";
             var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(result.ArchivePath);
-            StatusText = "Safe state snapshot exported";
-            AddLog(
-                $"Exported safe state snapshot to {result.ArchivePath} with {result.IncludedEntries.Count} entr{(result.IncludedEntries.Count == 1 ? "y" : "ies")} and no .env secrets.");
+            StatusText = "安全状态快照已导出";
+            AddLog($"已导出安全状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项，且不含 .env 密钥。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
         }
         catch (Exception ex)
         {
-            StatusText = "Safe state snapshot export failed";
-            AddLog($"Exporting safe state snapshot failed: {ex.Message}");
+            StatusText = "导出安全状态快照失败";
+            AddLog($"导出安全状态快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Exporting safe state snapshot failed:\n{ex.Message}",
-                "Export safe state snapshot failed",
+                $"导出安全状态快照失败：\n{ex.Message}",
+                "导出安全状态快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2243,22 +1805,21 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            StatusText = "Exporting safe rollback snapshot...";
+            StatusText = "正在导出安全回滚快照...";
             var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(restoreTargetArchivePath);
-            StatusText = "Safe rollback snapshot exported";
-            AddLog(
-                $"Exported safe rollback snapshot to {result.ArchivePath} before restoring {restoreTargetFileName}. Original restore target remains selected.");
+            StatusText = "安全回滚快照已导出";
+            AddLog($"已在恢复 {restoreTargetFileName} 前导出安全回滚快照到 {result.ArchivePath}，原始恢复目标保持选中。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
         }
         catch (Exception ex)
         {
-            StatusText = "Safe rollback snapshot export failed";
-            AddLog($"Exporting safe rollback snapshot failed: {ex.Message}");
+            StatusText = "导出安全回滚快照失败";
+            AddLog($"导出安全回滚快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Exporting a safe rollback snapshot failed:\n{ex.Message}",
-                "Export safe rollback snapshot failed",
+                $"导出安全回滚快照失败：\n{ex.Message}",
+                "导出安全回滚快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2272,8 +1833,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!IsBackendRootValid)
         {
-            StatusText = "Backend root is invalid";
-            AddLog("Cannot restore state snapshot because backend root is invalid.");
+            StatusText = "后端目录无效";
+            AddLog("后端目录无效，无法恢复状态快照。");
             return;
         }
 
@@ -2281,36 +1842,35 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             var snapshots = await _localStateSnapshotService.ListAsync(BackendRootPath);
             var latestSnapshot = snapshots.FirstOrDefault()
-                ?? throw new InvalidOperationException("No state snapshots are available to restore.");
+                ?? throw new InvalidOperationException("当前没有可恢复的状态快照。");
             var preview = await _localStateSnapshotService.PreviewAsync(BackendRootPath, latestSnapshot.ArchivePath);
 
             if (!_confirmationDialogService.Confirm(
-                    "Restore latest snapshot",
+                    "恢复最新快照",
                     BuildRestoreConfirmationMessage(latestSnapshot, preview)))
             {
-                StatusText = "Latest snapshot restore cancelled";
-                AddLog($"Cancelled restoring latest snapshot: {latestSnapshot.ArchivePath}");
+                StatusText = "已取消恢复最新快照";
+                AddLog($"已取消恢复最新快照：{latestSnapshot.ArchivePath}");
                 return;
             }
 
-            StatusText = "Restoring latest state snapshot...";
+            StatusText = "正在恢复最新状态快照...";
             var result = await _localStateSnapshotService.RestoreLatestAsync(BackendRootPath);
             LastStateRestoreText = result.ArchivePath;
             ApplyRestoreResultSummary(result, preview);
-            StatusText = "Latest state snapshot restored";
-            AddLog(
-                $"Restored local state snapshot from {result.ArchivePath} with {result.RestoredEntries.Count} entr{(result.RestoredEntries.Count == 1 ? "y" : "ies")}.");
+            StatusText = "最新状态快照已恢复";
+            AddLog($"已从 {result.ArchivePath} 恢复本地状态快照，共恢复 {result.RestoredEntries.Count} 项。");
             await RefreshStateSnapshotsAsync(result.ArchivePath);
             await LoadConfigAsync();
             ApplyRestoreAvailabilityCheck();
         }
         catch (Exception ex)
         {
-            StatusText = "State snapshot restore failed";
-            AddLog($"Restoring latest state snapshot failed: {ex.Message}");
+            StatusText = "恢复状态快照失败";
+            AddLog($"恢复最新状态快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Restoring the latest state snapshot failed:\n{ex.Message}",
-                "Restore state snapshot failed",
+                $"恢复最新状态快照失败：\n{ex.Message}",
+                "恢复状态快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2334,34 +1894,33 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 SelectedStateSnapshot.ArchivePath);
 
             if (!_confirmationDialogService.Confirm(
-                    "Restore selected snapshot",
+                    "恢复选中快照",
                     BuildRestoreConfirmationMessage(SelectedStateSnapshot, preview)))
             {
-                StatusText = "Selected snapshot restore cancelled";
-                AddLog($"Cancelled restoring selected snapshot: {SelectedStateSnapshot.ArchivePath}");
+                StatusText = "已取消恢复选中快照";
+                AddLog($"已取消恢复选中快照：{SelectedStateSnapshot.ArchivePath}");
                 return;
             }
 
-            StatusText = "Restoring selected state snapshot...";
+            StatusText = "正在恢复选中状态快照...";
             var result = await _localStateSnapshotService.RestoreAsync(
                 BackendRootPath,
                 SelectedStateSnapshot.ArchivePath);
             LastStateRestoreText = result.ArchivePath;
             ApplyRestoreResultSummary(result, preview);
-            StatusText = "Selected state snapshot restored";
-            AddLog(
-                $"Restored selected state snapshot from {result.ArchivePath} with {result.RestoredEntries.Count} entr{(result.RestoredEntries.Count == 1 ? "y" : "ies")}.");
+            StatusText = "选中状态快照已恢复";
+            AddLog($"已从 {result.ArchivePath} 恢复选中状态快照，共恢复 {result.RestoredEntries.Count} 项。");
             await RefreshStateSnapshotsAsync(result.ArchivePath);
             await LoadConfigAsync();
             ApplyRestoreAvailabilityCheck();
         }
         catch (Exception ex)
         {
-            StatusText = "Selected snapshot restore failed";
-            AddLog($"Restoring selected snapshot failed: {ex.Message}");
+            StatusText = "恢复选中快照失败";
+            AddLog($"恢复选中快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Restoring the selected snapshot failed:\n{ex.Message}",
-                "Restore selected snapshot failed",
+                $"恢复选中快照失败：\n{ex.Message}",
+                "恢复选中快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2383,23 +1942,23 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             var archivePath = SelectedStateSnapshot.ArchivePath;
 
             if (!_confirmationDialogService.Confirm(
-                    "Delete selected snapshot",
+                    "删除选中快照",
                     BuildDeleteConfirmationMessage(SelectedStateSnapshot)))
             {
-                StatusText = "Snapshot delete cancelled";
-                AddLog($"Cancelled deleting selected snapshot: {archivePath}");
+                StatusText = "已取消删除快照";
+                AddLog($"已取消删除选中快照：{archivePath}");
                 return;
             }
 
-            StatusText = "Deleting selected snapshot...";
+            StatusText = "正在删除选中快照...";
             await _localStateSnapshotService.DeleteAsync(archivePath);
-            AddLog($"Deleted state snapshot: {archivePath}");
+            AddLog($"已删除状态快照：{archivePath}");
             await RefreshStateSnapshotsAsync();
-            StatusText = "Selected snapshot deleted";
+            StatusText = "选中快照已删除";
 
             if (string.Equals(LastStateSnapshotText, archivePath, StringComparison.OrdinalIgnoreCase))
             {
-                LastStateSnapshotText = "No state snapshot exported yet";
+                LastStateSnapshotText = "尚未导出状态快照";
             }
 
             if (string.Equals(LastStateRestoreText, archivePath, StringComparison.OrdinalIgnoreCase))
@@ -2409,11 +1968,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            StatusText = "Snapshot delete failed";
-            AddLog($"Deleting selected snapshot failed: {ex.Message}");
+            StatusText = "删除快照失败";
+            AddLog($"删除选中快照失败：{ex.Message}");
             System.Windows.MessageBox.Show(
-                $"Deleting the selected snapshot failed:\n{ex.Message}",
-                "Delete selected snapshot failed",
+                $"删除选中快照失败：\n{ex.Message}",
+                "删除选中快照失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -2431,8 +1990,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         _localPathOperationsService.OpenFolder(StateSnapshotFolderPathText);
-        StatusText = "Opened state snapshot folder";
-        AddLog($"Opened state snapshot folder: {StateSnapshotFolderPathText}");
+        StatusText = "已打开状态快照目录";
+        AddLog($"已打开状态快照目录：{StateSnapshotFolderPathText}");
     }
 
     private void ApplyBaseUrlPreset(object? parameter)
@@ -2464,7 +2023,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         RunOnUiDispatcher(() =>
         {
             IsProcessRunning = false;
-            StatusText = "Backend exited";
+            StatusText = "后端已退出";
             UpdateCommandStates();
         });
     }
@@ -2606,6 +2165,47 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(LatestTurnActionKey));
     }
 
+    private void RefreshGuideFlow()
+    {
+        _guideFlow = DesktopGuideFlowBuilder.Build(
+            new DesktopGuideFlowContext
+            {
+                IsBackendRootValid = IsBackendRootValid,
+                HasUnsavedChanges = HasUnsavedChanges,
+                CanStartBackend = StartCommand.CanExecute(null),
+                IsProcessRunning = IsProcessRunning,
+                IsQqRuntimeReady = _runtimeSnapshot.RuntimeReady == true,
+                AutoStartEnabled = AutoStartEnabled,
+                HealthLatestIssueText = HealthLatestIssueText,
+                HealthLatestIssueActionLabel = HealthLatestIssueActionLabel,
+                HealthLatestIssueActionKey = HealthLatestIssueActionKey,
+                HealthChecks = _healthReport.Checks,
+                QqRecentActivities = QqRecentActivities.ToArray(),
+                WechatRecentActivities = WechatRecentActivities.ToArray()
+            });
+        OnPropertyChanged(nameof(IsOverallReadinessReady));
+        OnPropertyChanged(nameof(IsOverallReadinessSetupComplete));
+        OnPropertyChanged(nameof(OverallReadinessStateText));
+        OnPropertyChanged(nameof(OverallReadinessSummaryText));
+        OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
+        OnPropertyChanged(nameof(OverallReadinessActionLabel));
+        OnPropertyChanged(nameof(OverallReadinessActionKey));
+        OnPropertyChanged(nameof(FirstRunGuideText));
+        OnPropertyChanged(nameof(FirstRunGuideSteps));
+        OnPropertyChanged(nameof(FirstRunGuideProgressText));
+        OnPropertyChanged(nameof(FirstRunGuideCurrentStepText));
+        OnPropertyChanged(nameof(IsFirstRunGuideComplete));
+        OnPropertyChanged(nameof(FirstRunGuideCompletionText));
+        OnPropertyChanged(nameof(FirstRunStepsText));
+        OnPropertyChanged(nameof(DailyUseGuideText));
+        OnPropertyChanged(nameof(DailyUseGuideSteps));
+        OnPropertyChanged(nameof(DailyUseGuideProgressText));
+        OnPropertyChanged(nameof(DailyUseGuideCurrentStepText));
+        OnPropertyChanged(nameof(IsDailyUseGuideComplete));
+        OnPropertyChanged(nameof(DailyUseGuideCompletionText));
+        OnPropertyChanged(nameof(DailyUseStepsText));
+    }
+
     private async void OnStatusPollTimerTick(object? sender, EventArgs e)
     {
         await LoadLocalEnvDocumentAsync(suppressErrors: true);
@@ -2679,27 +2279,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(HealthLatestIssueText));
         OnPropertyChanged(nameof(HealthLatestIssueActionLabel));
         OnPropertyChanged(nameof(HealthLatestIssueActionKey));
-        OnPropertyChanged(nameof(IsOverallReadinessReady));
-        OnPropertyChanged(nameof(IsOverallReadinessSetupComplete));
-        OnPropertyChanged(nameof(OverallReadinessStateText));
-        OnPropertyChanged(nameof(OverallReadinessSummaryText));
-        OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
-        OnPropertyChanged(nameof(OverallReadinessActionLabel));
-        OnPropertyChanged(nameof(OverallReadinessActionKey));
-        OnPropertyChanged(nameof(FirstRunGuideText));
-        OnPropertyChanged(nameof(FirstRunGuideSteps));
-        OnPropertyChanged(nameof(FirstRunGuideProgressText));
-        OnPropertyChanged(nameof(FirstRunGuideCurrentStepText));
-        OnPropertyChanged(nameof(IsFirstRunGuideComplete));
-        OnPropertyChanged(nameof(FirstRunGuideCompletionText));
-        OnPropertyChanged(nameof(FirstRunStepsText));
-        OnPropertyChanged(nameof(DailyUseGuideText));
-        OnPropertyChanged(nameof(DailyUseGuideSteps));
-        OnPropertyChanged(nameof(DailyUseGuideProgressText));
-        OnPropertyChanged(nameof(DailyUseGuideCurrentStepText));
-        OnPropertyChanged(nameof(IsDailyUseGuideComplete));
-        OnPropertyChanged(nameof(DailyUseGuideCompletionText));
-        OnPropertyChanged(nameof(DailyUseStepsText));
+        RefreshGuideFlow();
         OnPropertyChanged(nameof(ControlApiTokenStateText));
         OnPropertyChanged(nameof(ControlApiEndpointText));
         OnPropertyChanged(nameof(SessionStorePathText));
@@ -2723,12 +2303,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             ReplaceStateSnapshots([]);
             SelectedStateSnapshot = null;
-            _selectedStateSnapshotPreview = null;
-            SelectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
-            SelectedStateSnapshotAdviceText = "Restore advice will appear here.";
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
+            ApplySelectedStateSnapshotPresentation();
             return;
         }
 
@@ -2750,16 +2325,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (selectedSnapshot is null || !IsBackendRootValid)
         {
             _selectedStateSnapshotPreview = null;
-            SelectedStateSnapshotDiffText = "Select a snapshot to preview differences.";
-            SelectedStateSnapshotAdviceText = "Restore advice will appear here.";
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
+            ApplySelectedStateSnapshotPresentation();
             return;
         }
 
-        SelectedStateSnapshotDiffText = "Loading diff preview...";
-        SelectedStateSnapshotAdviceText = "Loading restore advice...";
+        ApplySelectedStateSnapshotPresentation(
+            diffTextOverride: "Loading diff preview...",
+            adviceTextOverride: "Loading restore advice...");
 
         try
         {
@@ -2773,11 +2345,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             _selectedStateSnapshotPreview = preview;
-            SelectedStateSnapshotDiffText = string.Join(Environment.NewLine, preview.Lines);
-            SelectedStateSnapshotAdviceText = string.Join(Environment.NewLine, preview.Recommendations);
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
+            ApplySelectedStateSnapshotPresentation();
         }
         catch (Exception ex)
         {
@@ -2787,11 +2355,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             _selectedStateSnapshotPreview = null;
-            SelectedStateSnapshotDiffText = $"Diff preview unavailable: {ex.Message}";
-            SelectedStateSnapshotAdviceText = "Review the snapshot details carefully before restoring.";
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyHeadlineText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotSafetyRecommendationText));
-            OnPropertyChanged(nameof(SelectedStateSnapshotRollbackHintText));
+            ApplySelectedStateSnapshotPresentation(
+                diffTextOverride: $"Diff preview unavailable: {ex.Message}",
+                adviceTextOverride: "Review the snapshot details carefully before restoring.");
         }
     }
 
@@ -3003,9 +2569,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             WechatRecentActivities,
             SelectedWechatRecentActivity,
             ShowOnlyWechatFailures);
-        OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
-        OnPropertyChanged(nameof(OverallReadinessActionLabel));
-        OnPropertyChanged(nameof(OverallReadinessActionKey));
+        RefreshGuideFlow();
         NotifyRuntimeSnapshotChanged();
     }
 
@@ -3166,182 +2730,30 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return $"{normalizedSystemPrompt}{Environment.NewLine}{Environment.NewLine}附加人格设定:{Environment.NewLine}{normalizedPersona}";
     }
 
-    private static string BuildSelectedStateSnapshotImpactText(LocalStateSnapshotDescriptor snapshot)
-    {
-        var impactParts = new List<string>();
-
-        if (snapshot.IncludedEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)))
-        {
-            impactParts.Add(".env");
-        }
-
-        if (snapshot.IncludedEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)))
-        {
-            impactParts.Add("data/");
-        }
-
-        if (snapshot.IncludedEntries.Any(static entry => string.Equals(entry, "desktop/activity-state.json", StringComparison.Ordinal)))
-        {
-            impactParts.Add("desktop activity state");
-        }
-
-        var overwriteTargetText = impactParts.Count > 0
-            ? string.Join(", ", impactParts)
-            : "the files listed in this snapshot";
-        var secretRiskText = snapshot.IncludesSecrets
-            ? "This snapshot includes secrets from .env."
-            : "No .env secret flag was recorded for this snapshot.";
-
-        return $"Restoring this snapshot will overwrite {overwriteTargetText}. {secretRiskText}";
-    }
-
-    private static string BuildSelectedStateSnapshotSafetyHeadline(
-        LocalStateSnapshotDescriptor? snapshot,
-        LocalStateSnapshotPreviewResult? preview)
-    {
-        if (snapshot is null)
-        {
-            return "Safety check: choose a snapshot to see what restore would overwrite.";
-        }
-
-        var hasMeaningfulDiff = PreviewHasMeaningfulDiff(preview);
-        var overwritesEnv = SnapshotIncludesEntry(snapshot, "app/.env");
-        var overwritesData = SnapshotIncludesPrefix(snapshot, "app/data/");
-        var includesSecrets = snapshot.IncludesSecrets;
-
-        if (hasMeaningfulDiff && (overwritesEnv || overwritesData) && includesSecrets)
-        {
-            return "Safety check: high caution. This restore would overwrite current runtime state, and the archive includes .env secrets.";
-        }
-
-        if (hasMeaningfulDiff && (overwritesEnv || overwritesData))
-        {
-            return "Safety check: review carefully. This restore would overwrite current runtime state on this machine.";
-        }
-
-        if (includesSecrets)
-        {
-            return "Safety check: low restore impact, but keep this archive private because it includes .env secrets.";
-        }
-
-        return "Safety check: current state already looks close to this snapshot.";
-    }
-
-    private static string BuildSelectedStateSnapshotSafetyRecommendation(
-        LocalStateSnapshotDescriptor? snapshot,
-        LocalStateSnapshotPreviewResult? preview)
-    {
-        if (snapshot is null)
-        {
-            return "Recommended first step: select a snapshot to inspect the overwrite risk before restoring.";
-        }
-
-        if (PreviewHasMeaningfulDiff(preview))
-        {
-            return "Recommended first step: export a safe rollback snapshot of the current state. That keeps current sessions and desktop activity without copying .env secrets, and this restore target will stay selected.";
-        }
-
-        return snapshot.IncludesSecrets
-            ? "Recommended first step: restore only if you intentionally want to roll back to this exact saved state, and avoid sharing the archive because it includes .env secrets."
-            : "Recommended first step: review the diff below, then restore if you intentionally want to roll back.";
-    }
-
-    private static string BuildSelectedStateSnapshotRollbackHint(
-        LocalStateSnapshotDescriptor? snapshot,
-        LocalStateSnapshotPreviewResult? preview)
-    {
-        if (snapshot is null)
-        {
-            return "Safe rollback snapshots keep a current-state fallback without .env secrets.";
-        }
-
-        if (PreviewHasMeaningfulDiff(preview))
-        {
-            return "Rollback protection: a safe rollback snapshot stores the current data/ and desktop activity state without copying .env secrets, so you can back out more confidently.";
-        }
-
-        return snapshot.IncludesSecrets
-            ? "Rollback protection: this archive already contains secrets, so prefer a fresh safe rollback snapshot before testing any restore workflow."
-            : "Rollback protection: if you still want an easy way back, export a safe rollback snapshot first.";
-    }
-
     private static string BuildRestoreConfirmationMessage(
         LocalStateSnapshotDescriptor snapshot,
         LocalStateSnapshotPreviewResult preview)
     {
+        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(snapshot, preview);
+
         return string.Join(
             Environment.NewLine,
             [
-                $"Restore snapshot: {snapshot.FileName}",
+                $"恢复快照：{snapshot.FileName}",
                 snapshot.Summary,
-                "What will be overwritten",
-                BuildSelectedStateSnapshotImpactText(snapshot),
+                "会被覆盖的内容",
+                presentation.ImpactText,
                 string.Empty,
-                "Recommended before restore",
-                BuildSelectedStateSnapshotSafetyHeadline(snapshot, preview),
-                BuildSelectedStateSnapshotSafetyRecommendation(snapshot, preview),
-                BuildSelectedStateSnapshotRollbackHint(snapshot, preview),
+                "恢复前建议",
+                presentation.SafetyHeadlineText,
+                presentation.SafetyRecommendationText,
+                presentation.RollbackHintText,
                 string.Empty,
-                "Current vs snapshot",
-                string.Join(Environment.NewLine, preview.Lines),
-                string.Join(Environment.NewLine, preview.Recommendations),
-                "Continue?"
+                "当前状态 vs 快照",
+                presentation.DiffText,
+                presentation.AdviceText,
+                "是否继续？"
             ]);
-    }
-
-    private static string BuildRestoreSummaryText(
-        LocalStateSnapshotRestoreResult restoreResult,
-        LocalStateSnapshotPreviewResult? preview)
-    {
-        var restoredTargets = new List<string>();
-
-        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)))
-        {
-            restoredTargets.Add(".env");
-        }
-
-        if (restoreResult.RestoredEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)))
-        {
-            restoredTargets.Add("data/");
-        }
-
-        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "desktop/activity-state.json", StringComparison.Ordinal)))
-        {
-            restoredTargets.Add("desktop activity state");
-        }
-
-        var targetText = restoredTargets.Count > 0
-            ? string.Join(", ", restoredTargets)
-            : "tracked state files";
-        var archiveName = Path.GetFileName(restoreResult.ArchivePath);
-        var sessionCountLine = preview?.Lines.FirstOrDefault(
-            static line => line.StartsWith("sessions.json conversations:", StringComparison.Ordinal));
-        var latestActivityLine = preview?.Lines.FirstOrDefault(
-            static line => line.StartsWith("sessions.json latest activity:", StringComparison.Ordinal));
-
-        if (string.IsNullOrWhiteSpace(sessionCountLine) && string.IsNullOrWhiteSpace(latestActivityLine))
-        {
-            return $"Restored {targetText} from {archiveName}.";
-        }
-
-        var summaryParts = new List<string>
-        {
-            $"Restored {targetText} from {archiveName}."
-        };
-
-        if (!string.IsNullOrWhiteSpace(sessionCountLine))
-        {
-            summaryParts.Add(
-                $"Session count now should match snapshot: {ExtractSnapshotSide(sessionCountLine)} conversations.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(latestActivityLine))
-        {
-            summaryParts.Add(
-                $"Latest session activity now should match snapshot: {ExtractSnapshotSide(latestActivityLine)}.");
-        }
-
-        return string.Join(" ", summaryParts);
     }
 
     private void ApplyRestoreResultSummary(
@@ -3350,408 +2762,73 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _lastStateRestoreResult = restoreResult;
         _lastStateRestorePreview = preview;
-        LastStateRestoreSummaryText = BuildRestoreSummaryText(restoreResult, preview);
-        LastStateRestoreIssueText = BuildRestoreIssueText();
-        LastStateRestoreTargetsText = BuildRestoreTargetsText(restoreResult);
-        LastStateRestoreSessionsText = BuildRestoreSessionSummaryText(preview);
-        LastStateRestoreLatestActivityText = BuildRestoreLatestActivitySummaryText(preview);
-        LastStateRestoreAdviceText = BuildRestoreAdviceText(preview);
+        ApplyRestorePresentation();
     }
 
     private void ApplyRestoreAvailabilityCheck()
     {
-        LastStateRestoreIssueText = BuildRestoreIssueText();
-        LastStateRestoreControlPlaneText = BuildRestoreControlPlaneText();
-        LastStateRestoreRuntimeText = BuildRestoreRuntimeText();
-        var actions = BuildRestoreResultActions();
-        ApplyRestoreResultActions(actions);
-        LastStateRestoreNextStepText = BuildRestoreNextStepText(actions);
+        ApplyRestorePresentation();
     }
 
-    private string BuildRestoreIssueText()
+    private void ApplySelectedStateSnapshotPresentation(
+        string? diffTextOverride = null,
+        string? adviceTextOverride = null)
     {
-        var lastFailure = _backendControlApiService.LastFailure;
-
-        if (lastFailure.Kind == BackendControlApiFailureKind.Unauthorized)
-        {
-            return DidLastRestoreChangeControlApiToken()
-                ? "Issue: this restore changed the local control token, so the desktop token no longer matches the backend."
-                : "Issue: desktop cannot reattach after restore because the local control API token no longer matches.";
-        }
-
-        if (!IsControlApiReachable)
-        {
-            return StartCommand.CanExecute(null)
-                ? "Issue: restore finished, but the backend host is stopped so the desktop cannot reattach yet."
-                : "Issue: restore finished, but the desktop is still waiting to reattach to the local control API.";
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            return DidLastRestoreOverwriteEnv()
-                ? "Issue: restore finished and the snapshot changed runtime settings, but the backend host is currently stopped."
-                : "Issue: the backend host is currently stopped after restore.";
-        }
-
-        if (!IsQqRuntimeReady())
-        {
-            return DidLastRestoreChangeNapCatSettings()
-                ? "Issue: QQ is still not ready because the restored snapshot changed NapCat settings and the runtime has not reconnected yet."
-                : "Issue: the backend is running, but QQ is still not ready after restore. Check NapCat connection settings.";
-        }
-
-        if (IsWechatConfiguredAfterRestore() && !IsWechatRuntimeReady())
-        {
-            return DidLastRestoreChangeWechatSettings()
-                ? "Issue: WeChat is still not ready because the restored snapshot changed bridge settings and the worker has not reconnected yet."
-                : "Issue: WeChat is configured, but the bridge is not ready after restore. Check bridge settings.";
-        }
-
-        return DidLastRestoreOverwriteEnv() || DidLastRestoreRestoreSessionStore()
-            ? "Issue: no immediate post-restore problems were detected. The restored state is ready to verify."
-            : "Issue: no immediate post-restore problems were detected.";
+        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(
+            SelectedStateSnapshot,
+            _selectedStateSnapshotPreview,
+            diffTextOverride,
+            adviceTextOverride);
+        SelectedStateSnapshotImpactText = presentation.ImpactText;
+        SelectedStateSnapshotDiffText = presentation.DiffText;
+        SelectedStateSnapshotAdviceText = presentation.AdviceText;
+        SelectedStateSnapshotSafetyHeadlineText = presentation.SafetyHeadlineText;
+        SelectedStateSnapshotSafetyRecommendationText = presentation.SafetyRecommendationText;
+        SelectedStateSnapshotRollbackHintText = presentation.RollbackHintText;
     }
 
-    private IReadOnlyList<RestoreResultAction> BuildRestoreResultActions()
+    private void ApplyRestorePresentation()
     {
-        var actions = new List<RestoreResultAction>();
-        var lastFailure = _backendControlApiService.LastFailure;
-
-        void addAction(string label, string key)
-        {
-            if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(key))
-            {
-                return;
-            }
-
-            if (actions.Any((action) => string.Equals(action.Key, key, StringComparison.Ordinal)))
-            {
-                return;
-            }
-
-            actions.Add(new RestoreResultAction(label, key));
-        }
-
-        if (lastFailure.Kind == BackendControlApiFailureKind.Unauthorized)
-        {
-            addAction(
-                DidLastRestoreChangeControlApiToken() ? "Update local control token" : "Open local control settings",
-                DesktopHealthActionKeys.FocusControlApiToken);
-            addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-
-            if (StartCommand.CanExecute(null))
-            {
-                addAction("Start backend", DesktopHealthActionKeys.StartBackend);
-            }
-
-            return actions;
-        }
-
-        if (!IsControlApiReachable)
-        {
-            if (StartCommand.CanExecute(null))
-            {
-                addAction("Start backend", DesktopHealthActionKeys.StartBackend);
-                addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-            }
-            else
-            {
-                addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-            }
-
-            if (DidLastRestoreOverwriteEnv())
-            {
-                addAction("Open local control settings", DesktopHealthActionKeys.FocusControlApiToken);
-            }
-
-            return actions;
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            addAction("Start backend", DesktopHealthActionKeys.StartBackend);
-            addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-            addAction("Open local control settings", DesktopHealthActionKeys.FocusControlApiToken);
-            return actions;
-        }
-
-        if (!IsQqRuntimeReady() || !IsWechatRuntimeReady())
-        {
-            if (!IsQqRuntimeReady())
-            {
-                addAction(
-                    DidLastRestoreChangeNapCatSettings() ? "Review restored NapCat settings" : "Check NapCat config",
-                    DesktopHealthActionKeys.FocusNapCatUrl);
-                addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-                return actions;
-            }
-
-            addAction(
-                DidLastRestoreChangeWechatSettings() ? "Review restored WeChat bridge" : "Check WeChat bridge",
-                DesktopHealthActionKeys.FocusWechatUrl);
-            addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-            return actions;
-        }
-
-        addAction("Reload config", DesktopHealthActionKeys.ReloadConfig);
-        addAction("Open local control settings", DesktopHealthActionKeys.FocusControlApiToken);
-        return actions;
+        var presentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
+            _lastStateRestoreResult,
+            _lastStateRestorePreview,
+            BuildRestorePresentationContext());
+        LastStateRestoreSummaryText = presentation.SummaryText;
+        LastStateRestoreIssueText = presentation.IssueText;
+        LastStateRestoreTargetsText = presentation.TargetsText;
+        LastStateRestoreSessionsText = presentation.SessionsText;
+        LastStateRestoreLatestActivityText = presentation.LatestActivityText;
+        LastStateRestoreAdviceText = presentation.AdviceText;
+        LastStateRestoreControlPlaneText = presentation.ControlPlaneText;
+        LastStateRestoreRuntimeText = presentation.RuntimeText;
+        LastStateRestoreNextStepText = presentation.NextStepText;
+        LastStateRestorePrimaryActionLabel = presentation.PrimaryAction.Label;
+        LastStateRestorePrimaryActionKey = presentation.PrimaryAction.Key;
+        LastStateRestoreSecondaryActionLabel = presentation.SecondaryAction.Label;
+        LastStateRestoreSecondaryActionKey = presentation.SecondaryAction.Key;
+        LastStateRestoreTertiaryActionLabel = presentation.TertiaryAction.Label;
+        LastStateRestoreTertiaryActionKey = presentation.TertiaryAction.Key;
     }
 
-    private void ApplyRestoreResultActions(IReadOnlyList<RestoreResultAction> actions)
+    private LocalStateSnapshotRestoreRuntimeContext BuildRestorePresentationContext()
     {
-        var primaryAction = actions.ElementAtOrDefault(0);
-        var secondaryAction = actions.ElementAtOrDefault(1);
-        var tertiaryAction = actions.ElementAtOrDefault(2);
-
-        LastStateRestorePrimaryActionLabel = primaryAction?.Label ?? string.Empty;
-        LastStateRestorePrimaryActionKey = primaryAction?.Key ?? string.Empty;
-        LastStateRestoreSecondaryActionLabel = secondaryAction?.Label ?? string.Empty;
-        LastStateRestoreSecondaryActionKey = secondaryAction?.Key ?? string.Empty;
-        LastStateRestoreTertiaryActionLabel = tertiaryAction?.Label ?? string.Empty;
-        LastStateRestoreTertiaryActionKey = tertiaryAction?.Key ?? string.Empty;
-    }
-
-    private static string BuildRestoreTargetsText(LocalStateSnapshotRestoreResult restoreResult)
-    {
-        var restoredTargets = new List<string>();
-
-        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)))
+        return new LocalStateSnapshotRestoreRuntimeContext
         {
-            restoredTargets.Add(".env");
-        }
-
-        if (restoreResult.RestoredEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)))
-        {
-            restoredTargets.Add("data/");
-        }
-
-        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "desktop/activity-state.json", StringComparison.Ordinal)))
-        {
-            restoredTargets.Add("desktop activity state");
-        }
-
-        return restoredTargets.Count > 0
-            ? $"Restored targets: {string.Join(", ", restoredTargets)}"
-            : "Restored targets: tracked state files";
-    }
-
-    private static string BuildRestoreSessionSummaryText(LocalStateSnapshotPreviewResult? preview)
-    {
-        var sessionCountLine = preview?.Lines.FirstOrDefault(
-            static line => line.StartsWith("sessions.json conversations:", StringComparison.Ordinal));
-
-        return string.IsNullOrWhiteSpace(sessionCountLine)
-            ? "Session summary: not available"
-            : $"Session summary: {sessionCountLine}";
-    }
-
-    private static string BuildRestoreLatestActivitySummaryText(LocalStateSnapshotPreviewResult? preview)
-    {
-        var latestActivityLine = preview?.Lines.FirstOrDefault(
-            static line => line.StartsWith("sessions.json latest activity:", StringComparison.Ordinal));
-
-        return string.IsNullOrWhiteSpace(latestActivityLine)
-            ? "Latest activity summary: not available"
-            : $"Latest activity summary: {latestActivityLine}";
-    }
-
-    private static string BuildRestoreAdviceText(LocalStateSnapshotPreviewResult? preview)
-    {
-        if (preview?.Recommendations is not { Count: > 0 })
-        {
-            return "Post-restore advice: review the restored state and confirm it matches what you expected.";
-        }
-
-        return $"Post-restore advice: {string.Join(" ", preview.Recommendations)}";
-    }
-
-    private string BuildRestoreControlPlaneText()
-    {
-        var lastFailure = _backendControlApiService.LastFailure;
-
-        if (lastFailure.Kind == BackendControlApiFailureKind.Unauthorized)
-        {
-            return DidLastRestoreChangeControlApiToken()
-                ? "Control plane check: the restored snapshot rolled QQ_AI_BOT_CONTROL_API_TOKEN to a different value, so this window must save the same token locally before it can control the runtime again."
-                : "Control plane check: the backend rejected the local desktop token. Save the matching QQ_AI_BOT_CONTROL_API_TOKEN in this window before reloading.";
-        }
-
-        if (!IsControlApiReachable)
-        {
-            return StartCommand.CanExecute(null)
-                ? "Control plane check: the backend host is stopped, so the local control API is offline until you start it again."
-                : "Control plane check: desktop is still waiting for the local control API to come back. Runtime state may be stale until it reconnects.";
-        }
-
-        return "Control plane check: desktop is attached to the local control API and can apply follow-up actions now.";
-    }
-
-    private string BuildRestoreRuntimeText()
-    {
-        var lastFailure = _backendControlApiService.LastFailure;
-
-        if (lastFailure.Kind == BackendControlApiFailureKind.Unauthorized)
-        {
-            return "Runtime check: the backend may still be running, but this window cannot verify QQ or WeChat readiness until the local control token matches again.";
-        }
-
-        if (!IsControlApiReachable)
-        {
-            return StartCommand.CanExecute(null)
-                ? "Runtime check: the backend is stopped, so restored QQ and WeChat settings are not active yet."
-                : "Runtime check: QQ and WeChat status cannot be verified yet because the desktop is not attached to live runtime state.";
-        }
-
-        if (StartCommand.CanExecute(null))
-        {
-            return DidLastRestoreOverwriteEnv()
-                ? "Runtime check: the backend is stopped, so restored channel settings and session state are waiting to be applied."
-                : "Runtime check: the backend is stopped, so QQ and WeChat are not active yet.";
-        }
-
-        if (!IsQqRuntimeReady())
-        {
-            return DidLastRestoreChangeNapCatSettings()
-                ? "Runtime check: QQ is still waiting for NapCat, and this snapshot changed NapCat settings. Confirm the saved URL and token still match the live NapCat service."
-                : "Runtime check: QQ is still waiting for NapCat. Confirm the service is online and the saved URL or token is correct.";
-        }
-
-        if (IsWechatConfiguredAfterRestore() && !IsWechatRuntimeReady())
-        {
-            return DidLastRestoreChangeWechatSettings()
-                ? "Runtime check: QQ is ready. WeChat is still waiting for the restored bridge settings to match a live bridge service."
-                : "Runtime check: QQ is ready. WeChat is configured, but the bridge is still not ready.";
-        }
-
-        return DidLastRestoreRestoreSessionStore()
-            ? "Runtime check: QQ and WeChat status look healthy, and the restored session store should now be active."
-            : "Runtime check: QQ and WeChat status look healthy after restore.";
-    }
-
-    private string BuildRestoreNextStepText(IReadOnlyList<RestoreResultAction> actions)
-    {
-        var primaryAction = actions.FirstOrDefault();
-
-        if (primaryAction is null)
-        {
-            return "Next step: review the current state and recent activity.";
-        }
-
-        return primaryAction.Key switch
-        {
-            DesktopHealthActionKeys.FocusControlApiToken => DidLastRestoreChangeControlApiToken()
-                ? "Next step: update the local control token in this window so it matches the restored backend .env, then reload config."
-                : "Next step: open local control settings, confirm QQ_AI_BOT_CONTROL_API_TOKEN matches the backend, then reload config.",
-            DesktopHealthActionKeys.StartBackend => DidLastRestoreOverwriteEnv() || DidLastRestoreRestoreSessionStore()
-                ? "Next step: start the backend so the restored config and session state become live again."
-                : "Next step: start the backend from this window.",
-            DesktopHealthActionKeys.FocusNapCatUrl => DidLastRestoreChangeNapCatSettings()
-                ? "Next step: review the restored NapCat URL and token, then confirm the live NapCat service still matches them."
-                : "Next step: check NapCat connectivity and reload config if you change the saved settings.",
-            DesktopHealthActionKeys.FocusWechatUrl => DidLastRestoreChangeWechatSettings()
-                ? "Next step: review the restored WeChat bridge settings and confirm the bridge service is online."
-                : "Next step: check the WeChat bridge service and reload config if you change the saved settings.",
-            DesktopHealthActionKeys.ReloadConfig => !IsControlApiReachable
-                ? "Next step: reload config after the local control API comes back so this window can refresh live state."
-                : "Next step: reload config to verify the restored state.",
-            _ => $"Next step: {primaryAction.Label}"
+            ControlApiFailure = _backendControlApiService.LastFailure,
+            IsControlApiReachable = IsControlApiReachable,
+            CanStartBackend = StartCommand.CanExecute(null),
+            IsQqRuntimeReady = _runtimeSnapshot.RuntimeReady == true,
+            IsWechatConfigured = _runtimeSnapshot.WechatConfigured == true || !string.IsNullOrWhiteSpace(WechatBridgeUrl),
+            IsWechatRuntimeReady = _runtimeSnapshot.WechatRuntimeReady == true
         };
     }
-
-    private static bool PreviewHasMeaningfulDiff(LocalStateSnapshotPreviewResult? preview)
-    {
-        if (preview?.Lines is not { Count: > 0 })
-        {
-            return false;
-        }
-
-        return preview.Lines.Any((line) =>
-            line.Contains("differs from current state", StringComparison.Ordinal) ||
-            line.Contains("current file is missing and will be restored", StringComparison.Ordinal) ||
-            line.Contains("current folder is missing and will be restored", StringComparison.Ordinal) ||
-            (line.Contains("-> snapshot ", StringComparison.Ordinal) &&
-             !line.EndsWith("-> snapshot <missing>", StringComparison.Ordinal)) ||
-            (line.StartsWith("sessions.json changed conversations:", StringComparison.Ordinal) &&
-             !line.EndsWith("none", StringComparison.Ordinal)));
-    }
-
-    private static bool SnapshotIncludesEntry(LocalStateSnapshotDescriptor snapshot, string entry) =>
-        snapshot.IncludedEntries.Any((includedEntry) => string.Equals(includedEntry, entry, StringComparison.Ordinal));
-
-    private static bool SnapshotIncludesPrefix(LocalStateSnapshotDescriptor snapshot, string prefix) =>
-        snapshot.IncludedEntries.Any((includedEntry) => includedEntry.StartsWith(prefix, StringComparison.Ordinal));
 
     private void ResetRestoreResultState()
     {
         _lastStateRestoreResult = null;
         _lastStateRestorePreview = null;
-        LastStateRestoreText = "No state snapshot restored yet";
-        LastStateRestoreSummaryText = "Restore result summary will appear here.";
-        LastStateRestoreIssueText = "Post-restore issue summary will appear here.";
-        LastStateRestoreTargetsText = "Restore targets will appear here.";
-        LastStateRestoreSessionsText = "Session summary will appear here.";
-        LastStateRestoreLatestActivityText = "Latest activity summary will appear here.";
-        LastStateRestoreAdviceText = "Post-restore advice will appear here.";
-        LastStateRestoreControlPlaneText = "Post-restore control plane check will appear here.";
-        LastStateRestoreRuntimeText = "Post-restore runtime check will appear here.";
-        LastStateRestoreNextStepText = "Post-restore next step will appear here.";
-        LastStateRestorePrimaryActionLabel = string.Empty;
-        LastStateRestorePrimaryActionKey = string.Empty;
-        LastStateRestoreSecondaryActionLabel = string.Empty;
-        LastStateRestoreSecondaryActionKey = string.Empty;
-        LastStateRestoreTertiaryActionLabel = string.Empty;
-        LastStateRestoreTertiaryActionKey = string.Empty;
-    }
-
-    private bool DidLastRestoreOverwriteEnv() =>
-        _lastStateRestoreResult?.RestoredEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)) == true;
-
-    private bool DidLastRestoreRestoreSessionStore() =>
-        _lastStateRestoreResult?.RestoredEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)) == true;
-
-    private bool DidLastRestoreChangeControlApiToken() =>
-        GetLastRestoreChangedTrackedEnvKeys().Contains(ControlApiTokenEnvKey);
-
-    private bool DidLastRestoreChangeNapCatSettings() =>
-        GetLastRestoreChangedTrackedEnvKeys().Any(static key => key.StartsWith("NAPCAT_", StringComparison.OrdinalIgnoreCase));
-
-    private bool DidLastRestoreChangeWechatSettings() =>
-        GetLastRestoreChangedTrackedEnvKeys().Any(static key => key.StartsWith("WECHAT_", StringComparison.OrdinalIgnoreCase));
-
-    private string[] GetLastRestoreChangedTrackedEnvKeys()
-    {
-        var trackedKeysLine = _lastStateRestorePreview?.Lines.FirstOrDefault(
-            static line => line.StartsWith(".env tracked keys changed:", StringComparison.Ordinal));
-
-        if (string.IsNullOrWhiteSpace(trackedKeysLine))
-        {
-            return [];
-        }
-
-        return trackedKeysLine[".env tracked keys changed:".Length..]
-            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-    }
-
-    private bool IsQqRuntimeReady() => _runtimeSnapshot.RuntimeReady == true;
-
-    private bool IsWechatConfiguredAfterRestore() =>
-        _runtimeSnapshot.WechatConfigured == true || !string.IsNullOrWhiteSpace(WechatBridgeUrl);
-
-    private bool IsWechatRuntimeReady() =>
-        !IsWechatConfiguredAfterRestore() || _runtimeSnapshot.WechatRuntimeReady == true;
-
-    private static string ExtractSnapshotSide(string line)
-    {
-        const string marker = "-> snapshot ";
-        var markerIndex = line.IndexOf(marker, StringComparison.Ordinal);
-
-        if (markerIndex < 0)
-        {
-            return line;
-        }
-
-        return line[(markerIndex + marker.Length)..].Trim();
+        LastStateRestoreText = "尚未恢复状态快照";
+        ApplyRestorePresentation();
     }
 
     private static string BuildDeleteConfirmationMessage(LocalStateSnapshotDescriptor snapshot)
@@ -3759,14 +2836,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return string.Join(
             Environment.NewLine,
             [
-                $"Delete snapshot: {snapshot.FileName}",
+                $"删除快照：{snapshot.FileName}",
                 snapshot.Summary,
-                "This permanently removes the selected archive from the local snapshot folder.",
-                "Continue?"
+                "这会从本地快照目录中永久移除当前选中的归档。",
+                "是否继续？"
             ]);
     }
-
-    private sealed record RestoreResultAction(string Label, string Key);
 
     private void ClearActivityHistory(
         ObservableCollection<BackendRecentActivityItem> recentActivityItems,
@@ -3776,9 +2851,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         recentActivityItems.Clear();
         clearSelection();
         clearPinnedState();
-        OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
-        OnPropertyChanged(nameof(OverallReadinessActionLabel));
-        OnPropertyChanged(nameof(OverallReadinessActionKey));
+        RefreshGuideFlow();
         UpdateCommandStates();
         NotifyRuntimeSnapshotChanged();
     }

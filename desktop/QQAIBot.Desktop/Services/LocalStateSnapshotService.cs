@@ -166,7 +166,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
         var lines = new List<string>
         {
             await BuildFilePreviewLineAsync(envEntry, envPath, ".env"),
-            await BuildFilePreviewLineAsync(archive.GetEntry("desktop/activity-state.json"), activityStatePath, "desktop activity state")
+            await BuildFilePreviewLineAsync(archive.GetEntry("desktop/activity-state.json"), activityStatePath, "桌面活动状态")
         };
         lines.AddRange(await BuildSessionPreviewLinesAsync(archive.GetEntry("app/data/sessions.json"), sessionsPath));
         lines.AddRange(await BuildDirectoryPreviewLinesAsync(archive, "app/data/", dataPath, "data/"));
@@ -303,20 +303,20 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
     {
         if (entry is null)
         {
-            return $"{label}: not included in this snapshot";
+            return $"{label}：此快照未包含";
         }
 
         if (!File.Exists(currentPath))
         {
-            return $"{label}: current file is missing and will be restored";
+            return $"{label}：当前文件缺失，恢复时会补回";
         }
 
         var snapshotBytes = await ReadEntryBytesAsync(entry);
         var currentBytes = await File.ReadAllBytesAsync(currentPath);
 
         return snapshotBytes.SequenceEqual(currentBytes)
-            ? $"{label}: matches current state"
-            : $"{label}: differs from current state";
+            ? $"{label}：与当前状态一致"
+            : $"{label}：与当前状态不同";
     }
 
     private static async Task<IReadOnlyList<string>> BuildSessionPreviewLinesAsync(
@@ -325,7 +325,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
     {
         if (entry is null)
         {
-            return ["sessions.json conversations: not included in this snapshot"];
+            return ["sessions.json 会话数：此快照未包含"];
         }
 
         var snapshotSummary = await ReadConversationSummaryAsync(await ReadEntryTextAsync(entry));
@@ -335,8 +335,8 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         return
         [
-            $"sessions.json conversations: current {currentSummary.CountText} -> snapshot {snapshotSummary.CountText}",
-            $"sessions.json latest activity: current {currentSummary.LatestActivityText} -> snapshot {snapshotSummary.LatestActivityText}",
+            $"sessions.json 会话数：当前 {currentSummary.CountText} -> 快照 {snapshotSummary.CountText}",
+            $"sessions.json 最近活动：当前 {currentSummary.LatestActivityText} -> 快照 {snapshotSummary.LatestActivityText}",
             BuildChangedConversationPreviewLine(currentSummary, snapshotSummary)
         ];
     }
@@ -356,15 +356,15 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (snapshotEntries.Length == 0)
         {
-            return [$"{label}: not included in this snapshot"];
+            return [$"{label}：此快照未包含"];
         }
 
         if (!Directory.Exists(currentDirectoryPath))
         {
             return
             [
-                $"{label}: current folder is missing and will be restored",
-                $"data files restored: {FormatDataPreviewList(snapshotEntries.Select((entry) => $"{entry.FullName[archivePrefix.Length..]} (missing)"))}"
+                $"{label}：当前目录缺失，恢复时会补回",
+                $"将恢复的数据文件：{FormatDataPreviewList(snapshotEntries.Select((entry) => $"{entry.FullName[archivePrefix.Length..]}（缺失）"))}"
             ];
         }
 
@@ -389,7 +389,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
         {
             if (!currentFiles.TryGetValue(pair.Key, out var currentFilePath))
             {
-                affectedFiles.Add($"{pair.Key} (missing)");
+                affectedFiles.Add($"{pair.Key}（缺失）");
                 continue;
             }
 
@@ -398,20 +398,21 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
             if (!snapshotBytes.SequenceEqual(currentBytes))
             {
-                affectedFiles.Add($"{pair.Key} (changed)");
+                affectedFiles.Add($"{pair.Key}（已变化）");
+                continue;
             }
         }
 
         if (affectedFiles.Count == 0 && currentOnlyFiles.Length == 0)
         {
-            return [$"{label}: matches current state"];
+            return [$"{label}：与当前状态一致"];
         }
 
         return
         [
-            $"{label}: differs from current state",
-            $"data files restored: {(affectedFiles.Count > 0 ? FormatDataPreviewList(affectedFiles) : "none")}",
-            $"data current-only files: {(currentOnlyFiles.Length > 0 ? FormatDataPreviewList(currentOnlyFiles.Select((key) => $"{key} (current-only)")) : "none")}"
+            $"{label}：与当前状态不同",
+            $"将恢复的数据文件：{(affectedFiles.Count > 0 ? FormatDataPreviewList(affectedFiles) : "无")}",
+            $"仅当前存在的数据文件：{(currentOnlyFiles.Length > 0 ? FormatDataPreviewList(currentOnlyFiles.Select((key) => $"{key}（仅当前存在）")) : "无")}"
         ];
     }
 
@@ -421,7 +422,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
     {
         if (snapshotEnv.Count == 0)
         {
-            return [".env tracked keys: not included in this snapshot"];
+            return [".env 跟踪键：此快照未包含"];
         }
 
         var currentEnv = File.Exists(currentEnvPath)
@@ -442,12 +443,12 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (changedKeys.Length == 0)
         {
-            return [".env tracked keys: no tracked key changes"];
+            return [".env 跟踪键：没有变化"];
         }
 
         var lines = new List<string>
         {
-            $".env tracked keys changed: {string.Join(", ", changedKeys)}"
+            $".env 跟踪键变更：{string.Join(", ", changedKeys)}"
         };
 
         foreach (var key in changedKeys)
@@ -467,25 +468,25 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
     {
         var recommendations = new List<string>();
         var hasDiff =
-            previewLines.Any((line) => line.Contains("differs from current state", StringComparison.Ordinal)) ||
-            previewLines.Any((line) => line.Contains("changed conversations:", StringComparison.Ordinal) && !line.EndsWith("none", StringComparison.Ordinal)) ||
+            previewLines.Any((line) => line.Contains("与当前状态不同", StringComparison.Ordinal)) ||
+            previewLines.Any((line) => line.Contains("变更会话：", StringComparison.Ordinal) && !line.EndsWith("无", StringComparison.Ordinal)) ||
             previewLines.Any((line) => line.Contains("->", StringComparison.Ordinal));
 
         if (hasDiff)
         {
-            recommendations.Add("Recommended: export your current state before restoring so you can roll back if needed.");
+            recommendations.Add("建议：恢复前先导出当前状态，便于需要时回滚。");
         }
 
         var includesSecrets = snapshotEnv.Any((pair) => IsSensitiveTrackedEnvKey(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value));
 
         if (includesSecrets)
         {
-            recommendations.Add("Caution: this snapshot includes .env secrets. Avoid sharing the archive outside this device.");
+            recommendations.Add("注意：这个快照包含 .env 密钥，请不要把归档分享给当前设备之外的人。");
         }
 
         if (recommendations.Count == 0)
         {
-            recommendations.Add("Current state already looks close to this snapshot. Restore only if you intentionally want to roll back.");
+            recommendations.Add("当前状态看起来已经和这个快照接近。只有在你确实要回滚时再恢复。");
         }
 
         return recommendations;
@@ -562,7 +563,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
         }
 
         var sizeText = FormatByteSize(sizeBytes);
-        var summary = $"{createdAtText} | {sizeText} | {includedEntries.Count} entr{(includedEntries.Count == 1 ? "y" : "ies")} | {(includesSecrets ? "includes secrets" : "no secrets flag")}";
+        var summary = $"{createdAtText} | {sizeText} | {includedEntries.Count} 项 | {(includesSecrets ? "包含密钥" : "未标记密钥")}";
         var detail = string.Join(Environment.NewLine, includedEntries.Take(5));
 
         return new LocalStateSnapshotDescriptor
@@ -778,7 +779,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
                 {
                     return new ChangedConversationSummary(
                         key,
-                        "missing locally",
+                        "本地缺失",
                         snapshotEntry.UpdatedAt);
                 }
 
@@ -786,7 +787,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
                 {
                     return new ChangedConversationSummary(
                         key,
-                        "current-only",
+                        "仅当前存在",
                         currentEntry.UpdatedAt);
                 }
 
@@ -796,7 +797,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
                 {
                     return new ChangedConversationSummary(
                         key,
-                        "changed",
+                        "已变化",
                         MaxTimestamp(currentEntry.UpdatedAt, snapshotEntry.UpdatedAt));
                 }
 
@@ -809,7 +810,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (changedEntries.Length == 0)
         {
-            return "sessions.json changed conversations: none";
+            return "sessions.json 变更会话：无";
         }
 
         var previewItems = changedEntries
@@ -820,10 +821,10 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (remainingCount > 0)
         {
-            previewText = $"{previewText}, +{remainingCount} more";
+            previewText = $"{previewText}，另 {remainingCount} 项";
         }
 
-        return $"sessions.json changed conversations: {previewText}";
+        return $"sessions.json 变更会话：{previewText}";
     }
 
     private static string FormatConversationPreviewKey(string key)
@@ -903,7 +904,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (remainingCount > 0)
         {
-            previewList = $"{previewList}, +{remainingCount} more";
+            previewList = $"{previewList}，另 {remainingCount} 项";
         }
 
         return previewList;

@@ -39,11 +39,11 @@ public static class BackendLatestTurnOverviewBuilder
         {
             State = DesktopHealthState.Good,
             Headline = isLocalReply
-                ? $"Latest turn: {channelLabel} answered locally at {capturedAt}."
-                : $"Latest turn: {channelLabel} completed at {capturedAt}.",
+                ? $"最新一轮：{channelLabel} 在 {capturedAt} 已本地回复。"
+                : $"最新一轮：{channelLabel} 在 {capturedAt} 已完成。",
             Summary = isLocalReply
-                ? $"Summary: this turn stayed on the {route} route and replied locally without sending an LLM request."
-                : $"Summary: this turn used {route} / {model} / {apiStyle}.",
+                ? $"摘要：这一轮停留在 {route} 路由上，并且没有发起 LLM 请求就直接本地回复了。"
+                : $"摘要：这一轮使用了 {route} / {model} / {apiStyle}。",
             Capabilities = BuildCapabilitySummary(
                 request.DecisionSummary?.RequestedCapabilities,
                 request.EffectiveTools,
@@ -53,7 +53,7 @@ public static class BackendLatestTurnOverviewBuilder
                 request.MatchedPrefix,
                 request.RouteReason),
             Outcome = BuildRequestOutcomeSummary(executionKind, request.ExecutionProjection),
-            ActionLabel = "Review recent activity",
+            ActionLabel = "查看最近活动",
             ActionKey = DesktopHealthActionKeys.FocusLatestActivity
         };
     }
@@ -69,8 +69,8 @@ public static class BackendLatestTurnOverviewBuilder
         return new DesktopLatestTurnOverview
         {
             State = DesktopHealthState.Warning,
-            Headline = $"Latest turn: {channelLabel} failed at {capturedAt}.",
-            Summary = $"Summary: the {route} route did not finish successfully.",
+            Headline = $"最新一轮：{channelLabel} 在 {capturedAt} 失败。",
+            Summary = $"摘要：{route} 路由这次没有成功完成。",
             Capabilities = BuildCapabilitySummary(
                 failure.DecisionSummary?.RequestedCapabilities,
                 effectiveTools: null,
@@ -80,7 +80,7 @@ public static class BackendLatestTurnOverviewBuilder
                 failure.MatchedPrefix,
                 failure.RouteReason),
             Outcome = BuildFailureOutcomeSummary(executionKind, failure.ExecutionProjection, failure.Error),
-            ActionLabel = channelLabel == "QQ" ? "Review QQ failure" : "Review WeChat failure",
+            ActionLabel = channelLabel == "QQ" ? "查看 QQ 失败" : "查看微信失败",
             ActionKey = channelLabel == "QQ"
                 ? DesktopHealthActionKeys.FocusQqFailure
                 : DesktopHealthActionKeys.FocusWechatFailure
@@ -98,7 +98,7 @@ public static class BackendLatestTurnOverviewBuilder
                           effectiveTools?.Contains("code_interpreter", StringComparer.Ordinal) == true;
         var imageText = imageCount is int count ? count.ToString() : "unknown";
 
-        return $"Capabilities: web {(webEnabled ? "on" : "off")}, code {(codeEnabled ? "on" : "off")}, images {imageText}.";
+        return $"能力：联网 {(webEnabled ? "开" : "关")}，代码 {(codeEnabled ? "开" : "关")}，图片 {imageText}。";
     }
 
     private static string BuildReasonSummary(
@@ -108,7 +108,7 @@ public static class BackendLatestTurnOverviewBuilder
     {
         if (summary is null && string.IsNullOrWhiteSpace(matchedPrefix) && string.IsNullOrWhiteSpace(routeReason))
         {
-            return "Why: no structured decision reason was captured.";
+            return "原因：没有捕获到结构化决策原因。";
         }
 
         var trigger = FormatTrigger(summary, matchedPrefix);
@@ -116,7 +116,7 @@ public static class BackendLatestTurnOverviewBuilder
         var upgrade = FormatReasonGroup(summary?.ReasonGroups?.UpgradeReasons, "none");
         var routeReasonText = DefaultIfBlank(summary?.RouteReason, DefaultIfBlank(routeReason, "default"));
 
-        return $"Why: trigger {trigger}; capability {capability}; upgrade {upgrade}; route reason {routeReasonText}.";
+        return $"原因：触发 {trigger}；能力 {capability}；升级 {upgrade}；路由原因 {routeReasonText}。";
     }
 
     private static string BuildRequestOutcomeSummary(
@@ -125,27 +125,27 @@ public static class BackendLatestTurnOverviewBuilder
     {
         if (string.Equals(executionKind, BackendExecutionProjectionTags.LocalCapabilityReplyKind, StringComparison.Ordinal))
         {
-            return "Outcome: answered locally without calling the LLM.";
+            return "结果：未调用 LLM，直接在本地完成回复。";
         }
 
         if (string.Equals(executionKind, BackendExecutionProjectionTags.DirectKind, StringComparison.Ordinal))
         {
-            return "Outcome: completed in one direct LLM call.";
+            return "结果：通过一次直接 LLM 调用完成。";
         }
 
         if (!string.Equals(executionKind, BackendExecutionProjectionTags.DeliberationKind, StringComparison.Ordinal))
         {
-            return $"Outcome: completed via {DefaultIfBlank(executionKind, "unknown")} execution.";
+            return $"结果：通过 {DefaultIfBlank(executionKind, "未知")} 执行路径完成。";
         }
 
         if (executionProjection?.Degraded == true || executionProjection?.Recoveries?.Length > 0)
         {
             var completedStages = FormatStages(executionProjection?.CompletedStages);
             var recoveries = FormatRecoveries(executionProjection?.Recoveries);
-            return $"Outcome: deliberation completed in degraded mode after {completedStages}. Recovery: {recoveries}.";
+            return $"结果：审议流程在 {completedStages} 后以降级模式完成。恢复：{recoveries}。";
         }
 
-        return "Outcome: deliberation completed through planner, draft, and rewrite.";
+        return "结果：审议流程依次完成了 planner、draft 和 rewrite。";
     }
 
     private static string BuildFailureOutcomeSummary(
@@ -153,23 +153,23 @@ public static class BackendLatestTurnOverviewBuilder
         BackendExecutionProjection? executionProjection,
         string? error)
     {
-        var normalizedError = DefaultIfBlank(error, "unknown error");
+        var normalizedError = DefaultIfBlank(error, "未知错误");
 
         if (string.Equals(executionKind, BackendExecutionProjectionTags.DeliberationKind, StringComparison.Ordinal))
         {
             var failedStage = DefaultIfBlank(executionProjection?.FailedStage, "unknown stage");
             var completedStages = FormatStages(executionProjection?.CompletedStages);
             return string.IsNullOrWhiteSpace(completedStages)
-                ? $"Outcome: deliberation failed during {failedStage}. Error: {normalizedError}."
-                : $"Outcome: deliberation failed during {failedStage} after {completedStages}. Error: {normalizedError}.";
+                ? $"结果：审议流程在 {failedStage} 阶段失败。错误：{normalizedError}。"
+                : $"结果：审议流程在完成 {completedStages} 后，于 {failedStage} 阶段失败。错误：{normalizedError}。";
         }
 
         if (string.Equals(executionKind, BackendExecutionProjectionTags.LocalCapabilityReplyKind, StringComparison.Ordinal))
         {
-            return $"Outcome: local capability reply failed before the answer could be returned. Error: {normalizedError}.";
+            return $"结果：本地能力回复在返回答案前失败。错误：{normalizedError}。";
         }
 
-        return $"Outcome: {DefaultIfBlank(executionKind, "unknown")} execution failed. Error: {normalizedError}.";
+        return $"结果：{DefaultIfBlank(executionKind, "未知")} 执行路径失败。错误：{normalizedError}。";
     }
 
     private static LatestTurnCandidate? ResolveLatestTurn(BackendRuntimeSnapshotViewState snapshot)
@@ -178,8 +178,8 @@ public static class BackendLatestTurnOverviewBuilder
 
         addRequest("QQ", snapshot.LastQqLlmRequest);
         addFailure("QQ", snapshot.LastQqLlmFailure);
-        addRequest("WeChat", snapshot.LastWechatLlmRequest);
-        addFailure("WeChat", snapshot.LastWechatLlmFailure);
+        addRequest("微信", snapshot.LastWechatLlmRequest);
+        addFailure("微信", snapshot.LastWechatLlmFailure);
 
         return candidates
             .OrderByDescending(static candidate => candidate.CapturedAt)

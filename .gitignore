@@ -12,6 +12,7 @@ pnpm-debug.log*
 
 # Runtime state
 data/
+artifacts/
 dist/
 dist-installer/
 tmp-backend-out.log
@@ -29,6 +30,7 @@ desktop/QQAIBot.Desktop.Tests/bin/
 desktop/QQAIBot.Desktop.Tests/obj/
 
 # Editors and OS
+.claude/
 .vscode/
 .idea/
 .DS_Store

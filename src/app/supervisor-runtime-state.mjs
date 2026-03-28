@@ -29,7 +29,7 @@ export function buildSupervisorStatusPayload({
   controlApiHost,
   controlApiPort,
   runtimeStatus,
-  cwd = process.cwd()
+  configPath = ''
 }) {
   return {
     startedAt,
@@ -41,7 +41,7 @@ export function buildSupervisorStatusPayload({
     configRestartRequired: false,
     lastConfigSavedAt,
     controlApiUrl: `http://${controlApiHost}:${controlApiPort}`,
-    configPath: `${cwd}\\.env`,
+    configPath,
     workerProcessId: runtimeStatus.workerProcessId,
     workerStartedAt: runtimeStatus.workerStartedAt,
     lastQqLlmRequest: runtimeStatus.lastQqLlmRequest,

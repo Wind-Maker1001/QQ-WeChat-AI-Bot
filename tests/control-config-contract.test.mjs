@@ -75,13 +75,14 @@ test('default OpenAI route inherits shared key and base URL when default-specifi
   assert.match(runtimeConfig.bot.systemPrompt, /QQ 群助手/);
 });
 
-test('writeControlConfig removes stale env lock before saving', async () => {
+test('writeControlConfig removes stale runtime settings lock before saving', async () => {
   const cwd = await createTempEnv([
     'OPENAI_API_KEY=test-key',
     'NAPCAT_TOKEN=test-token',
     'BOT_PREFIX=/ai'
   ]);
-  const lockPath = path.join(cwd, '.env.lock');
+  const lockPath = path.join(cwd, 'data', 'runtime-settings.json.lock');
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await fs.writeFile(
     lockPath,
     JSON.stringify({
@@ -106,6 +107,11 @@ test('writeControlConfig removes stale env lock before saving', async () => {
 
   assert.equal(result.config.botPrefix, '/bot');
   await assert.rejects(fs.access(lockPath));
+  const runtimeSettingsText = await fs.readFile(
+    path.join(cwd, 'data', 'runtime-settings.json'),
+    'utf8'
+  );
+  assert.match(runtimeSettingsText, /"botPrefix": "\/bot"/);
 });
 
 test('writeControlConfig rejects invalid wechat bridge websocket URLs', async () => {

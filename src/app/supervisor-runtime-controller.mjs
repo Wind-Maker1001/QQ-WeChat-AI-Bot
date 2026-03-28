@@ -1,33 +1,67 @@
-import { loadRuntimeConfig } from '../adapters/config/load-runtime-config.mjs';
 import {
   readControlConfig,
-  readRuntimeConfigFromEnvFile,
+  readRuntimeSettingsFromDisk,
   writeControlConfig
 } from '../adapters/config/control-config-file.mjs';
 import { setWechatConfigured, shouldRunWechatWorker } from './supervisor-runtime-state.mjs';
+
+function buildWorkerConfigMessage(workerKind, runtimeSettingsSnapshot, source) {
+  return {
+    type: 'config:update',
+    data: {
+      workerKind,
+      source,
+      runtimeSettingsSnapshot
+    }
+  };
+}
+
+function buildWorkerInitPayload(workerKind, runtimeSettingsSnapshot, source) {
+  return {
+    type: 'config:init',
+    data: {
+      workerKind,
+      source,
+      runtimeSettingsSnapshot
+    }
+  };
+}
 
 export function createSupervisorRuntimeController({
   getRuntimeStatus,
   setRuntimeStatus,
   getDesiredRuntimeActive,
   setDesiredRuntimeActive,
+  getRuntimeSettingsState,
+  setRuntimeSettingsState,
   workerSlot,
   wechatWorkerSlot,
   buildStatusPayload
 }) {
-  let lastConfigSavedAt = null;
+  let lastConfigSavedAt = getRuntimeSettingsState()?.runtimeSettingsSnapshot?.savedAt ?? null;
+
+  async function refreshRuntimeSettingsState() {
+    const runtimeSettingsState = await readRuntimeSettingsFromDisk({
+      cwd: process.cwd()
+    });
+    setRuntimeSettingsState(runtimeSettingsState);
+    return runtimeSettingsState;
+  }
 
   function getStatus() {
     return buildStatusPayload(lastConfigSavedAt);
   }
 
   async function getConfig() {
-    const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
+    const result = await readControlConfig({
       cwd: process.cwd()
     });
-    const result = await readControlConfig({
-      cwd: process.cwd(),
-      runtimeConfig
+
+    setRuntimeSettingsState({
+      settingsPath: result.envPath,
+      bootstrapEnvPath: result.bootstrapEnvPath,
+      runtimeConfig: result.runtimeConfig,
+      runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
     });
 
     return {
@@ -41,20 +75,24 @@ export function createSupervisorRuntimeController({
     setDesiredRuntimeActive(true);
     workerSlot.resetBootFailures();
     wechatWorkerSlot.resetBootFailures();
-    const runtimeSnapshot = await readRuntimeConfigFromEnvFile({
-      cwd: process.cwd()
-    });
+
+    const runtimeSettingsState = await refreshRuntimeSettingsState();
+    const shouldEnableWechatWorker = shouldRunWechatWorker(runtimeSettingsState.runtimeConfig);
+
     setRuntimeStatus(
-      setWechatConfigured(
-        getRuntimeStatus(),
-        shouldRunWechatWorker(runtimeSnapshot.runtimeConfig)
-      )
+      setWechatConfigured(getRuntimeStatus(), shouldEnableWechatWorker)
     );
 
-    await workerSlot.start(source, runtimeSnapshot.envValues);
+    await workerSlot.start(
+      source,
+      buildWorkerInitPayload('qq', runtimeSettingsState.runtimeSettingsSnapshot, source)
+    );
 
-    if (shouldRunWechatWorker(runtimeSnapshot.runtimeConfig)) {
-      await wechatWorkerSlot.start(source, runtimeSnapshot.envValues);
+    if (shouldEnableWechatWorker) {
+      await wechatWorkerSlot.start(
+        source,
+        buildWorkerInitPayload('wechat', runtimeSettingsState.runtimeSettingsSnapshot, source)
+      );
     }
 
     return getStatus();
@@ -70,31 +108,48 @@ export function createSupervisorRuntimeController({
   }
 
   async function updateConfig(payload) {
-    const { runtimeConfig } = await readRuntimeConfigFromEnvFile({
-      cwd: process.cwd()
-    });
     const result = await writeControlConfig({
       cwd: process.cwd(),
-      runtimeConfig,
       config: payload
     });
-    const nextRuntimeConfig = loadRuntimeConfig({
-      cwd: process.cwd(),
-      env: result.envValues,
-      loadDotenv: false
-    });
+    const runtimeSettingsState = {
+      settingsPath: result.envPath,
+      bootstrapEnvPath: result.bootstrapEnvPath,
+      runtimeConfig: result.runtimeConfig,
+      runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
+    };
+    const shouldEnableWechatWorker = shouldRunWechatWorker(result.runtimeConfig);
 
-    lastConfigSavedAt = new Date().toISOString();
-    const shouldEnableWechatWorker = shouldRunWechatWorker(nextRuntimeConfig);
-
+    setRuntimeSettingsState(runtimeSettingsState);
+    lastConfigSavedAt = result.runtimeSettingsSnapshot.savedAt;
     setRuntimeStatus(
       setWechatConfigured(getRuntimeStatus(), shouldEnableWechatWorker)
     );
 
     if (getDesiredRuntimeActive()) {
-      if (shouldEnableWechatWorker && !wechatWorkerSlot.isRunning()) {
-        wechatWorkerSlot.resetBootFailures();
-        await wechatWorkerSlot.start('config-update', result.envValues);
+      if (workerSlot.isRunning()) {
+        workerSlot.send(
+          buildWorkerConfigMessage('qq', result.runtimeSettingsSnapshot, 'config-update')
+        );
+      } else {
+        await workerSlot.start(
+          'config-update',
+          buildWorkerInitPayload('qq', result.runtimeSettingsSnapshot, 'config-update')
+        );
+      }
+
+      if (shouldEnableWechatWorker) {
+        if (wechatWorkerSlot.isRunning()) {
+          wechatWorkerSlot.send(
+            buildWorkerConfigMessage('wechat', result.runtimeSettingsSnapshot, 'config-update')
+          );
+        } else {
+          wechatWorkerSlot.resetBootFailures();
+          await wechatWorkerSlot.start(
+            'config-update',
+            buildWorkerInitPayload('wechat', result.runtimeSettingsSnapshot, 'config-update')
+          );
+        }
       }
 
       if (!shouldEnableWechatWorker && wechatWorkerSlot.isRunning()) {

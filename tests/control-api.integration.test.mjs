@@ -53,15 +53,12 @@ test('control API serves allowedChatIds contract and updates config through HTTP
         runtimeConfig,
         config: payload
       });
-      runtimeConfig = loadRuntimeConfig({
-        cwd,
-        env: result.envValues,
-        loadDotenv: false
-      });
+      runtimeConfig = result.runtimeConfig;
 
       return {
         ...result.config,
         envPath: result.envPath,
+        bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };
     },
@@ -95,6 +92,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(configPayload.allowedUserIds, 'user-a');
     assert.equal(configPayload.botSystemPrompt, 'base prompt');
     assert.equal('allowedGroupIds' in configPayload, false);
+    assert.match(configPayload.envPath, /runtime-settings\.json$/);
 
     const updateResponse = await fetch(`${baseUrl}/config`, {
       method: 'PUT',
@@ -113,11 +111,18 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(updatedPayload.allowedChatIds, 'chat-x,chat-y');
     assert.equal(updatedPayload.botSystemPrompt, 'updated base prompt');
     assert.equal('allowedGroupIds' in updatedPayload, false);
+    assert.match(updatedPayload.envPath, /runtime-settings\.json$/);
 
     const envText = await fs.readFile(path.join(cwd, '.env'), 'utf8');
-    assert.match(envText, /BOT_SYSTEM_PROMPT=updated base prompt/);
-    assert.match(envText, /ALLOWED_CHAT_IDS=chat-x,chat-y/);
+    assert.match(envText, /BOT_SYSTEM_PROMPT=base prompt/);
+    assert.match(envText, /ALLOWED_CHAT_IDS=chat-a,chat-b/);
     assert.doesNotMatch(envText, /ALLOWED_GROUP_IDS=/);
+    const runtimeSettingsText = await fs.readFile(
+      path.join(cwd, 'data', 'runtime-settings.json'),
+      'utf8'
+    );
+    assert.match(runtimeSettingsText, /"botSystemPrompt": "updated base prompt"/);
+    assert.match(runtimeSettingsText, /"allowedChatIds": "chat-x,chat-y"/);
 
     const startResponse = await fetch(`${baseUrl}/start`, {
       method: 'POST'
@@ -167,15 +172,12 @@ test('control API returns 400 for rejected config updates', async () => {
         runtimeConfig,
         config: payload
       });
-      runtimeConfig = loadRuntimeConfig({
-        cwd,
-        env: result.envValues,
-        loadDotenv: false
-      });
+      runtimeConfig = result.runtimeConfig;
 
       return {
         ...result.config,
         envPath: result.envPath,
+        bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };
     },

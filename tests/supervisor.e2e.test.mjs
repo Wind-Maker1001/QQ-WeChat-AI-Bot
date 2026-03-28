@@ -1934,7 +1934,7 @@ test('supervisor status reflects wechat config changes even while runtime is sto
   }
 });
 
-test('wechat worker hot reloads bot prefix after control API config update', async () => {
+test('wechat worker applies bot prefix updates through supervisor config push', async () => {
   const logs = [];
   const openAiServer = await createFakeOpenAiServer();
   const napcatServer = await createFakeNapCatServer({
@@ -2017,14 +2017,6 @@ test('wechat worker hot reloads bot prefix after control API config update', asy
     });
     assert.equal(updateResponse.status, 200);
 
-    await waitFor(
-      () => logs.join('').includes('[wechat-runtime] Config reloaded from env-watch: prefix=/wx'),
-      {
-        timeoutMs: 10000,
-        label: `WeChat prefix reload log. logs:\n${logs.join('')}`
-      }
-    );
-
     wechatServer.emitGroupMessage({
       messageId: 'wx_msg_after_prefix_reload',
       text: '/wx hello after reload'
@@ -2054,7 +2046,7 @@ test('wechat worker hot reloads bot prefix after control API config update', asy
   }
 });
 
-test('control API tolerates repeated wechat config updates while worker watches env', async () => {
+test('control API tolerates repeated wechat config updates through supervisor config push', async () => {
   const logs = [];
   const openAiServer = await createFakeOpenAiServer();
   const napcatServer = await createFakeNapCatServer({
@@ -2133,13 +2125,7 @@ test('control API tolerates repeated wechat config updates while worker watches 
       );
       configPayload = JSON.parse(updateText);
 
-      await waitFor(
-        () => logs.join('').includes(`[wechat-runtime] Config reloaded from env-watch: prefix=${prefix}`),
-        {
-          timeoutMs: 10000,
-          label: `WeChat repeated reload for prefix ${prefix}. logs:\n${logs.join('')}`
-        }
-      );
+      assert.equal(configPayload.wechatBotPrefix, prefix);
     }
 
     wechatServer.emitGroupMessage({
@@ -2483,7 +2469,7 @@ test('wechat worker reconnects to bridge after disconnect and continues processi
   }
 });
 
-test('runtime worker skips env reload when effective config has not changed', async () => {
+test('runtime worker ignores bootstrap env timestamp changes after startup', async () => {
   const logs = [];
   const openAiServer = await createFakeOpenAiServer();
   const napcatServer = await createFakeNapCatServer({
@@ -2532,13 +2518,24 @@ test('runtime worker skips env reload when effective config has not changed', as
     );
 
     const envPath = path.join(workspace, '.env');
+    const logCountBeforeEnvTouch = logs.length;
     const bumpedTime = new Date(Date.now() + 2000);
     await fs.utimes(envPath, bumpedTime, bumpedTime);
+    await delay(1000);
+
+    const logsAfterEnvTouch = logs.slice(logCountBeforeEnvTouch).join('');
+    assert.doesNotMatch(logsAfterEnvTouch, /Config reloaded from/);
+    assert.doesNotMatch(logsAfterEnvTouch, /env-watch/);
+
+    napcatServer.emitGroupMessage({
+      messageId: 'qq_msg_after_env_touch',
+      text: '/ai hello after env touch'
+    });
 
     await waitFor(
-      () => logs.join('').includes('[runtime] Config reload skipped from env-watch: no effective change.'),
+      () => napcatServer.sentGroupMessages.some((message) => message.message === 'reply:hello after env touch'),
       {
-        label: `runtime worker no-op reload log. logs:\n${logs.join('')}`
+        label: `runtime worker reply after env touch. logs:\n${logs.join('')}`
       }
     );
   } finally {

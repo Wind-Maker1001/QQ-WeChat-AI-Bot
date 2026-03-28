@@ -21,6 +21,7 @@ export function createSupervisorWorkerSlot({
   let stopping = false;
   let consecutiveBootFailures = 0;
   let lastStartedAt = 0;
+  let lastInitMessage = null;
 
   function clearRestartTimer() {
     if (restartTimer) {
@@ -100,18 +101,33 @@ export function createSupervisorWorkerSlot({
     });
   }
 
-  async function start(reason = 'manual-start', envValues = null) {
+  function send(message) {
+    if (!child?.connected || !message || typeof message !== 'object') {
+      return false;
+    }
+
+    child.send(message);
+    return true;
+  }
+
+  async function start(reason = 'manual-start', initMessage = lastInitMessage) {
     if (child) {
       return false;
     }
 
     clearRestartTimer();
+    lastInitMessage = initMessage ?? lastInitMessage;
     const nextChild = spawn(process.execPath, [entryPath], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: buildSpawnEnv(envValues)
+      env: buildSpawnEnv()
     });
     attach(nextChild, reason);
+
+    if (lastInitMessage) {
+      nextChild.send(lastInitMessage);
+    }
+
     return true;
   }
 
@@ -162,6 +178,7 @@ export function createSupervisorWorkerSlot({
     clearRestartTimer,
     start,
     stop,
+    send,
     isRunning,
     getChild,
     resetBootFailures

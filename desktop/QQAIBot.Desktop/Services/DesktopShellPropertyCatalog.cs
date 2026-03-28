@@ -1,0 +1,183 @@
+using System.Linq;
+
+namespace QQAIBot.Desktop.Services;
+
+public static class DesktopShellPropertyCatalog
+{
+    public static readonly string[] RuntimeSnapshotPropertyNames =
+    [
+        "WechatRuntimeStateText",
+        "RuntimeReadyText",
+        "WechatRuntimeReadyText",
+        "WechatBridgeStateText",
+        "WechatWorkerProcessText",
+        "LatestTurnState",
+        "LatestTurnHeadlineText",
+        "LatestTurnSummaryText",
+        "LatestTurnCapabilitiesText",
+        "LatestTurnReasonText",
+        "LatestTurnOutcomeText",
+        "LatestTurnActionLabel",
+        "LatestTurnActionKey",
+        "ShowOnlyQqFailures",
+        "ShowOnlyWechatFailures",
+        "PinSelectedQqActivity",
+        "PinSelectedWechatActivity",
+        "LatestQqActivitySummaryText",
+        "LatestQqRecentActivityText",
+        "SelectedQqRecentActivity",
+        "SelectedQqRecentActivitySummaryText",
+        "SelectedQqRecentActivityMetaText",
+        "SelectedQqRecentActivityDetailText",
+        "LatestQqActivityStateText",
+        "LatestQqLatestSuccessText",
+        "LatestQqLatestFailureText",
+        "LatestQqRecoveryText",
+        "LatestQqLlmSummaryText",
+        "LatestQqLlmDetailText",
+        "LatestQqRequestTimelineText",
+        "LatestQqDecisionTriggerText",
+        "LatestQqDecisionCapabilityText",
+        "LatestQqDecisionUpgradeText",
+        "LatestQqRequestedCapabilitiesText",
+        "LatestQqFailureSummaryText",
+        "LatestQqFailureTimelineText",
+        "LatestQqFailureTriggerText",
+        "LatestQqFailureCapabilityText",
+        "LatestQqFailureUpgradeText",
+        "LatestQqFailureErrorText",
+        "LatestWechatActivitySummaryText",
+        "LatestWechatRecentActivityText",
+        "SelectedWechatRecentActivity",
+        "SelectedWechatRecentActivitySummaryText",
+        "SelectedWechatRecentActivityMetaText",
+        "SelectedWechatRecentActivityDetailText",
+        "LatestWechatActivityStateText",
+        "LatestWechatLatestSuccessText",
+        "LatestWechatLatestFailureText",
+        "LatestWechatRecoveryText",
+        "LatestWechatLlmSummaryText",
+        "LatestWechatLlmDetailText",
+        "LatestWechatRequestTimelineText",
+        "LatestWechatDecisionTriggerText",
+        "LatestWechatDecisionCapabilityText",
+        "LatestWechatDecisionUpgradeText",
+        "LatestWechatRequestedCapabilitiesText",
+        "LatestWechatFailureSummaryText",
+        "LatestWechatFailureTimelineText",
+        "LatestWechatFailureTriggerText",
+        "LatestWechatFailureCapabilityText",
+        "LatestWechatFailureUpgradeText",
+        "LatestWechatFailureErrorText",
+        "IsControlApiReachable",
+        "ProcessStateText",
+        "ShellRuntimeBoundaryText",
+        "CloseToTrayBehaviorText",
+        "ExitDesktopBehaviorText",
+        "StopBackendBehaviorText",
+        "ReopenDesktopBehaviorText"
+    ];
+
+    public static readonly string[] HealthPropertyNames =
+    [
+        "HealthStateText",
+        "HealthSummaryText",
+        "HealthChecklistStatusText",
+        "HealthReadyNowText",
+        "HealthPrimaryActionText",
+        "HealthPrimaryActionLabel",
+        "HealthPrimaryActionKey",
+        "HealthActionSummaryText",
+        "HealthNextActions",
+        "HasHealthNextActions",
+        "HealthRuntimeExplanationText",
+        "HealthLatestIssueText",
+        "HealthLatestIssueActionLabel",
+        "HealthLatestIssueActionKey",
+        "ControlApiTokenStateText",
+        "ControlApiEndpointText",
+        "SessionStorePathText",
+        "SessionStoreStateText",
+        "ImageCachePathText",
+        "ImageCacheStateText",
+        "ActivityStatePathText",
+        "StateSnapshotFolderPathText",
+        "SnapshotRetentionHintText",
+        "ConfigStateText"
+    ];
+
+    public static readonly string[] GuidePropertyNames =
+    [
+        "IsOverallReadinessReady",
+        "IsOverallReadinessSetupComplete",
+        "OverallReadinessStateText",
+        "OverallReadinessSummaryText",
+        "OverallReadinessRecentActivityText",
+        "OverallReadinessActionLabel",
+        "OverallReadinessActionKey",
+        "FirstRunGuideText",
+        "FirstRunGuideSteps",
+        "FirstRunGuideProgressText",
+        "FirstRunGuideCurrentStepText",
+        "IsFirstRunGuideComplete",
+        "FirstRunGuideCompletionText",
+        "FirstRunStepsText",
+        "DailyUseGuideText",
+        "DailyUseGuideSteps",
+        "DailyUseGuideProgressText",
+        "DailyUseGuideCurrentStepText",
+        "IsDailyUseGuideComplete",
+        "DailyUseGuideCompletionText",
+        "DailyUseStepsText",
+        "ResidentModeDetailText",
+        "AutoStartStateText",
+        "AutoStartButtonText"
+    ];
+
+    public static readonly string[] SnapshotPropertyNames =
+    [
+        "LastStateSnapshotText",
+        "LastStateRestoreText",
+        "HasStateRestoreResult",
+        "LastStateRestoreSummaryText",
+        "LastStateRestoreIssueText",
+        "LastStateRestoreTargetsText",
+        "LastStateRestoreSessionsText",
+        "LastStateRestoreLatestActivityText",
+        "LastStateRestoreAdviceText",
+        "LastStateRestoreControlPlaneText",
+        "LastStateRestoreRuntimeText",
+        "LastStateRestoreNextStepText",
+        "LastStateRestorePrimaryActionLabel",
+        "LastStateRestorePrimaryActionKey",
+        "LastStateRestoreSecondaryActionLabel",
+        "LastStateRestoreSecondaryActionKey",
+        "LastStateRestoreTertiaryActionLabel",
+        "LastStateRestoreTertiaryActionKey",
+        "SelectedStateSnapshot",
+        "SelectedStateSnapshotSummaryText",
+        "SelectedStateSnapshotDetailText",
+        "SelectedStateSnapshotImpactText",
+        "SelectedStateSnapshotDiffText",
+        "SelectedStateSnapshotAdviceText",
+        "SelectedStateSnapshotSafetyHeadlineText",
+        "SelectedStateSnapshotSafetyRecommendationText",
+        "SelectedStateSnapshotRollbackHintText"
+    ];
+
+    public static readonly string[] LocalDocumentPropertyNames =
+    [
+        "EnvFilePath",
+        "IsBackendRootValid",
+        "BackendRootStateText"
+    ];
+
+    public static IEnumerable<string> AllPropertyNames()
+    {
+        return RuntimeSnapshotPropertyNames
+            .Concat(HealthPropertyNames)
+            .Concat(GuidePropertyNames)
+            .Concat(SnapshotPropertyNames)
+            .Concat(LocalDocumentPropertyNames);
+    }
+}

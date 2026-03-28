@@ -1,27 +1,9 @@
-import { createNapCatClient } from '../napcat.mjs';
-import { createLlmRouter } from '../adapters/llm/llm-router.mjs';
-import { DEFAULT_OPENAI_BASE_URL, prepareImageInputs } from '../adapters/llm/openai-provider.mjs';
-import { loadRuntimeConfig } from '../adapters/config/load-runtime-config.mjs';
-import { createNapCatChannelPort } from '../adapters/napcat/channel-port.mjs';
-import { normalizeIncomingNapCatEvent } from '../adapters/napcat/normalize-event.mjs';
-import { validateRuntimeConfig } from '../domain/runtime-config.mjs';
 import { createSessionStore } from '../session.mjs';
-import { createRuntimeConnectionManager } from './runtime-connection-manager.mjs';
-import { createRuntimeConfigReloader } from './runtime-config-reloader.mjs';
-import { processRuntimeMessage } from './process-runtime-message.mjs';
+import { createChannelRuntimeHost } from './create-channel-runtime-host.mjs';
+import { createRuntimeWorkerSession } from './runtime-worker-session.mjs';
 import { formatError } from '../utils.mjs';
 
-let runtimeConfig = loadRuntimeConfig();
-let allowedChatIds = new Set(runtimeConfig.access.allowedChatIds);
-let allowedUserIds = new Set(runtimeConfig.access.allowedUserIds);
-let llmRouter = createLlmRouter({
-  defaultRoute: runtimeConfig.openai.defaultRoute,
-  advancedRoute: runtimeConfig.openai.advancedRoute,
-  advancedTriggerPrefixes: runtimeConfig.openai.advancedTriggerPrefixes,
-  botSystemPrompt: runtimeConfig.bot.systemPrompt,
-  botPersona: runtimeConfig.bot.persona
-});
-let runtimeConfigSignature = '';
+const workerKind = process.env.QQ_AI_BOT_WORKER_KIND === 'wechat' ? 'wechat' : 'qq';
 
 function logInfo(message, ...args) {
   console.log(new Date().toISOString(), message, ...args);
@@ -29,27 +11,6 @@ function logInfo(message, ...args) {
 
 function logError(message, ...args) {
   console.error(new Date().toISOString(), message, ...args);
-}
-
-function logRuntimeConfigSummary(prefix, config) {
-  logInfo(
-    `${prefix} default=${config.openai.defaultRoute.model}/${config.openai.defaultRoute.apiStyle || 'auto'}, advanced=${config.openai.advancedRoute.model}/${config.openai.advancedRoute.apiStyle || 'auto'}, prefix=${config.bot.prefix}, max_output=${config.bot.maxOutputChars}`
-  );
-}
-
-function serializeRuntimeConfig(config) {
-  return JSON.stringify({
-    openai: {
-      defaultRoute: config.openai.defaultRoute,
-      advancedRoute: config.openai.advancedRoute,
-      advancedTriggerPrefixes: config.openai.advancedTriggerPrefixes
-    },
-    napcat: config.napcat,
-    bot: config.bot,
-    access: config.access,
-    runtime: config.runtime,
-    paths: config.paths
-  });
 }
 
 function sendStatus(status) {
@@ -61,188 +22,63 @@ function sendStatus(status) {
   }
 }
 
-function rebuildDerivedRuntimeState(nextRuntimeConfig) {
-  const nextLlmRouter = createLlmRouter({
-    defaultRoute: nextRuntimeConfig.openai.defaultRoute,
-    advancedRoute: nextRuntimeConfig.openai.advancedRoute,
-    advancedTriggerPrefixes: nextRuntimeConfig.openai.advancedTriggerPrefixes,
-    botSystemPrompt: nextRuntimeConfig.bot.systemPrompt,
-    botPersona: nextRuntimeConfig.bot.persona
-  });
-
-  runtimeConfig = nextRuntimeConfig;
-  runtimeConfigSignature = serializeRuntimeConfig(nextRuntimeConfig);
-  allowedChatIds = new Set(runtimeConfig.access.allowedChatIds);
-  allowedUserIds = new Set(runtimeConfig.access.allowedUserIds);
-  llmRouter = nextLlmRouter;
-}
-
-runtimeConfigSignature = serializeRuntimeConfig(runtimeConfig);
-
 async function main() {
-  validateRuntimeConfig(runtimeConfig);
   const sessionStore = await createSessionStore();
-  const activeLocks = new Set();
   const logger = {
     info: logInfo,
     error: logError
   };
+  let runtimeWorkerSession = null;
 
-  let napcatConnected = false;
-  let napcat = null;
-  let lastLlmRequest = null;
-  let lastLlmFailure = null;
-  let shuttingDown = false;
-  const configReloader = createRuntimeConfigReloader({
-    getRuntimeConfig: () => runtimeConfig,
-    applyRuntimeConfig,
+  const host = createChannelRuntimeHost({
+    workerKind,
+    getRuntimeConfig: () => runtimeWorkerSession?.getRuntimeConfig?.() ?? null,
+    isShuttingDown: () => runtimeWorkerSession?.isShuttingDown?.() ?? false,
+    handleIncomingPacket: async (packet) => runtimeWorkerSession?.handleIncomingPacket(packet),
     logInfo,
     logError,
-    logPrefix: 'runtime'
-  });
-  const connectionManager = createRuntimeConnectionManager({
-    connectionLabel: 'napcat',
-    errorLabel: 'WebSocket error',
-    getCurrentClient: () => napcat,
-    setCurrentClient: (client) => {
-      napcat = client;
-    },
-    setConnected: (connected) => {
-      napcatConnected = connected;
-    },
-    getReconnectDelayMs: () => runtimeConfig.runtime.reconnectDelayMs,
-    getConnectionTarget: () => runtimeConfig.napcat.wsUrl,
-    isShuttingDown: () => shuttingDown,
-    connectClient: (client) => client?.connect(),
-    disconnectClient: (client, reason) => client?.disconnect(1000, reason),
-    canDisconnectClient: (client) => Boolean(client?.getSocket?.()),
-    logInfo,
-    logError,
-    reportStatus
+    reportStatus: () => runtimeWorkerSession?.reportStatus()
   });
 
-  function reportStatus() {
-    sendStatus({
-      runtimeActive: !shuttingDown,
-      runtimeReady: !shuttingDown && napcatConnected,
-      napcatConnected,
-      activeLockCount: activeLocks.size,
-      lastLlmRequest,
-      lastLlmFailure
-    });
-  }
+  runtimeWorkerSession = createRuntimeWorkerSession({
+    workerKind,
+    host,
+    sessionStore,
+    logger,
+    sendStatus
+  });
 
-  logInfo('[runtime] Worker started.');
-  logInfo(
-    `[runtime] Default model: ${runtimeConfig.openai.defaultRoute.model}, Base URL: ${runtimeConfig.openai.defaultRoute.baseURL || DEFAULT_OPENAI_BASE_URL}, API: ${runtimeConfig.openai.defaultRoute.apiStyle || 'auto'}`
-  );
-  logInfo(
-    `[runtime] Advanced model: ${runtimeConfig.openai.advancedRoute.model}, Base URL: ${runtimeConfig.openai.advancedRoute.baseURL || runtimeConfig.openai.defaultRoute.baseURL || DEFAULT_OPENAI_BASE_URL}, API: ${runtimeConfig.openai.advancedRoute.apiStyle || 'auto'}`
-  );
-  logRuntimeConfigSummary('[runtime] LLM routes ready:', runtimeConfig);
-  logInfo(`[session] Store ready: ${sessionStore.filePath}`);
-  reportStatus();
-
-  function normalizeIncomingEvent(event) {
-    return normalizeIncomingNapCatEvent(event, {
-      prefix: runtimeConfig.bot.prefix
-    });
-  }
-
-  function createNapcatClientForCurrentConfig() {
-    const client = createNapCatClient({
-      url: runtimeConfig.napcat.wsUrl,
-      token: runtimeConfig.napcat.token,
-      onEvent: (event) => {
-        if (!connectionManager.isActiveClient(client)) {
-          return;
-        }
-
-        void handleEvent(event);
-      },
-      onOpen: () => connectionManager.handleOpen(client),
-      onClose: (code, reason) => connectionManager.handleClose(client, code, reason),
-      onError: (error) => connectionManager.handleError(client, error)
-    });
-
-    return client;
-  }
-
-  async function reconnectNapcatClient(reason) {
-    connectionManager.replaceClient(createNapcatClientForCurrentConfig(), reason);
-  }
-
-  async function applyRuntimeConfig(nextRuntimeConfig, source) {
-    validateRuntimeConfig(nextRuntimeConfig);
-    const nextSignature = serializeRuntimeConfig(nextRuntimeConfig);
-
-    if (nextSignature === runtimeConfigSignature) {
-      logInfo(`[runtime] Config reload skipped from ${source}: no effective change.`);
-      return false;
-    }
-
-    const previousConfig = runtimeConfig;
-    const napcatChanged =
-      previousConfig.napcat.wsUrl !== nextRuntimeConfig.napcat.wsUrl ||
-      previousConfig.napcat.token !== nextRuntimeConfig.napcat.token;
-
-    rebuildDerivedRuntimeState(nextRuntimeConfig);
-    logRuntimeConfigSummary(`[runtime] Config reloaded from ${source}:`, runtimeConfig);
-
-    if (napcatChanged) {
-      logInfo('[runtime] NapCat connection config changed; reconnecting client.');
-      await reconnectNapcatClient('runtime config reload');
-    }
-
-    return true;
-  }
-
-  async function handleEvent(event) {
-    const message = normalizeIncomingEvent(event);
-    await processRuntimeMessage({
-      message,
-      activeLocks,
-      allowedChatIds,
-      allowedUserIds,
-      createChannelPort: () =>
-        createNapCatChannelPort({
-          napcatClient: napcat,
-          prefix: runtimeConfig.bot.prefix
-        }),
-      sessionStore,
-      llmRouter,
-      logger,
-      prepareImageInputs,
-      imageCacheDir: runtimeConfig.paths.imageCacheDir,
-      maxOutputChars: runtimeConfig.bot.maxOutputChars,
-      reportStatus,
-      onReplyTelemetry: (telemetry) => {
-        lastLlmRequest = telemetry;
-        lastLlmFailure = null;
-        reportStatus();
-      },
-      onReplyFailureTelemetry: (telemetry) => {
-        lastLlmFailure = telemetry;
-        reportStatus();
-      }
-    });
-  }
-
-  await configReloader.startWatching();
-  connectionManager.attachInitialClient(createNapcatClientForCurrentConfig());
-
-  async function shutdown(signal) {
-    if (shuttingDown) {
+  async function applyWorkerMessage(message) {
+    if (!message || typeof message !== 'object') {
       return;
     }
 
-    shuttingDown = true;
-    napcatConnected = false;
-    reportStatus();
-    logInfo(`[runtime] Shutting down: signal=${signal}`);
+    if (message.type !== 'config:init' && message.type !== 'config:update') {
+      return;
+    }
 
-    configReloader.stopWatching();
-    connectionManager.shutdownCurrentClient(`shutdown:${signal}`);
+    const nextWorkerKind =
+      message?.data?.workerKind === 'wechat' ? 'wechat' : 'qq';
+
+    if (nextWorkerKind !== workerKind) {
+      return;
+    }
+
+    await runtimeWorkerSession.applyRuntimeSettingsSnapshot(
+      message.data.runtimeSettingsSnapshot,
+      message.data.source || message.type
+    );
+  }
+
+  process.on('message', (message) => {
+    void applyWorkerMessage(message).catch((error) => {
+      logError(`[${workerKind === 'wechat' ? 'wechat-runtime' : 'runtime'}] Failed to apply worker message: ${formatError(error)}`);
+      process.exit(1);
+    });
+  });
+
+  async function shutdown(signal) {
+    await runtimeWorkerSession.shutdown(signal);
 
     setTimeout(() => {
       process.exit(0);
@@ -257,6 +93,12 @@ async function main() {
   });
   process.on('disconnect', () => {
     void shutdown('disconnect');
+  });
+
+  sendStatus({
+    runtimeActive: false,
+    runtimeReady: false,
+    activeLockCount: 0
   });
 }
 

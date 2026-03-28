@@ -43,6 +43,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly IBotProcessService _botProcessService;
     private readonly IActivityStateStore _activityStateStore;
     private readonly DesktopActivityStatePolicy _activityStatePolicy;
+    private readonly DesktopControlPlaneSession _controlPlaneSession;
     private readonly Dispatcher _uiDispatcher;
     private readonly Queue<string> _logLines = new();
     private readonly DispatcherTimer _logFlushTimer;
@@ -183,6 +184,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _botProcessService = botProcessService ?? new BotProcessService();
         _activityStateStore = activityStateStore ?? new LocalActivityStateStore();
         _activityStatePolicy = DesktopActivityStatePolicy.Default;
+        _controlPlaneSession = new DesktopControlPlaneSession(
+            new DesktopSessionDependencies
+            {
+                LocalConfigFallbackReader = _localConfigFallbackReader,
+                LocalBootstrapConfigStore = _localBootstrapConfigStore,
+                LocalPathOperationsService = _localPathOperationsService,
+                LocalStateSnapshotService = _localStateSnapshotService,
+                BackendControlApiService = _backendControlApiService,
+                BotProcessService = _botProcessService,
+                ActivityStateStore = _activityStateStore,
+                ActivityStatePolicy = _activityStatePolicy
+            },
+            BuildInitialShellState());
         _uiDispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
         _reloadCommand = new AsyncRelayCommand(LoadConfigAsync, CanLoadOrSave);
         _saveCommand = new AsyncRelayCommand(SaveConfigAsync, CanLoadOrSave);
@@ -306,11 +320,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 ResetRestoreResultState();
                 ReplaceStateSnapshots([]);
                 SelectedStateSnapshot = null;
+                ApplyState(_controlPlaneSession.UpdateBackendRoot(value, _backendRootDetected));
                 OnPropertyChanged(nameof(EnvFilePath));
                 OnPropertyChanged(nameof(IsBackendRootValid));
                 OnPropertyChanged(nameof(BackendRootStateText));
-                LoadActivityState();
-                RefreshHealthReport();
                 UpdateCommandStates();
             }
         }
@@ -496,10 +509,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 if (!_suspendDirtyTracking)
                 {
                     HasUnsavedChanges = true;
+                    SyncSessionEditorState();
                 }
 
                 OnPropertyChanged(nameof(EffectiveBotInstructionsText));
-                RefreshHealthReport();
             }
         }
     }
@@ -514,10 +527,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 if (!_suspendDirtyTracking)
                 {
                     HasUnsavedChanges = true;
+                    SyncSessionEditorState();
                 }
 
                 OnPropertyChanged(nameof(EffectiveBotInstructionsText));
-                RefreshHealthReport();
             }
         }
     }
@@ -557,7 +570,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(ExitDesktopBehaviorText));
                 OnPropertyChanged(nameof(StopBackendBehaviorText));
                 OnPropertyChanged(nameof(ReopenDesktopBehaviorText));
-                RefreshGuideFlow();
+                SyncSessionEditorState();
                 UpdateCommandStates();
             }
         }
@@ -864,7 +877,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(AutoStartStateText));
                 OnPropertyChanged(nameof(AutoStartButtonText));
                 OnPropertyChanged(nameof(ResidentModeDetailText));
-                RefreshHealthReport();
+                SyncSessionEditorState();
             }
         }
     }
@@ -952,7 +965,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             if (SetProperty(ref _hasUnsavedChanges, value))
             {
                 OnPropertyChanged(nameof(ConfigStateText));
-                RefreshHealthReport();
+                SyncSessionEditorState();
             }
         }
     }
@@ -1279,6 +1292,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task LoadConfigAsync()
     {
+        if (!_suspendDirtyTracking)
+        {
+            SyncSessionEditorState();
+        }
+        ApplyCommandResult(await _controlPlaneSession.LoadConfigAsync());
+        return;
+
         if (!IsBackendRootValid)
         {
             DesktopControlPlaneFeedback.ApplyOutcome(
@@ -1364,6 +1384,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<(BackendControlConfigResponse? ApiConfig, BackendRuntimeStatus? ApiStatus)> LoadConfigFromAuthoritativeSourceAsync()
     {
+        return await _controlPlaneSession.LoadAuthoritativeConfigAsync();
+
         return await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
             tryGetConfigAsync: (cancellationToken) => _backendControlApiService.TryGetConfigAsync(cancellationToken),
             getLastFailure: () => _backendControlApiService.LastFailure,
@@ -1379,6 +1401,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task SaveLocalControlPlaneAsync()
     {
+        SyncSessionEditorState();
+        ApplyCommandResult(await _controlPlaneSession.SaveLocalControlPlaneAsync(ControlApiToken));
+        await LoadConfigAsync();
+        return;
+
         if (!IsBackendRootValid)
         {
             StatusText = "Backend root is invalid";
@@ -1431,6 +1458,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task<bool> SaveConfigAsync(bool showUiErrors)
     {
+        SyncSessionEditorState();
+        var sessionSaveResult = await _controlPlaneSession.SaveConfigAsync(BuildConfig(), showUiErrors);
+        ApplyCommandResult(sessionSaveResult, showUiErrors);
+        return sessionSaveResult.Succeeded;
+
         if (!IsBackendRootValid)
         {
             DesktopControlPlaneFeedback.ApplyOutcome(
@@ -1493,6 +1525,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task StartBackendAsync()
     {
+        SyncSessionEditorState();
+        ApplyCommandResult(await _controlPlaneSession.StartBackendAsync(BuildConfig()));
+        return;
+
         try
         {
             if (!await SaveConfigAsync(showUiErrors: true))
@@ -1563,6 +1599,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task StopBackendAsync()
     {
+        SyncSessionEditorState();
+        ApplyCommandResult(await _controlPlaneSession.StopBackendAsync());
+        return;
+
         try
         {
             StatusText = "Stopping backend...";
@@ -2208,6 +2248,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async void OnStatusPollTimerTick(object? sender, EventArgs e)
     {
+        SyncSessionEditorState();
+        ApplyCommandResult(await _controlPlaneSession.PollStatusAsync(), showErrorDialog: false);
+        return;
+
         await LoadLocalEnvDocumentAsync(suppressErrors: true);
         var status = await _backendControlApiService.TryGetStatusAsync();
         var statusFailure = _backendControlApiService.LastFailure;
@@ -2379,6 +2423,293 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             StateSnapshots.Add(item);
         }
+    }
+
+    private DesktopShellState BuildInitialShellState()
+    {
+        return new DesktopShellState
+        {
+            ConfigEditorState = new DesktopConfigEditorState
+            {
+                Config = BuildConfig(),
+                ControlApiToken = _controlApiToken,
+                HasUnsavedChanges = _hasUnsavedChanges,
+                LastLoadedAtText = _lastLoadedAtText,
+                LastSavedAtText = _lastSavedAtText
+            },
+            RuntimeShellState = new DesktopRuntimeSnapshotState
+            {
+                RuntimeSnapshot = _runtimeSnapshot,
+                LatestTurnOverview = _latestTurnOverview,
+                HealthReport = _healthReport,
+                GuideFlow = _guideFlow,
+                ControlApiPollState = _controlApiPollState,
+                IsProcessRunning = _isProcessRunning,
+                AutoStartEnabled = _autoStartEnabled,
+                CanStartBackend = CanStartBackend()
+            },
+            RecentActivityState = new DesktopRecentActivityState
+            {
+                QqRecentActivities = QqRecentActivities.ToArray(),
+                WechatRecentActivities = WechatRecentActivities.ToArray(),
+                LastQqRequestEventKey = _lastQqRequestEventKey,
+                LastQqFailureEventKey = _lastQqFailureEventKey,
+                LastWechatRequestEventKey = _lastWechatRequestEventKey,
+                LastWechatFailureEventKey = _lastWechatFailureEventKey,
+                PinSelectedQqActivity = _pinSelectedQqActivity,
+                PinSelectedWechatActivity = _pinSelectedWechatActivity,
+                ShowOnlyQqFailures = _showOnlyQqFailures,
+                ShowOnlyWechatFailures = _showOnlyWechatFailures,
+                SelectedQqRecentActivity = _selectedQqRecentActivity,
+                SelectedWechatRecentActivity = _selectedWechatRecentActivity
+            },
+            SnapshotState = new DesktopSnapshotState
+            {
+                StateSnapshots = StateSnapshots.ToArray(),
+                SelectedStateSnapshot = _selectedStateSnapshot,
+                SelectedStateSnapshotPreview = _selectedStateSnapshotPreview,
+                LastStateRestoreResult = _lastStateRestoreResult,
+                LastStateRestorePreview = _lastStateRestorePreview,
+                LastStateSnapshotText = _lastStateSnapshotText,
+                LastStateRestoreText = _lastStateRestoreText,
+                LastStateRestoreSummaryText = _lastStateRestoreSummaryText,
+                LastStateRestoreIssueText = _lastStateRestoreIssueText,
+                LastStateRestoreTargetsText = _lastStateRestoreTargetsText,
+                LastStateRestoreSessionsText = _lastStateRestoreSessionsText,
+                LastStateRestoreLatestActivityText = _lastStateRestoreLatestActivityText,
+                LastStateRestoreAdviceText = _lastStateRestoreAdviceText,
+                LastStateRestoreControlPlaneText = _lastStateRestoreControlPlaneText,
+                LastStateRestoreRuntimeText = _lastStateRestoreRuntimeText,
+                LastStateRestoreNextStepText = _lastStateRestoreNextStepText,
+                LastStateRestorePrimaryActionLabel = _lastStateRestorePrimaryActionLabel,
+                LastStateRestorePrimaryActionKey = _lastStateRestorePrimaryActionKey,
+                LastStateRestoreSecondaryActionLabel = _lastStateRestoreSecondaryActionLabel,
+                LastStateRestoreSecondaryActionKey = _lastStateRestoreSecondaryActionKey,
+                LastStateRestoreTertiaryActionLabel = _lastStateRestoreTertiaryActionLabel,
+                LastStateRestoreTertiaryActionKey = _lastStateRestoreTertiaryActionKey,
+                SelectedStateSnapshotImpactText = _selectedStateSnapshotImpactText,
+                SelectedStateSnapshotDiffText = _selectedStateSnapshotDiffText,
+                SelectedStateSnapshotAdviceText = _selectedStateSnapshotAdviceText,
+                SelectedStateSnapshotSafetyHeadlineText = _selectedStateSnapshotSafetyHeadlineText,
+                SelectedStateSnapshotSafetyRecommendationText = _selectedStateSnapshotSafetyRecommendationText,
+                SelectedStateSnapshotRollbackHintText = _selectedStateSnapshotRollbackHintText
+            },
+            LocalDocumentState = new DesktopLocalDocumentState
+            {
+                BackendRootPath = _backendRootPath,
+                BackendRootDetected = _backendRootDetected,
+                ConfigDocument = new DesktopConfigDocumentState
+                {
+                    Document = _envDocument
+                }
+            },
+            UiFeedbackState = new DesktopUiFeedbackState
+            {
+                StatusText = _statusText,
+                LogText = _logText
+            }
+        };
+    }
+
+    private void SyncSessionEditorState()
+    {
+        ApplyState(
+            _controlPlaneSession.UpdateEditorState(
+                BuildConfig(),
+                ControlApiToken,
+                HasUnsavedChanges,
+                LastLoadedAtText,
+                LastSavedAtText,
+                AutoStartEnabled,
+                CanStartBackend(),
+                LogText));
+    }
+
+    private void ApplyState(DesktopShellState shellState)
+    {
+        _suspendDirtyTracking = true;
+        try
+        {
+            _envDocument = shellState.LocalDocumentState.ConfigDocument.Document;
+            _backendRootPath = shellState.LocalDocumentState.BackendRootPath;
+            _backendRootDetected = shellState.LocalDocumentState.BackendRootDetected;
+            _runtimeSnapshot = shellState.RuntimeShellState.RuntimeSnapshot;
+            _latestTurnOverview = shellState.RuntimeShellState.LatestTurnOverview;
+            _healthReport = shellState.RuntimeShellState.HealthReport;
+            _guideFlow = shellState.RuntimeShellState.GuideFlow;
+            _controlApiPollState = shellState.RuntimeShellState.ControlApiPollState;
+            _autoStartEnabled = shellState.RuntimeShellState.AutoStartEnabled;
+            _isProcessRunning = shellState.RuntimeShellState.IsProcessRunning;
+            _controlApiRecoveryInProgress = shellState.RuntimeShellState.ControlApiRecoveryInProgress;
+            _lastQqRequestEventKey = shellState.RecentActivityState.LastQqRequestEventKey;
+            _lastQqFailureEventKey = shellState.RecentActivityState.LastQqFailureEventKey;
+            _lastWechatRequestEventKey = shellState.RecentActivityState.LastWechatRequestEventKey;
+            _lastWechatFailureEventKey = shellState.RecentActivityState.LastWechatFailureEventKey;
+            _pinSelectedQqActivity = shellState.RecentActivityState.PinSelectedQqActivity;
+            _pinSelectedWechatActivity = shellState.RecentActivityState.PinSelectedWechatActivity;
+            _showOnlyQqFailures = shellState.RecentActivityState.ShowOnlyQqFailures;
+            _showOnlyWechatFailures = shellState.RecentActivityState.ShowOnlyWechatFailures;
+            _selectedQqRecentActivity = shellState.RecentActivityState.SelectedQqRecentActivity;
+            _selectedWechatRecentActivity = shellState.RecentActivityState.SelectedWechatRecentActivity;
+            _selectedStateSnapshot = shellState.SnapshotState.SelectedStateSnapshot;
+            _selectedStateSnapshotPreview = shellState.SnapshotState.SelectedStateSnapshotPreview;
+            _lastStateRestoreResult = shellState.SnapshotState.LastStateRestoreResult;
+            _lastStateRestorePreview = shellState.SnapshotState.LastStateRestorePreview;
+            _lastStateSnapshotText = shellState.SnapshotState.LastStateSnapshotText;
+            _lastStateRestoreText = shellState.SnapshotState.LastStateRestoreText;
+            _lastStateRestoreSummaryText = shellState.SnapshotState.LastStateRestoreSummaryText;
+            _lastStateRestoreIssueText = shellState.SnapshotState.LastStateRestoreIssueText;
+            _lastStateRestoreTargetsText = shellState.SnapshotState.LastStateRestoreTargetsText;
+            _lastStateRestoreSessionsText = shellState.SnapshotState.LastStateRestoreSessionsText;
+            _lastStateRestoreLatestActivityText = shellState.SnapshotState.LastStateRestoreLatestActivityText;
+            _lastStateRestoreAdviceText = shellState.SnapshotState.LastStateRestoreAdviceText;
+            _lastStateRestoreControlPlaneText = shellState.SnapshotState.LastStateRestoreControlPlaneText;
+            _lastStateRestoreRuntimeText = shellState.SnapshotState.LastStateRestoreRuntimeText;
+            _lastStateRestoreNextStepText = shellState.SnapshotState.LastStateRestoreNextStepText;
+            _lastStateRestorePrimaryActionLabel = shellState.SnapshotState.LastStateRestorePrimaryActionLabel;
+            _lastStateRestorePrimaryActionKey = shellState.SnapshotState.LastStateRestorePrimaryActionKey;
+            _lastStateRestoreSecondaryActionLabel = shellState.SnapshotState.LastStateRestoreSecondaryActionLabel;
+            _lastStateRestoreSecondaryActionKey = shellState.SnapshotState.LastStateRestoreSecondaryActionKey;
+            _lastStateRestoreTertiaryActionLabel = shellState.SnapshotState.LastStateRestoreTertiaryActionLabel;
+            _lastStateRestoreTertiaryActionKey = shellState.SnapshotState.LastStateRestoreTertiaryActionKey;
+            _selectedStateSnapshotImpactText = shellState.SnapshotState.SelectedStateSnapshotImpactText;
+            _selectedStateSnapshotDiffText = shellState.SnapshotState.SelectedStateSnapshotDiffText;
+            _selectedStateSnapshotAdviceText = shellState.SnapshotState.SelectedStateSnapshotAdviceText;
+            _selectedStateSnapshotSafetyHeadlineText = shellState.SnapshotState.SelectedStateSnapshotSafetyHeadlineText;
+            _selectedStateSnapshotSafetyRecommendationText = shellState.SnapshotState.SelectedStateSnapshotSafetyRecommendationText;
+            _selectedStateSnapshotRollbackHintText = shellState.SnapshotState.SelectedStateSnapshotRollbackHintText;
+            _statusText = shellState.UiFeedbackState.StatusText;
+            _logText = shellState.UiFeedbackState.LogText;
+            _controlApiToken = shellState.ConfigEditorState.ControlApiToken;
+            _hasUnsavedChanges = shellState.ConfigEditorState.HasUnsavedChanges;
+            _lastLoadedAtText = shellState.ConfigEditorState.LastLoadedAtText;
+            _lastSavedAtText = shellState.ConfigEditorState.LastSavedAtText;
+
+            var config = shellState.ConfigEditorState.Config;
+            _openAiApiKey = config.OpenAiApiKey;
+            _openAiDefaultApiKey = config.OpenAiDefaultApiKey;
+            _openAiDefaultModel = config.OpenAiDefaultModel;
+            _openAiModel = config.OpenAiModel;
+            _openAiBaseUrl = config.OpenAiBaseUrl;
+            _openAiDefaultBaseUrl = config.OpenAiDefaultBaseUrl;
+            _openAiDefaultReasoningEffort = config.OpenAiDefaultReasoningEffort;
+            _openAiAdvancedReasoningEffort = config.OpenAiAdvancedReasoningEffort;
+            _openAiDefaultTextVerbosity = config.OpenAiDefaultTextVerbosity;
+            _openAiAdvancedTextVerbosity = config.OpenAiAdvancedTextVerbosity;
+            _openAiDefaultEnableWebSearch = config.OpenAiDefaultEnableWebSearch;
+            _openAiAdvancedEnableWebSearch = config.OpenAiAdvancedEnableWebSearch;
+            _openAiDefaultEnableCodeInterpreter = config.OpenAiDefaultEnableCodeInterpreter;
+            _openAiAdvancedEnableCodeInterpreter = config.OpenAiAdvancedEnableCodeInterpreter;
+            _openAiAdvancedTriggerPrefixes = config.OpenAiAdvancedTriggerPrefixes;
+            _napCatWsUrl = config.NapCatWsUrl;
+            _napCatToken = config.NapCatToken;
+            _wechatBridgeUrl = config.WechatBridgeUrl;
+            _wechatBridgeToken = config.WechatBridgeToken;
+            _wechatBotPrefix = config.WechatBotPrefix;
+            _botPrefix = config.BotPrefix;
+            _botSystemPrompt = NormalizeBotSystemPrompt(config.BotSystemPrompt);
+            _botPersona = config.BotPersona;
+            _maxOutputChars = config.MaxOutputChars;
+            _allowedChatIds = config.AllowedChatIds;
+            _allowedUserIds = config.AllowedUserIds;
+            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(QqRecentActivities, shellState.RecentActivityState.QqRecentActivities);
+            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(WechatRecentActivities, shellState.RecentActivityState.WechatRecentActivities);
+            ReplaceHealthChecks(shellState.RuntimeShellState.HealthReport.Checks);
+            ReplaceStateSnapshots(shellState.SnapshotState.StateSnapshots);
+        }
+        finally
+        {
+            _suspendDirtyTracking = false;
+        }
+
+        QqRecentActivitiesView.Refresh();
+        WechatRecentActivitiesView.Refresh();
+
+        RefreshLatestTurnOverview();
+        RefreshHealthReport();
+        ApplySelectedStateSnapshotPresentation();
+        ApplyRestorePresentation();
+
+        foreach (var propertyName in DesktopShellPropertyCatalog.AllPropertyNames())
+        {
+            OnPropertyChanged(propertyName);
+        }
+
+        OnPropertyChanged(nameof(OpenAiApiKey));
+        OnPropertyChanged(nameof(OpenAiDefaultApiKey));
+        OnPropertyChanged(nameof(OpenAiDefaultModel));
+        OnPropertyChanged(nameof(OpenAiModel));
+        OnPropertyChanged(nameof(OpenAiBaseUrl));
+        OnPropertyChanged(nameof(OpenAiDefaultBaseUrl));
+        OnPropertyChanged(nameof(OpenAiDefaultReasoningEffort));
+        OnPropertyChanged(nameof(OpenAiAdvancedReasoningEffort));
+        OnPropertyChanged(nameof(OpenAiDefaultTextVerbosity));
+        OnPropertyChanged(nameof(OpenAiAdvancedTextVerbosity));
+        OnPropertyChanged(nameof(OpenAiDefaultEnableWebSearch));
+        OnPropertyChanged(nameof(OpenAiAdvancedEnableWebSearch));
+        OnPropertyChanged(nameof(OpenAiDefaultEnableCodeInterpreter));
+        OnPropertyChanged(nameof(OpenAiAdvancedEnableCodeInterpreter));
+        OnPropertyChanged(nameof(IsOpenAiDefaultEnableWebSearchEnabled));
+        OnPropertyChanged(nameof(IsOpenAiAdvancedEnableWebSearchEnabled));
+        OnPropertyChanged(nameof(IsOpenAiDefaultEnableCodeInterpreterEnabled));
+        OnPropertyChanged(nameof(IsOpenAiAdvancedEnableCodeInterpreterEnabled));
+        OnPropertyChanged(nameof(OpenAiAdvancedTriggerPrefixes));
+        OnPropertyChanged(nameof(NapCatWsUrl));
+        OnPropertyChanged(nameof(NapCatToken));
+        OnPropertyChanged(nameof(WechatBridgeUrl));
+        OnPropertyChanged(nameof(WechatBridgeToken));
+        OnPropertyChanged(nameof(WechatBotPrefix));
+        OnPropertyChanged(nameof(BotPrefix));
+        OnPropertyChanged(nameof(BotSystemPrompt));
+        OnPropertyChanged(nameof(BotPersona));
+        OnPropertyChanged(nameof(MaxOutputChars));
+        OnPropertyChanged(nameof(AllowedChatIds));
+        OnPropertyChanged(nameof(AllowedUserIds));
+        OnPropertyChanged(nameof(EffectiveBotInstructionsText));
+        OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(LastLoadedAtText));
+        OnPropertyChanged(nameof(LastSavedAtText));
+        OnPropertyChanged(nameof(ControlApiToken));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+        OnPropertyChanged(nameof(LogText));
+        OnPropertyChanged(nameof(HasStateRestoreResult));
+    }
+
+    private void ApplyCommandResult(DesktopCommandResult result, bool showErrorDialog = true)
+    {
+        if (result.NextState is not null)
+        {
+            ApplyState(result.NextState);
+        }
+
+        foreach (var logMessage in result.LogMessages)
+        {
+            AddLog(logMessage);
+        }
+
+        foreach (var notification in result.Notifications)
+        {
+            NotificationRequested?.Invoke(this, notification);
+        }
+
+        if (result.Error is not null)
+        {
+            if (showErrorDialog)
+            {
+                System.Windows.MessageBox.Show(
+                    result.Error.DialogMessage,
+                    result.Error.DialogTitle,
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.SuggestedHealthActionKey))
+            {
+                HealthActionRequested?.Invoke(this, result.SuggestedHealthActionKey);
+            }
+        }
+
+        UpdateCommandStates();
     }
 
     private void ApplySuggestedErrorAction(DesktopUserFacingOperationError error)
@@ -2884,9 +3215,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (SetProperty(ref field, value, propertyName) && !_suspendDirtyTracking)
         {
             HasUnsavedChanges = true;
+            SyncSessionEditorState();
         }
-
-        RefreshHealthReport();
     }
 
     private void SetTrackedBooleanStringProperty(
@@ -2904,7 +3234,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 HasUnsavedChanges = true;
             }
 
-            RefreshHealthReport();
+            if (!_suspendDirtyTracking)
+            {
+                SyncSessionEditorState();
+            }
         }
     }
 

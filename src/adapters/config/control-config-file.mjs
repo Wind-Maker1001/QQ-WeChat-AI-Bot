@@ -1,32 +1,25 @@
-import { loadRuntimeConfig } from './load-runtime-config.mjs';
+import { APP_ENV_KEYS } from './env-file-store.mjs';
 import {
-  APP_ENV_KEYS,
-  readEnvFileValues,
-  updateEnvFileValues
-} from './env-file-store.mjs';
-import {
-  buildControlConfigFromEnvValues,
-  buildControlEnvValues
+  buildControlConfigFromEnvValues
 } from './control-config-mapper.mjs';
-import { validateRuntimeConfig } from '../../domain/runtime-config.mjs';
+import {
+  buildRuntimeEnvValuesFromSettingsSnapshot,
+  ensureRuntimeSettings,
+  readBootstrapConfig,
+  writeRuntimeSettings
+} from './runtime-settings-store.mjs';
 
 export { APP_ENV_KEYS } from './env-file-store.mjs';
 
 export async function readRuntimeConfigFromEnvFile({ cwd = process.cwd() } = {}) {
-  const { envPath, values } = await readEnvFileValues({ cwd });
-
-  return {
-    envPath,
-    envValues: values,
-    runtimeConfig: loadRuntimeConfig({
-      cwd,
-      env: values,
-      loadDotenv: false
-    })
-  };
+  return readBootstrapConfig({ cwd });
 }
 
-export function buildRuntimeProcessEnv(envValues, baseEnv = process.env) {
+export async function readRuntimeSettingsFromDisk({ cwd = process.cwd() } = {}) {
+  return ensureRuntimeSettings({ cwd });
+}
+
+export function buildRuntimeProcessEnv(envValues = {}, baseEnv = process.env) {
   const nextEnv = { ...baseEnv };
 
   for (const key of APP_ENV_KEYS) {
@@ -39,50 +32,38 @@ export function buildRuntimeProcessEnv(envValues, baseEnv = process.env) {
   };
 }
 
-export async function readControlConfig({ cwd = process.cwd(), runtimeConfig }) {
-  const { envPath, values } = await readEnvFileValues({ cwd });
+export async function readControlConfig({ cwd = process.cwd() } = {}) {
+  const result = await ensureRuntimeSettings({ cwd });
 
   return {
-    envPath,
-    config: buildControlConfigFromEnvValues(values, runtimeConfig),
-    envValues: values
+    envPath: result.settingsPath,
+    bootstrapEnvPath: result.bootstrapEnvPath,
+    config: buildControlConfigFromEnvValues(
+      buildRuntimeEnvValuesFromSettingsSnapshot(result.runtimeSettingsSnapshot),
+      result.runtimeConfig
+    ),
+    runtimeConfig: result.runtimeConfig,
+    runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
   };
 }
 
 export async function writeControlConfig({
   cwd = process.cwd(),
-  runtimeConfig,
   config
 }) {
-  let normalizedConfig = null;
-
-  const result = await updateEnvFileValues({
+  const result = await writeRuntimeSettings({
     cwd,
-    mapValues: (existingValues) => {
-      const mappedValues = buildControlEnvValues({
-        existingValues,
-        runtimeConfig,
-        config
-      });
-
-      normalizedConfig = mappedValues.normalizedConfig;
-
-      const nextRuntimeConfig = loadRuntimeConfig({
-        cwd,
-        env: mappedValues.nextValues,
-        loadDotenv: false
-      });
-      validateRuntimeConfig(nextRuntimeConfig, {
-        validateWechatBridge: true
-      });
-
-      return mappedValues.nextValues;
-    }
+    config
   });
 
   return {
-    envPath: result.envPath,
-    config: normalizedConfig,
-    envValues: result.nextValues
+    envPath: result.settingsPath,
+    bootstrapEnvPath: result.bootstrapEnvPath,
+    config: buildControlConfigFromEnvValues(
+      buildRuntimeEnvValuesFromSettingsSnapshot(result.runtimeSettingsSnapshot),
+      result.runtimeConfig
+    ),
+    runtimeConfig: result.runtimeConfig,
+    runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
   };
 }

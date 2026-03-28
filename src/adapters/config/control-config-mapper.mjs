@@ -1,4 +1,4 @@
-function buildControlConfigFromEnvValues(envValues, runtimeConfig) {
+export function buildControlConfigFromEnvValues(envValues, runtimeConfig) {
   const allowedChatIds = envValues.ALLOWED_CHAT_IDS ?? runtimeConfig.access.allowedChatIds.join(',');
   const botSystemPrompt = normalizeBotSystemPromptValue(
     envValues.BOT_SYSTEM_PROMPT,
@@ -79,9 +79,10 @@ function normalizeBotSystemPromptValue(value, fallbackValue = '') {
   return normalizedValue.trim() ? normalizedValue : fallbackValue;
 }
 
-function normalizeControlConfigInput(config, fallbackConfig) {
+export function normalizeControlConfigInput(config, fallbackConfig) {
   const source = config && typeof config === 'object' ? config : {};
-  const fallback = buildControlConfigFromEnvValues({}, fallbackConfig);
+  const fallback =
+    fallbackConfig && typeof fallbackConfig === 'object' ? fallbackConfig : {};
 
   return {
     openAiApiKey: String(source.openAiApiKey ?? fallback.openAiApiKey ?? '').trim(),
@@ -140,12 +141,15 @@ function normalizeControlConfigInput(config, fallbackConfig) {
   };
 }
 
-function buildControlEnvValues({
+export function buildControlEnvValues({
   existingValues,
   runtimeConfig,
   config
 }) {
-  const normalizedConfig = normalizeControlConfigInput(config, runtimeConfig);
+  const normalizedConfig = normalizeControlConfigInput(
+    config,
+    buildControlConfigFromEnvValues(existingValues, runtimeConfig)
+  );
   const nextValues = {
     ...existingValues,
     OPENAI_API_KEY: normalizedConfig.openAiApiKey,
@@ -186,8 +190,3 @@ function buildControlEnvValues({
     nextValues
   };
 }
-
-export {
-  buildControlConfigFromEnvValues,
-  buildControlEnvValues
-};

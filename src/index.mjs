@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildRuntimeProcessEnv } from './adapters/config/control-config-file.mjs';
+import { readRuntimeSettingsFromDisk } from './adapters/config/control-config-file.mjs';
 import {
   createControlApiServer,
   DEFAULT_CONTROL_API_HOST,
@@ -26,7 +27,6 @@ import { formatError } from './utils.mjs';
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDirPath = path.dirname(currentFilePath);
 const WORKER_ENTRY = path.resolve(currentDirPath, 'app', 'runtime-worker.mjs');
-const WECHAT_WORKER_ENTRY = path.resolve(currentDirPath, 'app', 'wechat-runtime-worker.mjs');
 const WORKER_RESTART_DELAY_MS = 1000;
 const BOOT_FAILURE_WINDOW_MS = 5000;
 const MAX_CONSECUTIVE_BOOT_FAILURES = 3;
@@ -192,11 +192,13 @@ async function main() {
   const startedAt = new Date().toISOString();
   let desiredRuntimeActive = true;
   let runtimeStatus = createInitialRuntimeStatus();
+  let runtimeSettingsState = await readRuntimeSettingsFromDisk({
+    cwd: process.cwd()
+  });
   const logger = {
     info: logInfo,
     error: logError
   };
-  const buildSpawnEnv = (envValues) => (envValues ? buildRuntimeProcessEnv(envValues) : process.env);
 
   const workerSlot = createSupervisorWorkerSlot({
     entryPath: WORKER_ENTRY,
@@ -204,7 +206,10 @@ async function main() {
     restartDelayMs: WORKER_RESTART_DELAY_MS,
     bootFailureWindowMs: BOOT_FAILURE_WINDOW_MS,
     maxConsecutiveBootFailures: MAX_CONSECUTIVE_BOOT_FAILURES,
-    buildSpawnEnv,
+    buildSpawnEnv: () =>
+      buildRuntimeProcessEnv({
+        QQ_AI_BOT_WORKER_KIND: 'qq'
+      }),
     shouldKeepAlive: () => desiredRuntimeActive,
     logInfo,
     logError,
@@ -240,12 +245,15 @@ async function main() {
   });
 
   const wechatWorkerSlot = createSupervisorWorkerSlot({
-    entryPath: WECHAT_WORKER_ENTRY,
+    entryPath: WORKER_ENTRY,
     label: 'Wechat worker',
     restartDelayMs: WORKER_RESTART_DELAY_MS,
     bootFailureWindowMs: BOOT_FAILURE_WINDOW_MS,
     maxConsecutiveBootFailures: MAX_CONSECUTIVE_BOOT_FAILURES,
-    buildSpawnEnv,
+    buildSpawnEnv: () =>
+      buildRuntimeProcessEnv({
+        QQ_AI_BOT_WORKER_KIND: 'wechat'
+      }),
     shouldKeepAlive: () => desiredRuntimeActive,
     logInfo,
     logError,
@@ -298,6 +306,10 @@ async function main() {
     setDesiredRuntimeActive: (nextDesiredRuntimeActive) => {
       desiredRuntimeActive = nextDesiredRuntimeActive;
     },
+    getRuntimeSettingsState: () => runtimeSettingsState,
+    setRuntimeSettingsState: (nextRuntimeSettingsState) => {
+      runtimeSettingsState = nextRuntimeSettingsState;
+    },
     workerSlot,
     wechatWorkerSlot,
     buildStatusPayload: (lastConfigSavedAt) =>
@@ -306,7 +318,8 @@ async function main() {
         lastConfigSavedAt,
         controlApiHost,
         controlApiPort,
-        runtimeStatus
+        runtimeStatus,
+        configPath: runtimeSettingsState?.settingsPath ?? ''
       })
   });
 

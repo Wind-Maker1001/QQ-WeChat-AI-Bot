@@ -1298,6 +1298,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
         ApplyCommandResult(await _controlPlaneSession.LoadConfigAsync());
         return;
+#if false
 
         if (!IsBackendRootValid)
         {
@@ -1380,11 +1381,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             _suspendDirtyTracking = false;
             UpdateCommandStates();
         }
+#endif
     }
 
     private async Task<(BackendControlConfigResponse? ApiConfig, BackendRuntimeStatus? ApiStatus)> LoadConfigFromAuthoritativeSourceAsync()
     {
         return await _controlPlaneSession.LoadAuthoritativeConfigAsync();
+#if false
 
         return await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
             tryGetConfigAsync: (cancellationToken) => _backendControlApiService.TryGetConfigAsync(cancellationToken),
@@ -1392,6 +1395,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
             isImmediateFailure: IsImmediateControlApiFailure,
             tryRecoverControlApiAsync: () => TryRecoverControlApiAsync("load-config"));
+#endif
     }
 
     private async Task SaveConfigAsync()
@@ -1405,6 +1409,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         ApplyCommandResult(await _controlPlaneSession.SaveLocalControlPlaneAsync(ControlApiToken));
         await LoadConfigAsync();
         return;
+#if false
 
         if (!IsBackendRootValid)
         {
@@ -1454,6 +1459,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             UpdateCommandStates();
         }
+#endif
     }
 
     private async Task<bool> SaveConfigAsync(bool showUiErrors)
@@ -1462,6 +1468,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         var sessionSaveResult = await _controlPlaneSession.SaveConfigAsync(BuildConfig(), showUiErrors);
         ApplyCommandResult(sessionSaveResult, showUiErrors);
         return sessionSaveResult.Succeeded;
+#if false
 
         if (!IsBackendRootValid)
         {
@@ -1521,6 +1528,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             UpdateCommandStates();
         }
+#endif
     }
 
     private async Task StartBackendAsync()
@@ -1528,6 +1536,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SyncSessionEditorState();
         ApplyCommandResult(await _controlPlaneSession.StartBackendAsync(BuildConfig()));
         return;
+#if false
 
         try
         {
@@ -1595,6 +1604,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             UpdateCommandStates();
         }
+#endif
     }
 
     private async Task StopBackendAsync()
@@ -1602,6 +1612,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SyncSessionEditorState();
         ApplyCommandResult(await _controlPlaneSession.StopBackendAsync());
         return;
+#if false
 
         try
         {
@@ -1647,6 +1658,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             UpdateCommandStates();
         }
+#endif
     }
 
     private async Task ToggleAutoStartAsync()
@@ -2251,6 +2263,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SyncSessionEditorState();
         ApplyCommandResult(await _controlPlaneSession.PollStatusAsync(), showErrorDialog: false);
         return;
+#if false
 
         await LoadLocalEnvDocumentAsync(suppressErrors: true);
         var status = await _backendControlApiService.TryGetStatusAsync();
@@ -2292,6 +2305,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         ApplyBackendRuntimeStatus(status, true);
         ResetControlApiFailureState();
+#endif
     }
 
     private void NotifyRuntimeSnapshotChanged()

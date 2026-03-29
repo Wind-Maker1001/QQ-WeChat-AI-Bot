@@ -75,9 +75,9 @@ public sealed record DesktopSnapshotState
 
     public LocalStateSnapshotPreviewResult? LastStateRestorePreview { get; init; }
 
-    public string LastStateSnapshotText { get; init; } = string.Empty;
+    public string LastStateSnapshotText { get; init; } = "尚未导出状态快照";
 
-    public string LastStateRestoreText { get; init; } = string.Empty;
+    public string LastStateRestoreText { get; init; } = "尚未恢复状态快照";
 
     public string LastStateRestoreSummaryText { get; init; } = string.Empty;
 

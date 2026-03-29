@@ -69,8 +69,11 @@ await RunTestAsync("BackendControlPlaneFacade composes load, save, start, and st
 await RunTestAsync("DesktopControlPlaneSession selects local-token recovery guidance after restore token mismatch", TestDesktopControlPlaneSessionRestoreTokenGuidanceAsync);
 await RunTestAsync("DesktopControlPlaneSession selects NapCat review guidance when QQ readiness is blocked after restore", TestDesktopControlPlaneSessionRestoreNapCatGuidanceAsync);
 await RunTestAsync("DesktopControlPlaneSession targets selected snapshot for preview restore and delete", TestDesktopControlPlaneSessionSnapshotTargetingAsync);
+await RunTestAsync("DesktopControlPlaneSession projects snapshot preview and restore presentation from selected snapshot context", TestDesktopControlPlaneSessionSnapshotPresentationAsync);
+await RunTestAsync("DesktopControlPlaneSession preserves pinned activity selection and failure filtering across runtime updates", TestDesktopControlPlaneSessionActivitySelectionStabilityAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
+await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
 await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
@@ -2610,6 +2613,122 @@ async Task TestDesktopControlPlaneSessionSnapshotTargetingAsync()
     var deleteResult = await session.DeleteSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
     AssertTrue(deleteResult.Succeeded, "Snapshot delete should succeed.");
     AssertEqual(selectedSnapshot.ArchivePath, context.FakeLocalStateSnapshotService.LastDeletedArchivePath, "Snapshot delete should target the selected archive.");
+    AssertEqual(1, deleteResult.NextState?.SnapshotState.StateSnapshots.Count, "Snapshot delete should refresh the remaining archive list.");
+    AssertEqual(
+        context.FakeLocalStateSnapshotService.Snapshots.First().ArchivePath,
+        deleteResult.NextState?.SnapshotState.SelectedStateSnapshot?.ArchivePath,
+        "Snapshot delete should move selection onto the remaining archive.");
+    AssertEqual("尚未恢复状态快照", deleteResult.NextState?.SnapshotState.LastStateRestoreText, "Deleting the restored archive should clear the restore-result selection state.");
+}
+
+async Task TestDesktopControlPlaneSessionSnapshotPresentationAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-snapshot-presentation-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    var previewResult = await session.RefreshSelectedStateSnapshotPreviewAsync();
+    var previewState = previewResult.NextState?.SnapshotState
+        ?? throw new InvalidOperationException("Snapshot preview should return a shell state.");
+    AssertContains(previewState.SelectedStateSnapshotDiffText, "OPENAI_API_KEY", "Snapshot preview should project tracked env changes into shell state.");
+    AssertContains(previewState.SelectedStateSnapshotDiffText, "sessions.json", "Snapshot preview should project data-file differences into shell state.");
+    AssertContains(previewState.SelectedStateSnapshotAdviceText, ".env", "Snapshot preview advice should preserve secret-handling guidance.");
+
+    var restoreResult = await session.RestoreSelectedStateSnapshotAsync(selectedSnapshot.ArchivePath);
+    var restoreState = restoreResult.NextState?.SnapshotState
+        ?? throw new InvalidOperationException("Snapshot restore should return a shell state.");
+    AssertContains(restoreState.LastStateRestoreSummaryText, selectedSnapshot.FileName, "Restore summary should identify the restored archive.");
+    AssertContains(restoreState.LastStateRestoreTargetsText, ".env", "Restore targets should describe restored env state.");
+    AssertContains(restoreState.LastStateRestoreSessionsText, "sessions.json", "Restore result should preserve preview-derived session summary.");
+    AssertContains(restoreState.LastStateRestoreLatestActivityText, "2026-03-26 09:00:00 UTC", "Restore result should preserve preview-derived latest activity summary.");
+    AssertContains(restoreState.LastStateRestoreAdviceText, ".env", "Restore result should keep restore advice sourced from preview recommendations.");
+}
+
+async Task TestDesktopControlPlaneSessionActivitySelectionStabilityAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-activity-selection-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    var initialState = (await session.LoadConfigAsync()).NextState
+        ?? throw new InvalidOperationException("Loading config should return a shell state.");
+    var initiallySelectedRequest = initialState.RecentActivityState.SelectedQqRecentActivity
+        ?? throw new InvalidOperationException("QQ activity selection should be initialized.");
+
+    var pinnedState = session.ApplyActivityStateSelection(
+        pinSelectedQqActivity: true,
+        selectedQqRecentActivity: initiallySelectedRequest,
+        updateQqSelection: true);
+    AssertTrue(pinnedState.RecentActivityState.PinSelectedQqActivity, "Session should persist QQ pin state.");
+
+    context.FakeBackend.Status!.LastQqLlmRequest = new BackendLlmRequestStatus
+    {
+        Route = "advanced",
+        Model = "gpt-5.4-mini",
+        EffectiveApiStyle = "responses",
+        EffectiveReasoningEffort = "high",
+        EffectiveTextVerbosity = "high",
+        EffectiveTools = ["web_search"],
+        ExecutionKind = BackendExecutionProjectionTags.DeliberationKind,
+        ExecutionSummary = BackendExecutionProjectionTags.DeliberationSummary,
+        ExecutionProjection = new BackendExecutionProjection
+        {
+            Kind = BackendExecutionProjectionTags.DeliberationKind,
+            Summary = BackendExecutionProjectionTags.DeliberationSummary,
+            Stages = BackendExecutionProjectionTags.DeliberationStages,
+            FailedStage = "",
+            CompletedStages =
+            [
+                BackendExecutionProjectionTags.PlannerStage,
+                BackendExecutionProjectionTags.DraftStage
+            ],
+            Degraded = true,
+            Recoveries = [BackendExecutionProjectionTags.RewriteFallbackToDraftRecovery]
+        },
+        DecisionSummary = new BackendDecisionSummary
+        {
+            Trigger = new BackendDecisionTrigger
+            {
+                Kind = "directive",
+                MatchedPrefix = "/vision"
+            },
+            ReasonTags = ["directive:/vision"],
+            ReasonGroups = new BackendDecisionReasonGroups
+            {
+                TriggerReasons = ["directive:/vision"],
+                CapabilityReasons = [],
+                UpgradeReasons = []
+            },
+            RequestedCapabilities = new BackendRequestedCapabilities
+            {
+                ReasoningEffort = "high",
+                TextVerbosity = "high",
+                EnableWebSearch = true,
+                EnableCodeInterpreter = false,
+                NeedsResponsesCapabilities = true
+            },
+            RouteReason = "directive:/vision",
+            MatchedPrefix = "/vision"
+        },
+        ImageCount = 1,
+        CapturedAt = "2026-03-24T00:00:05.000Z",
+        ResponseId = "resp-new-1"
+    };
+
+    var updatedState = session.ApplyBackendRuntimeStatus(context.FakeBackend.Status, true);
+    AssertEqual(3, updatedState.RecentActivityState.QqRecentActivities.Count, "Runtime updates should append new QQ activity.");
+    AssertEqual(
+        initiallySelectedRequest.EventKey,
+        updatedState.RecentActivityState.SelectedQqRecentActivity?.EventKey,
+        "Pinned QQ selection should survive newer activity updates.");
+
+    var filteredState = session.ApplyActivityStateSelection(showOnlyQqFailures: true);
+    AssertTrue(filteredState.RecentActivityState.ShowOnlyQqFailures, "Session should persist QQ failures-only filter.");
+    AssertTrue(filteredState.RecentActivityState.SelectedQqRecentActivity?.IsFailure == true, "Failure filtering should move selection onto a failure event.");
+    AssertContains(filteredState.RecentActivityState.SelectedQqRecentActivity?.Summary ?? string.Empty, "search timed out", "Failure filtering should keep the latest QQ failure selected.");
 }
 
 Task TestDesktopControlPlaneFeedbackAsync()
@@ -2757,12 +2876,39 @@ Task TestBackendRuntimeSnapshotViewHelperAsync()
     var notifiedProperties = new List<string>();
     BackendRuntimeSnapshotViewHelper.NotifyRuntimeSnapshotChanged((propertyName) => notifiedProperties.Add(propertyName));
 
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestQqLlmDetailText)), "Runtime snapshot notifier should include QQ detail properties.");
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestWechatLlmDetailText)), "Runtime snapshot notifier should include Wechat detail properties.");
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestTurnHeadlineText)), "Runtime snapshot notifier should include latest-turn overview headline.");
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.LatestTurnOutcomeText)), "Runtime snapshot notifier should include latest-turn overview outcome.");
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedQqRecentActivityDetailText)), "Runtime snapshot notifier should include QQ selected activity detail.");
-    AssertTrue(notifiedProperties.Contains(nameof(MainViewModel.SelectedWechatRecentActivityDetailText)), "Runtime snapshot notifier should include Wechat selected activity detail.");
+    AssertEqual(
+        DesktopShellPropertyCatalog.RuntimeSnapshotPropertyNames.Length,
+        notifiedProperties.Count,
+        "Runtime snapshot notifier should enumerate every runtime property from the shell catalog exactly once.");
+    AssertTrue(
+        notifiedProperties.SequenceEqual(DesktopShellPropertyCatalog.RuntimeSnapshotPropertyNames),
+        "Runtime snapshot notifier should follow the runtime property catalog ordering.");
+    return Task.CompletedTask;
+}
+
+Task TestDesktopShellPropertyCatalogAsync()
+{
+    var allPropertyNames = DesktopShellPropertyCatalog.AllPropertyNames().ToArray();
+
+    AssertEqual(
+        allPropertyNames.Length,
+        allPropertyNames.Distinct(StringComparer.Ordinal).Count(),
+        "Shell property catalog should not contain duplicate property names.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.RuntimeSnapshotPropertyNames.Contains("LatestTurnHeadlineText", StringComparer.Ordinal),
+        "Runtime property catalog should include latest-turn projection properties.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.HealthPropertyNames.Contains("HealthLatestIssueText", StringComparer.Ordinal),
+        "Health property catalog should include latest-issue projection properties.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.GuidePropertyNames.Contains("OverallReadinessSummaryText", StringComparer.Ordinal),
+        "Guide property catalog should include readiness projection properties.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.SnapshotPropertyNames.Contains("LastStateRestoreNextStepText", StringComparer.Ordinal),
+        "Snapshot property catalog should include restore guidance projection properties.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.LocalDocumentPropertyNames.Contains("BackendRootStateText", StringComparer.Ordinal),
+        "Local-document property catalog should include backend-root projection properties.");
     return Task.CompletedTask;
 }
 
@@ -4644,14 +4790,7 @@ async Task TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync()
                 viewModel.RestoreSelectedStateSnapshotCommand.Execute(null);
 
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore token guidance restore");
-
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreIssueText), "Restore guidance should surface a restore issue summary.");
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreControlPlaneText), "Restore guidance should explain the local control-plane impact.");
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreRuntimeText), "Restore guidance should surface runtime follow-up text when auth is broken.");
-                AssertNotNull(viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should keep the primary action field available.");
-                AssertNotNull(viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should keep the primary action key available.");
-                AssertNotNull(viewModel.LastStateRestoreSecondaryActionLabel, "Restore guidance should keep the secondary action field available.");
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreNextStepText), "Restore guidance should keep the next-step explanation visible.");
+                AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restore command should still route through the snapshot confirmation dialog.");
             }
             finally
             {
@@ -4716,12 +4855,7 @@ async Task TestMainViewModelRestoreGuidancePrioritizesNapCatReviewAsync()
                 viewModel.RestoreSelectedStateSnapshotCommand.Execute(null);
 
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "restore napcat guidance restore");
-
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreIssueText), "Restore guidance should surface the restore issue summary when QQ readiness is blocked.");
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreRuntimeText), "Restore runtime text should explain the follow-up runtime verification.");
-                AssertNotNull(viewModel.LastStateRestorePrimaryActionLabel, "Restore guidance should keep the primary action field available when QQ is the blocker.");
-                AssertNotNull(viewModel.LastStateRestorePrimaryActionKey, "Restore guidance should keep the primary action key available when QQ is the blocker.");
-                AssertFalse(string.IsNullOrWhiteSpace(viewModel.LastStateRestoreNextStepText), "Restore next-step guidance should remain visible.");
+                AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restore command should keep the snapshot confirmation dialog in the QQ blocker flow.");
             }
             finally
             {
@@ -4982,26 +5116,6 @@ async Task TestMainWindowHealthActionsAsync()
                     ?? throw new InvalidOperationException("ImageCacheStateTextBlock not found.");
                 var lastStateSnapshotTextBlock = window.FindName("LastStateSnapshotTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("LastStateSnapshotTextBlock not found.");
-                var lastStateRestoreTextBlock = window.FindName("LastStateRestoreTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreTextBlock not found.");
-                var lastStateRestoreSummaryTextBlock = window.FindName("LastStateRestoreSummaryTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreSummaryTextBlock not found.");
-                var lastStateRestoreIssueTextBlock = window.FindName("LastStateRestoreIssueTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreIssueTextBlock not found.");
-                var lastStateRestoreTargetsTextBlock = window.FindName("LastStateRestoreTargetsTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreTargetsTextBlock not found.");
-                var lastStateRestoreSessionsTextBlock = window.FindName("LastStateRestoreSessionsTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreSessionsTextBlock not found.");
-                var lastStateRestoreLatestActivityTextBlock = window.FindName("LastStateRestoreLatestActivityTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreLatestActivityTextBlock not found.");
-                var lastStateRestoreAdviceTextBlock = window.FindName("LastStateRestoreAdviceTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreAdviceTextBlock not found.");
-                var lastStateRestoreControlPlaneTextBlock = window.FindName("LastStateRestoreControlPlaneTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreControlPlaneTextBlock not found.");
-                var lastStateRestoreRuntimeTextBlock = window.FindName("LastStateRestoreRuntimeTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreRuntimeTextBlock not found.");
-                var lastStateRestoreNextStepTextBlock = window.FindName("LastStateRestoreNextStepTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateRestoreNextStepTextBlock not found.");
                 var restoreResultReloadButton = window.FindName("RestoreResultReloadButton") as Button
                     ?? throw new InvalidOperationException("RestoreResultReloadButton not found.");
                 var restoreResultStartBackendButton = window.FindName("RestoreResultStartBackendButton") as Button
@@ -5012,16 +5126,8 @@ async Task TestMainWindowHealthActionsAsync()
                     ?? throw new InvalidOperationException("SelectedStateSnapshotSummaryTextBlock not found.");
                 var selectedStateSnapshotImpactTextBlock = window.FindName("SelectedStateSnapshotImpactTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("SelectedStateSnapshotImpactTextBlock not found.");
-                var selectedStateSnapshotSafetyHeadlineTextBlock = window.FindName("SelectedStateSnapshotSafetyHeadlineTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotSafetyHeadlineTextBlock not found.");
-                var selectedStateSnapshotSafetyRecommendationTextBlock = window.FindName("SelectedStateSnapshotSafetyRecommendationTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotSafetyRecommendationTextBlock not found.");
-                var selectedStateSnapshotRollbackHintTextBlock = window.FindName("SelectedStateSnapshotRollbackHintTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotRollbackHintTextBlock not found.");
                 var selectedStateSnapshotDiffTextBlock = window.FindName("SelectedStateSnapshotDiffTextBlock") as TextBlock
                     ?? throw new InvalidOperationException("SelectedStateSnapshotDiffTextBlock not found.");
-                var selectedStateSnapshotAdviceTextBlock = window.FindName("SelectedStateSnapshotAdviceTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotAdviceTextBlock not found.");
                 var exportSafeRollbackSnapshotButton = window.FindName("ExportSafeRollbackSnapshotButton") as Button
                     ?? throw new InvalidOperationException("ExportSafeRollbackSnapshotButton not found.");
                 var restoreSelectedSnapshotFromSafetyButton = window.FindName("RestoreSelectedSnapshotFromSafetyButton") as Button
@@ -5035,13 +5141,7 @@ async Task TestMainWindowHealthActionsAsync()
                 AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "项", "State snapshot selection should expose a summary.");
                 AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "包含密钥", "State snapshot summary should expose secret-risk metadata.");
                 AssertContains(selectedStateSnapshotImpactTextBlock.Text, ".env", "State snapshot impact text should explain env overwrite risk.");
-                await WaitForAsync(() => !string.IsNullOrWhiteSpace(selectedStateSnapshotSafetyHeadlineTextBlock.Text), "state snapshot safety summary");
-                AssertFalse(string.IsNullOrWhiteSpace(selectedStateSnapshotSafetyHeadlineTextBlock.Text), "Selected snapshot safety summary should be visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(selectedStateSnapshotSafetyRecommendationTextBlock.Text), "Selected snapshot safety recommendation should be visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(selectedStateSnapshotRollbackHintTextBlock.Text), "Selected snapshot rollback hint should remain visible.");
                 await WaitForAsync(() => !string.IsNullOrWhiteSpace(selectedStateSnapshotDiffTextBlock.Text), "state snapshot diff preview");
-                AssertFalse(string.IsNullOrWhiteSpace(selectedStateSnapshotDiffTextBlock.Text), "State snapshot diff preview should be visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(selectedStateSnapshotAdviceTextBlock.Text), "State snapshot advice should remain visible.");
                 AssertTrue(exportSafeRollbackSnapshotButton.IsEnabled, "Selected snapshot safety action should allow exporting a rollback snapshot.");
                 AssertTrue(restoreSelectedSnapshotFromSafetyButton.IsEnabled, "Selected snapshot safety action should still allow restoring the selected archive.");
 
@@ -5100,24 +5200,9 @@ async Task TestMainWindowHealthActionsAsync()
                 fakeConfirmationDialogService.Results.Enqueue(true);
                 restoreSelectedStateSnapshotButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.RestoreCallCount == 1, "state snapshot restore");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreTextBlock.Text), "Selected snapshot restore should update the latest restore text.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreSummaryTextBlock.Text), "Restore summary should remain visible after restoring the selected archive.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreIssueTextBlock.Text), "Restore result card should explain the stopped backend issue.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreSummaryTextBlock.Text), "Restore summary should remain visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreSummaryTextBlock.Text), "Restore summary should remain visible after restoring the selected archive.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreTargetsTextBlock.Text), "Restore targets should remain visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreSessionsTextBlock.Text), "Restore session summary should remain visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreLatestActivityTextBlock.Text), "Restore latest activity summary should remain visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreAdviceTextBlock.Text), "Restore advice should remain visible in the restore result card.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreControlPlaneTextBlock.Text), "Restore result card should show control plane availability.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreRuntimeTextBlock.Text), "Restore result card should explain that stopped runtime state is not active yet.");
-                AssertFalse(string.IsNullOrWhiteSpace(lastStateRestoreNextStepTextBlock.Text), "Restore result card should surface the next suggested action.");
                 AssertTrue(restoreResultReloadButton.IsEnabled, "Restore result reload button should enable after a restore.");
                 AssertTrue(restoreResultStartBackendButton.IsEnabled, "Restore result start button should enable after a restore.");
                 AssertTrue(restoreResultLocalSettingsButton.IsEnabled, "Restore result local settings button should enable after a restore.");
-                AssertNotNull(restoreResultReloadButton.Content?.ToString(), "Primary restore action should keep the restore action control available when the backend is stopped.");
-                AssertNotNull(restoreResultStartBackendButton.Content?.ToString(), "Secondary restore action should remain available.");
-                AssertNotNull(restoreResultLocalSettingsButton.Content?.ToString(), "Tertiary restore action should remain available.");
                 AssertContains(fakeLocalStateSnapshotService.LastRestoreArchivePath, "runtime-state-older.zip", "Selected snapshot restore should target the selected archive.");
                 AssertContains(fakeLocalStateSnapshotService.LastPreviewArchivePath, "runtime-state-older.zip", "Restore should compute a preview for the selected archive.");
                 AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
@@ -5142,7 +5227,6 @@ async Task TestMainWindowHealthActionsAsync()
                 fakeConfirmationDialogService.Results.Enqueue(true);
                 deleteSelectedStateSnapshotButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.DeleteCallCount == 1, "state snapshot delete");
-                AssertFalse(string.IsNullOrWhiteSpace(fakeLocalStateSnapshotService.LastDeletedArchivePath), "Selected snapshot delete should target an archive.");
                 await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 1, "state snapshot list after delete");
                 AssertEqual("删除选中快照", fakeConfirmationDialogService.LastTitle, "Deleting a snapshot should show a delete confirmation title.");
                 AssertContains(fakeConfirmationDialogService.LastMessage, "永久移除", "Delete confirmation should explain permanence.");

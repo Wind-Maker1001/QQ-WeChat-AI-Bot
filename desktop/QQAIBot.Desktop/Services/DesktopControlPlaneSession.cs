@@ -759,13 +759,21 @@ public sealed class DesktopControlPlaneSession
 
     public async Task<DesktopCommandResult> RestoreLatestStateSnapshotAsync()
     {
+        var latestSnapshot = (await _dependencies.LocalStateSnapshotService.ListAsync(
+            _shellState.LocalDocumentState.BackendRootPath)).FirstOrDefault();
+        var preview = latestSnapshot is null
+            ? null
+            : await _dependencies.LocalStateSnapshotService.PreviewAsync(
+                _shellState.LocalDocumentState.BackendRootPath,
+                latestSnapshot.ArchivePath);
         var result = await _dependencies.LocalStateSnapshotService.RestoreLatestAsync(_shellState.LocalDocumentState.BackendRootPath);
         _shellState = _shellState with
         {
             SnapshotState = _shellState.SnapshotState with
             {
                 LastStateRestoreText = result.ArchivePath,
-                LastStateRestoreResult = result
+                LastStateRestoreResult = result,
+                LastStateRestorePreview = preview
             }
         };
         await LoadConfigAsync();
@@ -775,6 +783,14 @@ public sealed class DesktopControlPlaneSession
 
     public async Task<DesktopCommandResult> RestoreSelectedStateSnapshotAsync(string archivePath)
     {
+        var preview = _shellState.SnapshotState.SelectedStateSnapshotPreview;
+        if (!string.Equals(preview?.ArchivePath, archivePath, StringComparison.OrdinalIgnoreCase))
+        {
+            preview = await _dependencies.LocalStateSnapshotService.PreviewAsync(
+                _shellState.LocalDocumentState.BackendRootPath,
+                archivePath);
+        }
+
         var result = await _dependencies.LocalStateSnapshotService.RestoreAsync(
             _shellState.LocalDocumentState.BackendRootPath,
             archivePath);
@@ -783,7 +799,8 @@ public sealed class DesktopControlPlaneSession
             SnapshotState = _shellState.SnapshotState with
             {
                 LastStateRestoreText = result.ArchivePath,
-                LastStateRestoreResult = result
+                LastStateRestoreResult = result,
+                LastStateRestorePreview = preview
             }
         };
         await LoadConfigAsync();
@@ -795,6 +812,21 @@ public sealed class DesktopControlPlaneSession
     {
         await _dependencies.LocalStateSnapshotService.DeleteAsync(archivePath);
         await RefreshStateSnapshotsAsyncInternal(selectArchivePath: null);
+
+        if (string.Equals(_shellState.SnapshotState.LastStateRestoreText, archivePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _shellState = _shellState with
+            {
+                SnapshotState = _shellState.SnapshotState with
+                {
+                    LastStateRestoreText = "尚未恢复状态快照",
+                    LastStateRestoreResult = null,
+                    LastStateRestorePreview = null
+                }
+            };
+            ApplyRestorePresentationCore();
+        }
+
         return BuildResult(true, _shellState.UiFeedbackState.StatusText);
     }
 

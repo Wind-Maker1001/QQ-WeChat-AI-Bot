@@ -93,8 +93,8 @@ await RunTestAsync("Desktop app secondary process restores primary instance and 
 await RunTestAsync("MainWindow smoke automation binds controls and routes save/start/stop commands", TestMainWindowSmokeAutomationAsync);
 await RunTestAsync("MainViewModel dispose does not stop backend launcher ownership after attach", TestMainViewModelDisposeDoesNotStopBackendProcessAsync);
 await RunTestAsync("MainViewModel auto-recovers control API before showing outage warning", TestMainViewModelAutoRecoversControlApiBeforeWarningAsync);
-await RunTestAsync("MainViewModel rejects unknown control API config failures before file fallback", TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync);
-await RunTestAsync("MainViewModel rejects unauthorized control API config failures before file fallback", TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
+await RunTestAsync("DesktopControlPlaneSession rejects unknown control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnknownConfigFailureBeforeFallbackAsync);
+await RunTestAsync("DesktopControlPlaneSession rejects unauthorized control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
 await RunTestAsync("MainViewModel loads through recovered control API before file fallback", TestMainViewModelLoadsThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel keeps edited BOT_SYSTEM_PROMPT when save response omits it", TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsItAsync);
@@ -4113,7 +4113,7 @@ async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
     }
 }
 
-async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
+async Task TestDesktopControlPlaneSessionRejectsUnknownConfigFailureBeforeFallbackAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-unknown-config-");
     var rootPath = context.RootPath;
@@ -4136,38 +4136,14 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
     {
         Directory.SetCurrentDirectory(rootPath);
 
-        await RunOnStaThreadAsync(async () =>
-        {
-            var viewModel = new MainViewModel(
-                fakeAutoStart,
-                fakeLocalFallbackReader,
-                fakeBackend,
-                fakeBotProcess,
-                fakeActivityStateStore,
-                fakeLocalBootstrapStore);
+        var session = CreateDesktopControlPlaneSessionForTests(context);
 
-            try
-            {
-                var loadMethod = typeof(MainViewModel).GetMethod(
-                    "LoadConfigFromAuthoritativeSourceAsync",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync not found.");
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => session.LoadAuthoritativeConfigAsync(),
+            "Unknown config failures should throw before local fallback is considered.");
 
-                var loadTask = loadMethod.Invoke(viewModel, []) as Task
-                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync did not return a Task.");
-
-                await AssertThrowsAsync<InvalidOperationException>(
-                    () => loadTask,
-                    "Unknown config failures should throw before local fallback is considered.");
-
-                AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Unknown config failures should not touch the local fallback reader.");
-                AssertEqual(0, fakeBotProcess.StartCallCount, "Unknown config failures should not trigger control API recovery.");
-            }
-            finally
-            {
-                await viewModel.DisposeAsync();
-            }
-        });
+        AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Unknown config failures should not touch the local fallback reader.");
+        AssertEqual(0, fakeBotProcess.StartCallCount, "Unknown config failures should not trigger control API recovery.");
     }
     finally
     {
@@ -4175,7 +4151,7 @@ async Task TestMainViewModelRejectsUnknownConfigFailureBeforeFallbackAsync()
     }
 }
 
-async Task TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync()
+async Task TestDesktopControlPlaneSessionRejectsUnauthorizedConfigFailureBeforeFallbackAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-unauthorized-config-");
     var rootPath = context.RootPath;
@@ -4195,37 +4171,14 @@ async Task TestMainViewModelRejectsUnauthorizedConfigFailureBeforeFallbackAsync(
     {
         Directory.SetCurrentDirectory(rootPath);
 
-        await RunOnStaThreadAsync(async () =>
-        {
-            var viewModel = new MainViewModel(
-                fakeAutoStart,
-                fakeLocalFallbackReader,
-                fakeBackend,
-                fakeBotProcess,
-                fakeActivityStateStore);
+        var session = CreateDesktopControlPlaneSessionForTests(context);
 
-            try
-            {
-                var loadMethod = typeof(MainViewModel).GetMethod(
-                    "LoadConfigFromAuthoritativeSourceAsync",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync not found.");
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => session.LoadAuthoritativeConfigAsync(),
+            "Unauthorized config failures should throw before local fallback is considered.");
 
-                var loadTask = loadMethod.Invoke(viewModel, []) as Task
-                    ?? throw new InvalidOperationException("LoadConfigFromAuthoritativeSourceAsync did not return a Task.");
-
-                await AssertThrowsAsync<InvalidOperationException>(
-                    () => loadTask,
-                    "Unauthorized config failures should throw before local fallback is considered.");
-
-                AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Unauthorized config failures should not touch the local fallback reader.");
-                AssertEqual(0, fakeBotProcess.StartCallCount, "Unauthorized config failures should not trigger control API recovery.");
-            }
-            finally
-            {
-                await viewModel.DisposeAsync();
-            }
-        });
+        AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Unauthorized config failures should not touch the local fallback reader.");
+        AssertEqual(0, fakeBotProcess.StartCallCount, "Unauthorized config failures should not trigger control API recovery.");
     }
     finally
     {

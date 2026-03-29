@@ -22,8 +22,9 @@ public static class BackendLlmProjectionFormatter
             request.ExecutionProjection,
             request.ExecutionKind,
             request.ExecutionSummary);
+        var modelSummary = FormatModelSummary(request);
 
-        return $"At {capturedAt} | {decisionSummary} | {executionSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
+        return $"At {capturedAt} | {decisionSummary} | {executionSummary} | {modelSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
     }
 
     public static string FormatRequestDecisionTrigger(BackendLlmRequestStatus? request)
@@ -188,6 +189,16 @@ public static class BackendLlmProjectionFormatter
     private static string DefaultIfBlank(string? value, string fallback)
     {
         return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static string FormatModelSummary(BackendLlmRequestStatus request)
+    {
+        var actualModel = DefaultIfBlank(request.Model, "unknown-model");
+        var configuredModel = DefaultIfBlank(request.ConfiguredModel, actualModel);
+
+        return string.Equals(actualModel, configuredModel, StringComparison.Ordinal)
+            ? $"model={actualModel}"
+            : $"model={actualModel} | configured_model={configuredModel}";
     }
 
     private static string FormatCapturedAt(string capturedAt)

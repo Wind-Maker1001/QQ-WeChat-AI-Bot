@@ -12,6 +12,8 @@ public sealed class BackendLlmRequestStatus
 
     public string MatchedPrefix { get; set; } = string.Empty;
 
+    public string ConfiguredModel { get; set; } = string.Empty;
+
     public string Model { get; set; } = string.Empty;
 
     public string ConfiguredApiStyle { get; set; } = string.Empty;

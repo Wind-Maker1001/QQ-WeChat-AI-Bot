@@ -464,6 +464,7 @@ export function createOpenAIProvider({
     return {
       ...reply,
       route: selectedClient.routeName,
+      configuredModel: selectedClient.model,
       model: selectedClient.model,
       apiStyle:
         selectedClient.apiStyle === effectiveApiStyle

@@ -105,6 +105,7 @@ function normalizeLlmRequestStatus(status) {
     route: typeof status.route === 'string' ? status.route : '',
     routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
     matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
+    configuredModel: typeof status.configuredModel === 'string' ? status.configuredModel : '',
     model: typeof status.model === 'string' ? status.model : '',
     configuredApiStyle:
       typeof status.configuredApiStyle === 'string' ? status.configuredApiStyle : '',

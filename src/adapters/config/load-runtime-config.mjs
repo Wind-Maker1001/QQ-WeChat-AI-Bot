@@ -16,6 +16,8 @@ const DEFAULT_BOT_PREFIX = '/ai';
 const DEFAULT_MAX_OUTPUT_CHARS = 1600;
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
 const DEFAULT_WECHAT_BOT_PREFIX = '/ai';
+const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
+const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
 export function loadRuntimeConfig({
   cwd = process.cwd(),
@@ -52,6 +54,10 @@ export function loadRuntimeConfig({
     env.OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER,
     false
   );
+  const deepseekFallbackEnabled = parseBoolean(env.DEEPSEEK_FALLBACK_ENABLED, false);
+  const deepseekApiKey = env.DEEPSEEK_API_KEY ?? '';
+  const deepseekModel = env.DEEPSEEK_MODEL || DEFAULT_DEEPSEEK_MODEL;
+  const deepseekBaseUrl = env.DEEPSEEK_BASE_URL || DEFAULT_DEEPSEEK_BASE_URL;
   const botSystemPrompt =
     typeof env.BOT_SYSTEM_PROMPT === 'string' && env.BOT_SYSTEM_PROMPT.trim()
       ? env.BOT_SYSTEM_PROMPT
@@ -83,6 +89,12 @@ export function loadRuntimeConfig({
         enableCodeInterpreter: advancedOpenAiEnableCodeInterpreter
       },
       advancedTriggerPrefixes
+    },
+    deepseek: {
+      fallbackEnabled: deepseekFallbackEnabled,
+      apiKey: deepseekApiKey,
+      model: deepseekModel,
+      baseURL: deepseekBaseUrl
     },
     napcat: {
       wsUrl: env.NAPCAT_WS_URL || DEFAULT_NAPCAT_WS_URL,

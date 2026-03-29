@@ -10,6 +10,8 @@ export const EXECUTION_STAGE_LOCAL_CAPABILITY_REPLY = 'local-capability-reply';
 
 export const EXECUTION_RECOVERY_PLANNER_FAILED = 'planner-failed';
 export const EXECUTION_RECOVERY_REWRITE_FALLBACK_TO_DRAFT = 'rewrite-fallback-to-draft';
+export const EXECUTION_RECOVERY_PROVIDER_FALLBACK_TO_DEEPSEEK =
+  'provider-fallback-to-deepseek';
 
 export const DELIBERATION_EXECUTION_STAGES = Object.freeze([
   EXECUTION_STAGE_PLANNER,

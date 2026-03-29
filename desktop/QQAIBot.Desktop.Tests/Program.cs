@@ -600,7 +600,11 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
             OpenAiDefaultEnableWebSearch = "false",
             OpenAiAdvancedEnableWebSearch = "true",
             OpenAiDefaultEnableCodeInterpreter = "false",
-            OpenAiAdvancedEnableCodeInterpreter = "true"
+            OpenAiAdvancedEnableCodeInterpreter = "true",
+            DeepSeekFallbackEnabled = "true",
+            DeepSeekApiKey = "deepseek-key",
+            DeepSeekModel = "deepseek-chat",
+            DeepSeekBaseUrl = "https://api.deepseek.com/v1"
         }
     };
 
@@ -615,6 +619,10 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
     AssertContains(envText, "OPENAI_ADVANCED_ENABLE_WEB_SEARCH=true", "Saved env should contain advanced web search toggle.");
     AssertContains(envText, "OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER=false", "Saved env should contain default code interpreter toggle.");
     AssertContains(envText, "OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER=true", "Saved env should contain advanced code interpreter toggle.");
+    AssertContains(envText, "DEEPSEEK_FALLBACK_ENABLED=true", "Saved env should contain DeepSeek fallback toggle.");
+    AssertContains(envText, "DEEPSEEK_API_KEY=deepseek-key", "Saved env should contain DeepSeek API key.");
+    AssertContains(envText, "DEEPSEEK_MODEL=deepseek-chat", "Saved env should contain DeepSeek model.");
+    AssertContains(envText, "DEEPSEEK_BASE_URL=https://api.deepseek.com/v1", "Saved env should contain DeepSeek base URL.");
     AssertContains(envText, "BOT_SYSTEM_PROMPT=Base prompt line 1\\nBase prompt line 2", "Saved env should contain bot system prompt.");
 
     var loadedDocument = await reader.LoadAsync(rootPath);
@@ -627,6 +635,10 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
     AssertEqual("true", loadedDocument.Config.OpenAiAdvancedEnableWebSearch, "Advanced web search toggle should round-trip.");
     AssertEqual("false", loadedDocument.Config.OpenAiDefaultEnableCodeInterpreter, "Default code interpreter toggle should round-trip.");
     AssertEqual("true", loadedDocument.Config.OpenAiAdvancedEnableCodeInterpreter, "Advanced code interpreter toggle should round-trip.");
+    AssertEqual("true", loadedDocument.Config.DeepSeekFallbackEnabled, "DeepSeek fallback toggle should round-trip.");
+    AssertEqual("deepseek-key", loadedDocument.Config.DeepSeekApiKey, "DeepSeek API key should round-trip.");
+    AssertEqual("deepseek-chat", loadedDocument.Config.DeepSeekModel, "DeepSeek model should round-trip.");
+    AssertEqual("https://api.deepseek.com/v1", loadedDocument.Config.DeepSeekBaseUrl, "DeepSeek base URL should round-trip.");
 }
 
 Task TestPathDiscoveryServiceBackendRootAsync()
@@ -879,6 +891,9 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                             new
                             {
                                 openAiApiKey = "test-key",
+                                deepSeekFallbackEnabled = "true",
+                                deepSeekModel = "deepseek-chat",
+                                deepSeekBaseUrl = "https://api.deepseek.com/v1",
                                 allowedChatIds = "chat-a,chat-b",
                                 allowedUserIds = "user-a",
                                 envPath = "D:\\temp\\.env",
@@ -903,6 +918,7 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                                     route = "default",
                                     routeReason = "directive:/ai+web_search",
                                     matchedPrefix = "/ai",
+                                    configuredModel = "gpt-5.4",
                                     model = "gpt-5.4",
                                     effectiveApiStyle = "responses",
                                     effectiveReasoningEffort = "medium",
@@ -960,6 +976,10 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                             new
                             {
                                 openAiApiKey = "test-key",
+                                deepSeekFallbackEnabled = "true",
+                                deepSeekApiKey = "deepseek-key",
+                                deepSeekModel = "deepseek-chat",
+                                deepSeekBaseUrl = "https://api.deepseek.com/v1",
                                 allowedChatIds = "chat-x,chat-y",
                                 allowedUserIds = "user-a",
                                 envPath = "D:\\temp\\.env",
@@ -985,6 +1005,8 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
 
     var config = await service.TryGetConfigAsync() ?? throw new InvalidOperationException("Expected config response.");
     AssertEqual("chat-a,chat-b", config.AllowedChatIds, "Config should deserialize allowedChatIds.");
+    AssertEqual("true", config.DeepSeekFallbackEnabled, "Config should deserialize DeepSeek fallback toggle.");
+    AssertEqual("deepseek-chat", config.DeepSeekModel, "Config should deserialize DeepSeek model.");
 
     var status = await service.TryGetStatusAsync() ?? throw new InvalidOperationException("Expected status response.");
     AssertTrue(status.RuntimeActive, "RuntimeActive should deserialize from camelCase.");
@@ -993,6 +1015,7 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
     AssertTrue(status.WechatBridgeConnected, "WechatBridgeConnected should deserialize from camelCase.");
     AssertTrue(status.WechatRuntimeReady, "WechatRuntimeReady should deserialize from camelCase.");
     AssertEqual("default", status.LastQqLlmRequest?.Route ?? string.Empty, "LastQqLlmRequest route should deserialize from camelCase.");
+    AssertEqual("gpt-5.4", status.LastQqLlmRequest?.ConfiguredModel ?? string.Empty, "LastQqLlmRequest configured model should deserialize from camelCase.");
     AssertEqual("responses", status.LastQqLlmRequest?.EffectiveApiStyle ?? string.Empty, "LastQqLlmRequest api style should deserialize from camelCase.");
     AssertEqual(BackendExecutionProjectionTags.DirectKind, status.LastQqLlmRequest?.ExecutionKind ?? string.Empty, "LastQqLlmRequest execution kind should deserialize from camelCase.");
     AssertEqual(BackendExecutionProjectionTags.DirectKind, status.LastQqLlmRequest?.ExecutionSummary ?? string.Empty, "LastQqLlmRequest execution summary should deserialize from camelCase.");
@@ -1010,11 +1033,18 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
         new BotConfig
         {
             OpenAiApiKey = "test-key",
+            DeepSeekFallbackEnabled = "true",
+            DeepSeekApiKey = "deepseek-key",
+            DeepSeekModel = "deepseek-chat",
+            DeepSeekBaseUrl = "https://api.deepseek.com/v1",
             AllowedChatIds = "chat-x,chat-y",
             AllowedUserIds = "user-a"
         }) ?? throw new InvalidOperationException("Expected save response.");
     AssertEqual("chat-x,chat-y", saveResult.AllowedChatIds, "Save response should deserialize allowedChatIds.");
+    AssertEqual("deepseek-key", saveResult.DeepSeekApiKey, "Save response should deserialize DeepSeek API key.");
     AssertContains(seenPutBody, "\"allowedChatIds\":\"chat-x,chat-y\"", "PUT body should use camelCase allowedChatIds.");
+    AssertContains(seenPutBody, "\"deepSeekFallbackEnabled\":\"true\"", "PUT body should include DeepSeek fallback toggle.");
+    AssertContains(seenPutBody, "\"deepSeekApiKey\":\"deepseek-key\"", "PUT body should include DeepSeek API key.");
     AssertDoesNotContain(seenPutBody, "allowedGroupIds", "PUT body should not contain legacy field.");
     AssertTrue(seenAuthorizationHeaders.All(static header => header == "Bearer desktop-secret"), "Control API service should send the configured bearer token on every request.");
 
@@ -1071,6 +1101,8 @@ Task TestBackendLlmProjectionFormatterAsync()
             RouteReason = "directive:/gpt",
             MatchedPrefix = "/gpt",
             CapturedAt = "2026-03-24T00:00:01.000Z",
+            ConfiguredModel = "gpt-5.4",
+            Model = "deepseek-chat",
             EffectiveReasoningEffort = "high",
             EffectiveTextVerbosity = "high",
             EffectiveTools = ["web_search", "code_interpreter"],
@@ -1104,6 +1136,7 @@ Task TestBackendLlmProjectionFormatterAsync()
     AssertContains(requestDetail, "execution=deliberation", "Request detail should include execution kind.");
     AssertContains(requestDetail, "completed=planner->draft", "Request detail should include completed stages when degraded.");
     AssertContains(requestDetail, "recoveries=rewrite-fallback-to-draft", "Request detail should include recovery tags.");
+    AssertContains(requestDetail, "configured_model=gpt-5.4", "Request detail should include configured-vs-actual model context.");
 
     var failureDetail = BackendLlmProjectionFormatter.FormatFailureDetail(
         new BackendLlmFailureStatus
@@ -1148,8 +1181,9 @@ Task TestBackendActivityProjectionFormatterAsync()
     var request = new BackendLlmRequestStatus
     {
         Route = "advanced",
-        Model = "gpt-5.4",
-        EffectiveApiStyle = "responses",
+        ConfiguredModel = "gpt-5.4",
+        Model = "deepseek-chat",
+        EffectiveApiStyle = "chat_completions",
         CapturedAt = "2026-03-24T00:00:05.000Z"
     };
     var failure = new BackendLlmFailureStatus
@@ -1160,7 +1194,7 @@ Task TestBackendActivityProjectionFormatterAsync()
     };
 
     AssertEqual(
-        "advanced / gpt-5.4 / responses",
+        "advanced / deepseek-chat / chat_completions (configured gpt-5.4)",
         BackendActivityProjectionFormatter.FormatRequestSummary(request, "empty"),
         "Activity formatter should build request summaries.");
     AssertContains(
@@ -1173,11 +1207,11 @@ Task TestBackendActivityProjectionFormatterAsync()
                 new BackendRecentActivityItem
                 {
                     EventType = "Request",
-                    Summary = "advanced / gpt-5.4 / responses"
+                    Summary = "advanced / deepseek-chat / chat_completions (configured gpt-5.4)"
                 }
             ],
             "empty"),
-        "Request | advanced / gpt-5.4 / responses",
+        "Request | advanced / deepseek-chat / chat_completions (configured gpt-5.4)",
         "Activity formatter should render recent activity lists.");
     AssertEqual(
         "Recovered after failure",
@@ -1329,6 +1363,47 @@ Task TestBackendLatestTurnOverviewBuilderAsync()
     AssertContains(localReplyOverview.Outcome, "未调用 LLM", "Latest-turn overview should explicitly state when the turn stayed local.");
     AssertEqual("查看最近活动", localReplyOverview.ActionLabel, "Successful latest turns should route to recent-activity review.");
     AssertEqual(DesktopHealthActionKeys.FocusLatestActivity, localReplyOverview.ActionKey, "Successful latest turns should expose the generic recent-activity action.");
+
+    var fallbackOverview = BackendLatestTurnOverviewBuilder.Build(
+        new BackendRuntimeSnapshotViewState
+        {
+            LastQqLlmRequest = new BackendLlmRequestStatus
+            {
+                Route = "default",
+                ConfiguredModel = "gpt-5.4",
+                Model = "deepseek-chat",
+                EffectiveApiStyle = "chat_completions",
+                CapturedAt = "2026-03-24T00:00:07.000Z",
+                ExecutionKind = BackendExecutionProjectionTags.DirectKind,
+                ExecutionProjection = new BackendExecutionProjection
+                {
+                    Kind = BackendExecutionProjectionTags.DirectKind,
+                    CompletedStages = [BackendExecutionProjectionTags.DirectStage],
+                    Degraded = true,
+                    Recoveries = ["provider-fallback-to-deepseek"]
+                },
+                DecisionSummary = new BackendDecisionSummary
+                {
+                    Trigger = new BackendDecisionTrigger
+                    {
+                        Kind = "default"
+                    },
+                    ReasonGroups = new BackendDecisionReasonGroups
+                    {
+                        CapabilityReasons = ["default"],
+                        UpgradeReasons = []
+                    },
+                    RequestedCapabilities = new BackendRequestedCapabilities
+                    {
+                        EnableWebSearch = false,
+                        EnableCodeInterpreter = false
+                    },
+                    RouteReason = "default"
+                }
+            }
+        });
+    AssertContains(fallbackOverview.Outcome, "DeepSeek", "Latest-turn overview should call out provider fallback recoveries.");
+    AssertContains(fallbackOverview.Outcome, "GPT", "Latest-turn overview should explain the original provider failure path.");
 
     var emptyOverview = BackendLatestTurnOverviewBuilder.Build(new BackendRuntimeSnapshotViewState());
     AssertContains(emptyOverview.Headline, "还没有最近的 QQ 或微信活动", "Latest-turn overview should expose a calm empty state when nothing has run yet.");
@@ -1837,8 +1912,9 @@ Task TestBackendRecentActivityProjectorAsync()
     var request = new BackendLlmRequestStatus
     {
         Route = "advanced",
-        Model = "gpt-5.4",
-        EffectiveApiStyle = "responses",
+        ConfiguredModel = "gpt-5.4",
+        Model = "deepseek-chat",
+        EffectiveApiStyle = "chat_completions",
         CapturedAt = "2026-03-24T00:00:04.000Z",
         ResponseId = "resp-1"
     };
@@ -1861,6 +1937,7 @@ Task TestBackendRecentActivityProjectorAsync()
     AssertEqual(3, pinnedResult.Items.Count, "Recent activity projector should append new request and failure events.");
     AssertEqual("Failure", pinnedResult.Items[0].EventType, "Newest failure should be inserted first.");
     AssertEqual("Request", pinnedResult.Items[1].EventType, "New request should remain ahead of older history.");
+    AssertContains(pinnedResult.Items[1].Summary, "configured gpt-5.4", "Request summaries should retain configured-vs-actual model context.");
     AssertEqual(existingItem, pinnedResult.SelectedItem, "Pinned selection should stay on the existing item.");
 
     var unpinnedReplayResult = BackendRecentActivityProjector.Project(
@@ -6196,6 +6273,10 @@ sealed class TestEnvConfigSnapshotWriter
         "OPENAI_ADVANCED_ENABLE_WEB_SEARCH",
         "OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER",
         "OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER",
+        "DEEPSEEK_FALLBACK_ENABLED",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_MODEL",
+        "DEEPSEEK_BASE_URL",
         "NAPCAT_WS_URL",
         "NAPCAT_TOKEN",
         "WECHAT_BRIDGE_URL",
@@ -6239,6 +6320,10 @@ sealed class TestEnvConfigSnapshotWriter
             $"OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER={config.OpenAiDefaultEnableCodeInterpreter}",
             $"OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER={config.OpenAiAdvancedEnableCodeInterpreter}",
             $"OPENAI_ADVANCED_TRIGGER_PREFIXES={config.OpenAiAdvancedTriggerPrefixes}",
+            $"DEEPSEEK_FALLBACK_ENABLED={config.DeepSeekFallbackEnabled}",
+            $"DEEPSEEK_API_KEY={config.DeepSeekApiKey}",
+            $"DEEPSEEK_MODEL={config.DeepSeekModel}",
+            $"DEEPSEEK_BASE_URL={config.DeepSeekBaseUrl}",
             $"NAPCAT_WS_URL={config.NapCatWsUrl}",
             $"NAPCAT_TOKEN={config.NapCatToken}",
             $"WECHAT_BRIDGE_URL={config.WechatBridgeUrl}",
@@ -6646,6 +6731,10 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
             OpenAiDefaultEnableCodeInterpreter = config.OpenAiDefaultEnableCodeInterpreter,
             OpenAiAdvancedEnableCodeInterpreter = config.OpenAiAdvancedEnableCodeInterpreter,
             OpenAiAdvancedTriggerPrefixes = config.OpenAiAdvancedTriggerPrefixes,
+            DeepSeekFallbackEnabled = config.DeepSeekFallbackEnabled,
+            DeepSeekApiKey = config.DeepSeekApiKey,
+            DeepSeekModel = config.DeepSeekModel,
+            DeepSeekBaseUrl = config.DeepSeekBaseUrl,
             NapCatWsUrl = config.NapCatWsUrl,
             NapCatToken = config.NapCatToken,
             WechatBridgeUrl = config.WechatBridgeUrl,

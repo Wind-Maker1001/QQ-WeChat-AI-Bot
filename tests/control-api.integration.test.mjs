@@ -19,6 +19,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     'OPENAI_API_KEY=test-key',
     'NAPCAT_TOKEN=test-token',
     'BOT_SYSTEM_PROMPT=base prompt',
+    'DEEPSEEK_FALLBACK_ENABLED=false',
+    'DEEPSEEK_MODEL=deepseek-chat',
     'ALLOWED_CHAT_IDS=chat-a,chat-b',
     'ALLOWED_USER_IDS=user-a'
   ]);
@@ -91,6 +93,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(configPayload.allowedChatIds, 'chat-a,chat-b');
     assert.equal(configPayload.allowedUserIds, 'user-a');
     assert.equal(configPayload.botSystemPrompt, 'base prompt');
+    assert.equal(configPayload.deepSeekFallbackEnabled, 'false');
+    assert.equal(configPayload.deepSeekModel, 'deepseek-chat');
     assert.equal('allowedGroupIds' in configPayload, false);
     assert.match(configPayload.envPath, /runtime-settings\.json$/);
 
@@ -102,7 +106,11 @@ test('control API serves allowedChatIds contract and updates config through HTTP
       body: JSON.stringify({
         ...configPayload,
         botSystemPrompt: 'updated base prompt',
-        allowedChatIds: 'chat-x,chat-y'
+        allowedChatIds: 'chat-x,chat-y',
+        deepSeekFallbackEnabled: 'true',
+        deepSeekApiKey: 'deepseek-key',
+        deepSeekModel: 'deepseek-chat',
+        deepSeekBaseUrl: 'https://api.deepseek.com/v1'
       })
     });
 
@@ -110,6 +118,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     const updatedPayload = await updateResponse.json();
     assert.equal(updatedPayload.allowedChatIds, 'chat-x,chat-y');
     assert.equal(updatedPayload.botSystemPrompt, 'updated base prompt');
+    assert.equal(updatedPayload.deepSeekFallbackEnabled, 'true');
+    assert.equal(updatedPayload.deepSeekApiKey, 'deepseek-key');
     assert.equal('allowedGroupIds' in updatedPayload, false);
     assert.match(updatedPayload.envPath, /runtime-settings\.json$/);
 
@@ -123,6 +133,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     );
     assert.match(runtimeSettingsText, /"botSystemPrompt": "updated base prompt"/);
     assert.match(runtimeSettingsText, /"allowedChatIds": "chat-x,chat-y"/);
+    assert.match(runtimeSettingsText, /"deepSeekFallbackEnabled": "true"/);
+    assert.match(runtimeSettingsText, /"deepSeekApiKey": "deepseek-key"/);
 
     const startResponse = await fetch(`${baseUrl}/start`, {
       method: 'POST'

@@ -18,6 +18,15 @@ function cloneRouteConfig(route = {}) {
   });
 }
 
+function cloneDeepSeekConfig(config = {}) {
+  return Object.freeze({
+    fallbackEnabled: config.fallbackEnabled === true,
+    apiKey: typeof config.apiKey === 'string' ? config.apiKey : '',
+    model: typeof config.model === 'string' ? config.model : '',
+    baseURL: typeof config.baseURL === 'string' ? config.baseURL : ''
+  });
+}
+
 function cloneStringList(values) {
   if (!Array.isArray(values)) {
     return Object.freeze([]);
@@ -54,6 +63,7 @@ function validateWebSocketUrl(label, value, { allowEmpty = false } = {}) {
 
 export function createRuntimeConfig({
   openai = {},
+  deepseek = {},
   napcat = {},
   wechat = {},
   bot = {},
@@ -67,6 +77,7 @@ export function createRuntimeConfig({
       advancedRoute: cloneRouteConfig(openai.advancedRoute),
       advancedTriggerPrefixes: cloneStringList(openai.advancedTriggerPrefixes)
     }),
+    deepseek: cloneDeepSeekConfig(deepseek),
     napcat: Object.freeze({
       wsUrl: typeof napcat.wsUrl === 'string' ? napcat.wsUrl : '',
       token: typeof napcat.token === 'string' ? napcat.token : ''
@@ -99,6 +110,8 @@ export function listMissingRequiredRuntimeConfig(config) {
   const missing = [];
   const defaultApiKey = config?.openai?.defaultRoute?.apiKey ?? '';
   const advancedApiKey = config?.openai?.advancedRoute?.apiKey ?? '';
+  const deepseekFallbackEnabled = config?.deepseek?.fallbackEnabled === true;
+  const deepseekApiKey = config?.deepseek?.apiKey ?? '';
   const napcatToken = config?.napcat?.token ?? '';
 
   if (!defaultApiKey && !advancedApiKey) {
@@ -107,6 +120,10 @@ export function listMissingRequiredRuntimeConfig(config) {
 
   if (!napcatToken) {
     missing.push('NAPCAT_TOKEN');
+  }
+
+  if (deepseekFallbackEnabled && !deepseekApiKey) {
+    missing.push('DEEPSEEK_API_KEY');
   }
 
   return missing;

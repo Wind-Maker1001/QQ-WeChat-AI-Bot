@@ -31,6 +31,7 @@ public static class BackendLatestTurnOverviewBuilder
         var executionKind = NormalizeExecutionKind(request.ExecutionProjection?.Kind, request.ExecutionKind);
         var route = DefaultIfBlank(request.Route, "unknown");
         var model = DefaultIfBlank(request.Model, "unknown-model");
+        var configuredModel = DefaultIfBlank(request.ConfiguredModel, model);
         var apiStyle = DefaultIfBlank(request.EffectiveApiStyle, DefaultIfBlank(request.ConfiguredApiStyle, "unknown"));
         var capturedAt = BackendActivityProjectionFormatter.FormatCapturedAt(request.CapturedAt);
         var isLocalReply = string.Equals(executionKind, BackendExecutionProjectionTags.LocalCapabilityReplyKind, StringComparison.Ordinal);
@@ -128,6 +129,18 @@ public static class BackendLatestTurnOverviewBuilder
             return "结果：未调用 LLM，直接在本地完成回复。";
         }
 
+        if (executionProjection?.Recoveries?.Contains("provider-fallback-to-deepseek") == true)
+        {
+            return "Outcome: GPT request failed and DeepSeek fallback completed.";
+        }
+
+        if ((executionProjection?.Degraded == true || executionProjection?.Recoveries?.Length > 0) &&
+            string.Equals(executionKind, BackendExecutionProjectionTags.DirectKind, StringComparison.Ordinal))
+        {
+            var recoveries = FormatRecoveries(executionProjection?.Recoveries);
+            return $"Outcome: completed via degraded direct path. recoveries={recoveries}";
+        }
+
         if (string.Equals(executionKind, BackendExecutionProjectionTags.DirectKind, StringComparison.Ordinal))
         {
             return "结果：通过一次直接 LLM 调用完成。";
@@ -142,6 +155,10 @@ public static class BackendLatestTurnOverviewBuilder
         {
             var completedStages = FormatStages(executionProjection?.CompletedStages);
             var recoveries = FormatRecoveries(executionProjection?.Recoveries);
+            if (executionProjection?.Recoveries?.Contains("provider-fallback-to-deepseek") == true)
+            {
+                return $"缁撴灉锛氳繖涓€杞湪 GPT 璋冪敤澶辫触鍚庡凡鑷姩鍒囨崲鍒?DeepSeek 瀹屾垚銆傛仮澶嶏細{recoveries}銆?";
+            }
             return $"结果：审议流程在 {completedStages} 后以降级模式完成。恢复：{recoveries}。";
         }
 

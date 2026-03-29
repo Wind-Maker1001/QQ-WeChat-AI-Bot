@@ -12,6 +12,7 @@ import {
   DELIBERATION_EXECUTION_STAGES,
   EXECUTION_KIND_DELIBERATION,
   EXECUTION_KIND_DIRECT,
+  EXECUTION_RECOVERY_PROVIDER_FALLBACK_TO_DEEPSEEK,
   EXECUTION_STAGE_DIRECT,
   EXECUTION_STAGE_DRAFT,
   EXECUTION_STAGE_PLANNER,
@@ -94,7 +95,7 @@ async function getFreePort() {
   return port;
 }
 
-async function createFakeOpenAiServer() {
+async function createFakeOpenAiServer({ onRequest } = {}) {
   const requests = [];
   const server = http.createServer(async (req, res) => {
     if (
@@ -122,6 +123,32 @@ async function createFakeOpenAiServer() {
       req.url === '/v1/responses'
         ? extractResponsesUserText(body)
         : extractChatUserText(body);
+
+    if (typeof onRequest === 'function') {
+      const customResponse = await onRequest({
+        endpoint: req.url,
+        body,
+        userText,
+        requestCount: requests.length
+      });
+
+      if (customResponse) {
+        if (customResponse.destroySocket === true) {
+          req.socket.destroy();
+          return;
+        }
+
+        res.writeHead(customResponse.statusCode ?? 200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          ...(customResponse.headers ?? {})
+        });
+        res.end(
+          customResponse.rawBody ??
+            JSON.stringify(customResponse.payload ?? { ok: true })
+        );
+        return;
+      }
+    }
 
     let assistantText = `reply:${userText}`;
 
@@ -700,6 +727,226 @@ test('supervisor starts both workers and processes QQ + WeChat messages end to e
       openAiServer.close(),
       napcatServer.close(),
       wechatServer.close()
+    ]);
+  }
+});
+
+test('supervisor falls back to DeepSeek after transient GPT upstream failure', async () => {
+  const logs = [];
+  const openAiServer = await createFakeOpenAiServer({
+    onRequest({ endpoint, userText }) {
+      if (endpoint === '/v1/responses' && !userText.includes('[INTERNAL_')) {
+        return {
+          statusCode: 502,
+          payload: {
+            error: 'Upstream request failed'
+          }
+        };
+      }
+
+      return null;
+    }
+  });
+  const deepseekServer = await createFakeOpenAiServer();
+  const napcatServer = await createFakeNapCatServer({
+    token: 'napcat-test-token'
+  });
+  const controlApiPort = await getFreePort();
+  const workspace = await createTempWorkspace([
+    'OPENAI_API_KEY=test-key',
+    'OPENAI_DEFAULT_API_KEY=test-key',
+    'OPENAI_DEFAULT_MODEL=fake-gpt',
+    `OPENAI_DEFAULT_BASE_URL=http://127.0.0.1:${openAiServer.port}/v1`,
+    'OPENAI_DEFAULT_API_STYLE=responses',
+    'OPENAI_ADVANCED_API_KEY=test-key',
+    'OPENAI_ADVANCED_MODEL=fake-advanced',
+    `OPENAI_ADVANCED_BASE_URL=http://127.0.0.1:${openAiServer.port}/v1`,
+    'OPENAI_ADVANCED_API_STYLE=responses',
+    'DEEPSEEK_FALLBACK_ENABLED=true',
+    'DEEPSEEK_API_KEY=deepseek-key',
+    'DEEPSEEK_MODEL=deepseek-chat',
+    `DEEPSEEK_BASE_URL=http://127.0.0.1:${deepseekServer.port}/v1`,
+    `NAPCAT_WS_URL=ws://127.0.0.1:${napcatServer.port}`,
+    'NAPCAT_TOKEN=napcat-test-token',
+    'BOT_PREFIX=/ai',
+    'MAX_OUTPUT_CHARS=800'
+  ]);
+  const supervisor = spawnSupervisor({
+    cwd: workspace,
+    controlApiPort,
+    logs
+  });
+  const controlApiUrl = `http://127.0.0.1:${controlApiPort}`;
+
+  try {
+    await waitFor(
+      async () => {
+        try {
+          const response = await fetch(`${controlApiUrl}/status`);
+
+          if (!response.ok) {
+            return false;
+          }
+
+          const payload = await response.json();
+          return payload.runtimeActive === true && payload.napcatConnected === true
+            ? payload
+            : false;
+        } catch {
+          return false;
+        }
+      },
+      {
+        label: `DeepSeek fallback initial status. logs:\n${logs.join('')}`
+      }
+    );
+
+    napcatServer.emitGroupMessage({
+      messageId: 'qq_msg_deepseek_fallback',
+      text: '/ai hello fallback'
+    });
+
+    await waitFor(
+      () => napcatServer.sentGroupMessages.some((message) => message.message === 'reply:hello fallback'),
+      {
+        label: `DeepSeek fallback outbound reply. logs:\n${logs.join('')}`
+      }
+    );
+
+    const statusPayload = await waitFor(
+      async () => {
+        try {
+          const response = await fetch(`${controlApiUrl}/status`);
+          const payload = await response.json();
+          return payload.lastQqLlmRequest?.model === 'deepseek-chat' ? payload : false;
+        } catch {
+          return false;
+        }
+      },
+      {
+        label: `DeepSeek fallback status payload. logs:\n${logs.join('')}`
+      }
+    );
+
+    assert.ok(openAiServer.requests.length >= 1);
+    assert.equal(
+      deepseekServer.requests.filter((request) => request.endpoint === '/v1/chat/completions').length,
+      1
+    );
+    assert.equal(statusPayload.lastQqLlmRequest.route, 'default');
+    assert.equal(statusPayload.lastQqLlmRequest.configuredModel, 'fake-gpt');
+    assert.equal(statusPayload.lastQqLlmRequest.model, 'deepseek-chat');
+    assert.equal(statusPayload.lastQqLlmRequest.configuredApiStyle, 'responses');
+    assert.equal(statusPayload.lastQqLlmRequest.effectiveApiStyle, 'chat_completions');
+    assert.equal(statusPayload.lastQqLlmRequest.executionKind, EXECUTION_KIND_DIRECT);
+    assert.equal(statusPayload.lastQqLlmRequest.executionProjection.degraded, true);
+    assert.deepEqual(
+      statusPayload.lastQqLlmRequest.executionProjection.recoveries,
+      [EXECUTION_RECOVERY_PROVIDER_FALLBACK_TO_DEEPSEEK]
+    );
+    assert.equal(statusPayload.lastQqLlmRequest.responseId, '');
+  } finally {
+    await stopChild(supervisor);
+    await Promise.all([
+      openAiServer.close(),
+      deepseekServer.close(),
+      napcatServer.close()
+    ]);
+  }
+});
+
+test('supervisor does not fall back to DeepSeek on rejected GPT requests', async () => {
+  const logs = [];
+  const openAiServer = await createFakeOpenAiServer({
+    onRequest({ endpoint, userText }) {
+      if (endpoint === '/v1/responses' && !userText.includes('[INTERNAL_')) {
+        return {
+          statusCode: 401,
+          payload: {
+            error: 'unauthorized'
+          }
+        };
+      }
+
+      return null;
+    }
+  });
+  const deepseekServer = await createFakeOpenAiServer();
+  const napcatServer = await createFakeNapCatServer({
+    token: 'napcat-test-token'
+  });
+  const controlApiPort = await getFreePort();
+  const workspace = await createTempWorkspace([
+    'OPENAI_API_KEY=test-key',
+    'OPENAI_DEFAULT_API_KEY=test-key',
+    'OPENAI_DEFAULT_MODEL=fake-gpt',
+    `OPENAI_DEFAULT_BASE_URL=http://127.0.0.1:${openAiServer.port}/v1`,
+    'OPENAI_DEFAULT_API_STYLE=responses',
+    'DEEPSEEK_FALLBACK_ENABLED=true',
+    'DEEPSEEK_API_KEY=deepseek-key',
+    'DEEPSEEK_MODEL=deepseek-chat',
+    `DEEPSEEK_BASE_URL=http://127.0.0.1:${deepseekServer.port}/v1`,
+    `NAPCAT_WS_URL=ws://127.0.0.1:${napcatServer.port}`,
+    'NAPCAT_TOKEN=napcat-test-token',
+    'BOT_PREFIX=/ai',
+    'MAX_OUTPUT_CHARS=800'
+  ]);
+  const supervisor = spawnSupervisor({
+    cwd: workspace,
+    controlApiPort,
+    logs
+  });
+  const controlApiUrl = `http://127.0.0.1:${controlApiPort}`;
+
+  try {
+    await waitFor(
+      async () => {
+        try {
+          const response = await fetch(`${controlApiUrl}/status`);
+          const payload = await response.json();
+          return payload.runtimeActive === true && payload.napcatConnected === true
+            ? payload
+            : false;
+        } catch {
+          return false;
+        }
+      },
+      {
+        label: `rejected-request fallback initial status. logs:\n${logs.join('')}`
+      }
+    );
+
+    napcatServer.emitGroupMessage({
+      messageId: 'qq_msg_no_fallback_on_401',
+      text: '/ai hello unauthorized'
+    });
+
+    const statusPayload = await waitFor(
+      async () => {
+        try {
+          const response = await fetch(`${controlApiUrl}/status`);
+          const payload = await response.json();
+          return payload.lastQqLlmFailure?.route === 'default' ? payload : false;
+        } catch {
+          return false;
+        }
+      },
+      {
+        label: `rejected-request failure status. logs:\n${logs.join('')}`
+      }
+    );
+
+    assert.equal(
+      deepseekServer.requests.filter((request) => request.endpoint === '/v1/chat/completions').length,
+      0
+    );
+    assert.match(statusPayload.lastQqLlmFailure.error, /401|unauthorized/i);
+  } finally {
+    await stopChild(supervisor);
+    await Promise.all([
+      openAiServer.close(),
+      deepseekServer.close(),
+      napcatServer.close()
     ]);
   }
 });

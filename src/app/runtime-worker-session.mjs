@@ -21,6 +21,9 @@ function logRouteSummary(workerKind, runtimeConfig, logInfo) {
   logInfo(
     `[${prefix}] Advanced model: ${runtimeConfig.openai.advancedRoute.model}, Base URL: ${runtimeConfig.openai.advancedRoute.baseURL || runtimeConfig.openai.defaultRoute.baseURL || DEFAULT_OPENAI_BASE_URL}, API: ${runtimeConfig.openai.advancedRoute.apiStyle || 'auto'}`
   );
+  logInfo(
+    `[${prefix}] DeepSeek fallback: ${runtimeConfig.deepseek.fallbackEnabled ? 'enabled' : 'disabled'}, model=${runtimeConfig.deepseek.model || 'none'}, base_url=${runtimeConfig.deepseek.baseURL || 'none'}`
+  );
 
   if (workerKind === 'wechat') {
     logInfo(
@@ -74,6 +77,7 @@ export function createRuntimeWorkerSession({
     llmRouter = createLlmRouter({
       defaultRoute: nextRuntimeConfig.openai.defaultRoute,
       advancedRoute: nextRuntimeConfig.openai.advancedRoute,
+      deepseekFallback: nextRuntimeConfig.deepseek,
       advancedTriggerPrefixes: nextRuntimeConfig.openai.advancedTriggerPrefixes,
       botSystemPrompt: nextRuntimeConfig.bot.systemPrompt,
       botPersona: nextRuntimeConfig.bot.persona

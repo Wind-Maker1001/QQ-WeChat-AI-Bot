@@ -98,6 +98,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private string _openAiDefaultEnableCodeInterpreter = "false";
     private string _openAiAdvancedEnableWebSearch = "true";
     private string _openAiAdvancedEnableCodeInterpreter = "true";
+    private string _deepSeekFallbackEnabled = "false";
+    private string _deepSeekApiKey = string.Empty;
+    private string _deepSeekModel = "deepseek-chat";
+    private string _deepSeekBaseUrl = "https://api.deepseek.com/v1";
     private string _napCatWsUrl = "ws://127.0.0.1:3001";
     private string _napCatToken = string.Empty;
     private string _wechatBridgeUrl = string.Empty;
@@ -459,6 +463,39 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         get => ParseBooleanFlag(OpenAiAdvancedEnableCodeInterpreter);
         set => OpenAiAdvancedEnableCodeInterpreter = value ? "true" : "false";
+    }
+
+    public string DeepSeekFallbackEnabled
+    {
+        get => _deepSeekFallbackEnabled;
+        set => SetTrackedBooleanStringProperty(
+            ref _deepSeekFallbackEnabled,
+            value,
+            nameof(IsDeepSeekFallbackEnabled));
+    }
+
+    public string DeepSeekApiKey
+    {
+        get => _deepSeekApiKey;
+        set => SetTrackedProperty(ref _deepSeekApiKey, value);
+    }
+
+    public string DeepSeekModel
+    {
+        get => _deepSeekModel;
+        set => SetTrackedProperty(ref _deepSeekModel, value);
+    }
+
+    public string DeepSeekBaseUrl
+    {
+        get => _deepSeekBaseUrl;
+        set => SetTrackedProperty(ref _deepSeekBaseUrl, value);
+    }
+
+    public bool IsDeepSeekFallbackEnabled
+    {
+        get => ParseBooleanFlag(DeepSeekFallbackEnabled);
+        set => DeepSeekFallbackEnabled = value ? "true" : "false";
     }
 
     public string NapCatWsUrl
@@ -1717,6 +1754,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private void ApplyBaseUrlPreset(object? parameter)
     {
         var preset = parameter as string ?? string.Empty;
+        const string DeepSeekPresetPrefix = "deepseek:";
+
+        if (preset.StartsWith(DeepSeekPresetPrefix, StringComparison.Ordinal))
+        {
+            DeepSeekBaseUrl = preset[DeepSeekPresetPrefix.Length..];
+            AddLog($"Applied DeepSeek base URL preset: {DeepSeekBaseUrl}");
+            return;
+        }
+
         OpenAiBaseUrl = preset switch
         {
             "__official__" => string.Empty,
@@ -1767,6 +1813,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             OpenAiDefaultEnableCodeInterpreter = OpenAiDefaultEnableCodeInterpreter.Trim(),
             OpenAiAdvancedEnableCodeInterpreter = OpenAiAdvancedEnableCodeInterpreter.Trim(),
             OpenAiAdvancedTriggerPrefixes = OpenAiAdvancedTriggerPrefixes.Trim(),
+            DeepSeekFallbackEnabled = DeepSeekFallbackEnabled.Trim(),
+            DeepSeekApiKey = DeepSeekApiKey.Trim(),
+            DeepSeekModel = DeepSeekModel.Trim(),
+            DeepSeekBaseUrl = DeepSeekBaseUrl.Trim(),
             NapCatWsUrl = NapCatWsUrl.Trim(),
             NapCatToken = NapCatToken.Trim(),
             WechatBridgeUrl = WechatBridgeUrl.Trim(),
@@ -1800,6 +1850,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             OpenAiDefaultEnableCodeInterpreter = config.OpenAiDefaultEnableCodeInterpreter,
             OpenAiAdvancedEnableCodeInterpreter = config.OpenAiAdvancedEnableCodeInterpreter,
             OpenAiAdvancedTriggerPrefixes = config.OpenAiAdvancedTriggerPrefixes,
+            DeepSeekFallbackEnabled = config.DeepSeekFallbackEnabled,
+            DeepSeekApiKey = config.DeepSeekApiKey,
+            DeepSeekModel = config.DeepSeekModel,
+            DeepSeekBaseUrl = config.DeepSeekBaseUrl,
             NapCatWsUrl = config.NapCatWsUrl,
             NapCatToken = config.NapCatToken,
             WechatBridgeUrl = config.WechatBridgeUrl,
@@ -2239,6 +2293,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             _openAiDefaultEnableCodeInterpreter = config.OpenAiDefaultEnableCodeInterpreter;
             _openAiAdvancedEnableCodeInterpreter = config.OpenAiAdvancedEnableCodeInterpreter;
             _openAiAdvancedTriggerPrefixes = config.OpenAiAdvancedTriggerPrefixes;
+            _deepSeekFallbackEnabled = config.DeepSeekFallbackEnabled;
+            _deepSeekApiKey = config.DeepSeekApiKey;
+            _deepSeekModel = config.DeepSeekModel;
+            _deepSeekBaseUrl = config.DeepSeekBaseUrl;
             _napCatWsUrl = config.NapCatWsUrl;
             _napCatToken = config.NapCatToken;
             _wechatBridgeUrl = config.WechatBridgeUrl;
@@ -2292,6 +2350,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsOpenAiDefaultEnableCodeInterpreterEnabled));
         OnPropertyChanged(nameof(IsOpenAiAdvancedEnableCodeInterpreterEnabled));
         OnPropertyChanged(nameof(OpenAiAdvancedTriggerPrefixes));
+        OnPropertyChanged(nameof(DeepSeekFallbackEnabled));
+        OnPropertyChanged(nameof(DeepSeekApiKey));
+        OnPropertyChanged(nameof(DeepSeekModel));
+        OnPropertyChanged(nameof(DeepSeekBaseUrl));
+        OnPropertyChanged(nameof(IsDeepSeekFallbackEnabled));
         OnPropertyChanged(nameof(NapCatWsUrl));
         OnPropertyChanged(nameof(NapCatToken));
         OnPropertyChanged(nameof(WechatBridgeUrl));

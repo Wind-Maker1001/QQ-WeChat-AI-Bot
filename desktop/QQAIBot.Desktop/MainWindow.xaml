@@ -1442,6 +1442,55 @@
                         </Grid>
                       </StackPanel>
                     </Border>
+
+                    <Border Margin="0,16,0,0"
+                            Style="{StaticResource InsetPanelStyle}">
+                      <StackPanel>
+                        <TextBlock Style="{StaticResource CardTitleStyle}"
+                                   Text="DeepSeek Fallback" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Style="{StaticResource SectionSubtitleStyle}"
+                                   Text="When GPT upstream calls fail, direct text requests can retry once through the official DeepSeek API." />
+
+                        <CheckBox x:Name="DeepSeekFallbackEnabledCheckBox"
+                                  Margin="0,16,0,0"
+                                  Content="Enable DeepSeek fallback"
+                                  IsChecked="{Binding IsDeepSeekFallbackEnabled, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <Grid Margin="0,16,0,0">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <StackPanel Grid.Column="0">
+                            <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                       Text="DeepSeek Model" />
+                            <TextBox x:Name="DeepSeekModelTextBox"
+                                     Text="{Binding DeepSeekModel, UpdateSourceTrigger=PropertyChanged}" />
+                          </StackPanel>
+                          <StackPanel Grid.Column="2">
+                            <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                       Text="DeepSeek API Key" />
+                            <TextBox x:Name="DeepSeekApiKeyTextBox"
+                                     Text="{Binding DeepSeekApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                          </StackPanel>
+                        </Grid>
+
+                        <TextBlock Margin="0,16,0,8"
+                                   Style="{StaticResource FieldLabelStyle}"
+                                   Text="DeepSeek Base URL" />
+                        <TextBox x:Name="DeepSeekBaseUrlTextBox"
+                                 Text="{Binding DeepSeekBaseUrl, UpdateSourceTrigger=PropertyChanged}" />
+                        <WrapPanel Margin="0,8,0,0">
+                          <Button Margin="0,0,8,0"
+                                  Style="{StaticResource PillButtonStyle}"
+                                  Command="{Binding ApplyBaseUrlPresetCommand}"
+                                  CommandParameter="deepseek:https://api.deepseek.com/v1"
+                                  Content="DeepSeek Official" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
                   </StackPanel>
                 </ScrollViewer>
               </TabItem>

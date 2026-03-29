@@ -12,7 +12,10 @@ public static class BackendActivityProjectionFormatter
         }
 
         var apiStyle = string.IsNullOrWhiteSpace(request.EffectiveApiStyle) ? "unknown" : request.EffectiveApiStyle;
-        return $"{request.Route} / {request.Model} / {apiStyle}";
+        var configuredModel = string.IsNullOrWhiteSpace(request.ConfiguredModel) ? request.Model : request.ConfiguredModel;
+        return string.Equals(configuredModel, request.Model, StringComparison.Ordinal)
+            ? $"{request.Route} / {request.Model} / {apiStyle}"
+            : $"{request.Route} / {request.Model} / {apiStyle} (configured {configuredModel})";
     }
 
     public static string FormatActivitySummary(

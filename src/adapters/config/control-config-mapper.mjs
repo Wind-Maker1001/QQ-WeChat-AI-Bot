@@ -58,6 +58,15 @@ export function buildControlConfigFromEnvValues(envValues, runtimeConfig) {
     openAiAdvancedTriggerPrefixes:
       envValues.OPENAI_ADVANCED_TRIGGER_PREFIXES ??
       runtimeConfig.openai.advancedTriggerPrefixes.join(','),
+    deepSeekFallbackEnabled:
+      envValues.DEEPSEEK_FALLBACK_ENABLED ??
+      String(runtimeConfig.deepseek.fallbackEnabled === true),
+    deepSeekApiKey:
+      envValues.DEEPSEEK_API_KEY ?? runtimeConfig.deepseek.apiKey ?? '',
+    deepSeekModel:
+      envValues.DEEPSEEK_MODEL ?? runtimeConfig.deepseek.model ?? '',
+    deepSeekBaseUrl:
+      envValues.DEEPSEEK_BASE_URL ?? runtimeConfig.deepseek.baseURL ?? '',
     napCatWsUrl: envValues.NAPCAT_WS_URL ?? runtimeConfig.napcat.wsUrl ?? '',
     napCatToken: envValues.NAPCAT_TOKEN ?? runtimeConfig.napcat.token ?? '',
     wechatBridgeUrl: envValues.WECHAT_BRIDGE_URL ?? runtimeConfig.wechat.bridgeUrl ?? '',
@@ -124,6 +133,12 @@ export function normalizeControlConfigInput(config, fallbackConfig) {
     openAiAdvancedTriggerPrefixes: String(
       source.openAiAdvancedTriggerPrefixes ?? fallback.openAiAdvancedTriggerPrefixes ?? ''
     ).trim(),
+    deepSeekFallbackEnabled: String(
+      source.deepSeekFallbackEnabled ?? fallback.deepSeekFallbackEnabled ?? 'false'
+    ).trim(),
+    deepSeekApiKey: String(source.deepSeekApiKey ?? fallback.deepSeekApiKey ?? '').trim(),
+    deepSeekModel: String(source.deepSeekModel ?? fallback.deepSeekModel ?? '').trim(),
+    deepSeekBaseUrl: String(source.deepSeekBaseUrl ?? fallback.deepSeekBaseUrl ?? '').trim(),
     napCatWsUrl: String(source.napCatWsUrl ?? fallback.napCatWsUrl ?? '').trim(),
     napCatToken: String(source.napCatToken ?? fallback.napCatToken ?? '').trim(),
     wechatBridgeUrl: String(source.wechatBridgeUrl ?? fallback.wechatBridgeUrl ?? '').trim(),
@@ -172,6 +187,10 @@ export function buildControlEnvValues({
     OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER: normalizedConfig.openAiDefaultEnableCodeInterpreter,
     OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER: normalizedConfig.openAiAdvancedEnableCodeInterpreter,
     OPENAI_ADVANCED_TRIGGER_PREFIXES: normalizedConfig.openAiAdvancedTriggerPrefixes,
+    DEEPSEEK_FALLBACK_ENABLED: normalizedConfig.deepSeekFallbackEnabled,
+    DEEPSEEK_API_KEY: normalizedConfig.deepSeekApiKey,
+    DEEPSEEK_MODEL: normalizedConfig.deepSeekModel,
+    DEEPSEEK_BASE_URL: normalizedConfig.deepSeekBaseUrl,
     NAPCAT_WS_URL: normalizedConfig.napCatWsUrl,
     NAPCAT_TOKEN: normalizedConfig.napCatToken,
     WECHAT_BRIDGE_URL: normalizedConfig.wechatBridgeUrl,

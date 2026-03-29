@@ -102,7 +102,7 @@ public static class BackendRecentActivityProjector
 
     private static string BuildRequestEventKey(BackendLlmRequestStatus request)
     {
-        return $"request|{request.CapturedAt}|{request.Route}|{request.ResponseId}|{request.Model}";
+        return $"request|{request.CapturedAt}|{request.Route}|{request.ResponseId}|{request.ConfiguredModel}|{request.Model}";
     }
 
     private static string BuildFailureEventKey(BackendLlmFailureStatus failure)
@@ -117,7 +117,7 @@ public static class BackendRecentActivityProjector
             EventKey = BuildRequestEventKey(request),
             CapturedAt = request.CapturedAt,
             EventType = "Request",
-            Summary = $"{request.Route} / {DefaultIfBlank(request.Model, "unknown-model")} / {DefaultIfBlank(request.EffectiveApiStyle, "unknown-api")}",
+            Summary = BackendActivityProjectionFormatter.FormatRequestSummary(request, "unknown request"),
             Meta = BackendActivityProjectionFormatter.FormatCapturedAt(request.CapturedAt),
             Detail = BackendLlmProjectionFormatter.FormatRequestDetail(request),
             IsFailure = false

@@ -129,6 +129,7 @@ function buildLocalCapabilityReply({
   return {
     ...replyOutcome,
     route: normalizedRequestDescriptor.route || turnSpec.route,
+    configuredModel: normalizedRequestDescriptor.configuredModel || normalizedRequestDescriptor.model || '',
     model: normalizedRequestDescriptor.model || '',
     apiStyle:
       normalizedRequestDescriptor.effectiveApiStyle ||

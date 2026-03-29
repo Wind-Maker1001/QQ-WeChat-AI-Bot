@@ -106,6 +106,10 @@ public sealed class LocalEnvConfigFallbackReader : ILocalConfigFallbackReader
                 "OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER" => true,
                 "OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER" => true,
                 "OPENAI_ADVANCED_TRIGGER_PREFIXES" => true,
+                "DEEPSEEK_FALLBACK_ENABLED" => true,
+                "DEEPSEEK_API_KEY" => true,
+                "DEEPSEEK_MODEL" => true,
+                "DEEPSEEK_BASE_URL" => true,
                 "NAPCAT_WS_URL" => true,
                 "NAPCAT_TOKEN" => true,
                 "WECHAT_BRIDGE_URL" => true,
@@ -170,6 +174,18 @@ public sealed class LocalEnvConfigFallbackReader : ILocalConfigFallbackReader
                 return true;
             case "OPENAI_ADVANCED_TRIGGER_PREFIXES":
                 config.OpenAiAdvancedTriggerPrefixes = value;
+                return true;
+            case "DEEPSEEK_FALLBACK_ENABLED":
+                config.DeepSeekFallbackEnabled = value;
+                return true;
+            case "DEEPSEEK_API_KEY":
+                config.DeepSeekApiKey = value;
+                return true;
+            case "DEEPSEEK_MODEL":
+                config.DeepSeekModel = value;
+                return true;
+            case "DEEPSEEK_BASE_URL":
+                config.DeepSeekBaseUrl = value;
                 return true;
             case "NAPCAT_WS_URL":
                 config.NapCatWsUrl = value;

@@ -17,6 +17,10 @@ public class BotConfig
     public string OpenAiAdvancedTextVerbosity { get; set; } = "high";
     public string OpenAiAdvancedEnableWebSearch { get; set; } = "true";
     public string OpenAiAdvancedEnableCodeInterpreter { get; set; } = "true";
+    public string DeepSeekFallbackEnabled { get; set; } = "false";
+    public string DeepSeekApiKey { get; set; } = string.Empty;
+    public string DeepSeekModel { get; set; } = "deepseek-chat";
+    public string DeepSeekBaseUrl { get; set; } = "https://api.deepseek.com/v1";
     public string NapCatWsUrl { get; set; } = "ws://127.0.0.1:3001";
     public string NapCatToken { get; set; } = string.Empty;
     public string WechatBridgeUrl { get; set; } = string.Empty;

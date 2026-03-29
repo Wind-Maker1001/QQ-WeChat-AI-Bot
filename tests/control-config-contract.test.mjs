@@ -64,6 +64,10 @@ test('default OpenAI route inherits shared key and base URL when default-specifi
       OPENAI_DEFAULT_MODEL: 'gpt-5.4',
       OPENAI_DEFAULT_BASE_URL: '',
       OPENAI_DEFAULT_API_STYLE: 'responses',
+      DEEPSEEK_FALLBACK_ENABLED: 'true',
+      DEEPSEEK_API_KEY: 'deepseek-key',
+      DEEPSEEK_MODEL: 'deepseek-chat',
+      DEEPSEEK_BASE_URL: 'https://api.deepseek.com/v1',
       NAPCAT_TOKEN: 'test-token'
     }
   });
@@ -72,6 +76,10 @@ test('default OpenAI route inherits shared key and base URL when default-specifi
   assert.equal(runtimeConfig.openai.defaultRoute.baseURL, 'https://gateway.example/v1');
   assert.equal(runtimeConfig.openai.defaultRoute.model, 'gpt-5.4');
   assert.equal(runtimeConfig.openai.defaultRoute.apiStyle, 'responses');
+  assert.equal(runtimeConfig.deepseek.fallbackEnabled, true);
+  assert.equal(runtimeConfig.deepseek.apiKey, 'deepseek-key');
+  assert.equal(runtimeConfig.deepseek.model, 'deepseek-chat');
+  assert.equal(runtimeConfig.deepseek.baseURL, 'https://api.deepseek.com/v1');
   assert.match(runtimeConfig.bot.systemPrompt, /QQ 群助手/);
 });
 

@@ -27,6 +27,10 @@ function createRuntimeConfig() {
       OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER: 'false',
       OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER: 'true',
       OPENAI_ADVANCED_TRIGGER_PREFIXES: '/gpt,/vision',
+      DEEPSEEK_FALLBACK_ENABLED: 'true',
+      DEEPSEEK_API_KEY: 'deepseek-key',
+      DEEPSEEK_MODEL: 'deepseek-chat',
+      DEEPSEEK_BASE_URL: 'https://api.deepseek.com/v1',
       NAPCAT_WS_URL: 'ws://127.0.0.1:3001',
       NAPCAT_TOKEN: 'napcat-token',
       WECHAT_BRIDGE_URL: 'ws://127.0.0.1:3198',
@@ -55,6 +59,8 @@ test('buildControlConfigFromEnvValues falls back to runtime config defaults', ()
 
   assert.equal(config.openAiDefaultApiKey, 'default-key');
   assert.equal(config.wechatBotPrefix, '/wx');
+  assert.equal(config.deepSeekFallbackEnabled, 'true');
+  assert.equal(config.deepSeekModel, 'deepseek-chat');
   assert.equal(config.botSystemPrompt, 'system line 1\nsystem line 2');
   assert.equal(config.allowedChatIds, 'chat-a');
   assert.equal(config.maxOutputChars, '1200');
@@ -78,6 +84,10 @@ test('buildControlEnvValues preserves explicit API styles and unknown keys', () 
       openAiBaseUrl: ' https://advanced.example/v1 ',
       openAiDefaultBaseUrl: ' https://default-next.example/v1 ',
       wechatBotPrefix: ' /bot ',
+      deepSeekFallbackEnabled: ' true ',
+      deepSeekApiKey: ' deepseek-key-next ',
+      deepSeekModel: ' deepseek-chat-next ',
+      deepSeekBaseUrl: ' https://api.deepseek.com/v1 ',
       botSystemPrompt: ' system prompt next ',
       napCatToken: ' next-token ',
       allowedChatIds: ' chat-x,chat-y ',
@@ -87,8 +97,13 @@ test('buildControlEnvValues preserves explicit API styles and unknown keys', () 
 
   assert.equal(normalizedConfig.openAiApiKey, 'advanced-key');
   assert.equal(normalizedConfig.wechatBotPrefix, '/bot');
+  assert.equal(normalizedConfig.deepSeekFallbackEnabled, 'true');
   assert.equal(nextValues.OPENAI_DEFAULT_API_STYLE, 'chat_completions');
   assert.equal(nextValues.OPENAI_ADVANCED_API_STYLE, 'responses');
+  assert.equal(nextValues.DEEPSEEK_FALLBACK_ENABLED, 'true');
+  assert.equal(nextValues.DEEPSEEK_API_KEY, 'deepseek-key-next');
+  assert.equal(nextValues.DEEPSEEK_MODEL, 'deepseek-chat-next');
+  assert.equal(nextValues.DEEPSEEK_BASE_URL, 'https://api.deepseek.com/v1');
   assert.equal(nextValues.CUSTOM_FLAG, 'enabled');
   assert.equal(nextValues.WECHAT_BOT_PREFIX, '/bot');
   assert.equal(nextValues.BOT_SYSTEM_PROMPT, ' system prompt next ');

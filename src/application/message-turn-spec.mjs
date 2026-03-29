@@ -54,6 +54,7 @@ export function buildTurnReplyTelemetry({
     route: reply.route,
     routeReason: turnSpec.routeReason,
     matchedPrefix: turnSpec.matchedPrefix,
+    configuredModel: reply.configuredModel || reply.model,
     model: reply.model,
     configuredApiStyle: reply.configuredApiStyle || reply.apiStyle || '',
     effectiveApiStyle: reply.effectiveApiStyle || reply.apiStyle || '',

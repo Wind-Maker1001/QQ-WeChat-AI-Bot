@@ -267,8 +267,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         RefreshAutoStartState();
         AutoDetectBackendRoot();
-        RefreshLatestTurnOverview();
-        RefreshHealthReport();
         AddLog("Desktop 控制台已初始化。");
     }
 

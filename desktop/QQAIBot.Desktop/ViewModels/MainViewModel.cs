@@ -1462,74 +1462,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task ExportStateSnapshotAsync()
     {
-        if (!IsBackendRootValid)
-        {
-            StatusText = "后端目录无效";
-            AddLog("后端目录无效，无法导出状态快照。");
-            return;
-        }
-
-        try
-        {
-            StatusText = "正在导出状态快照...";
-            var result = await _localStateSnapshotService.ExportAsync(BackendRootPath);
-            LastStateSnapshotText = result.ArchivePath;
-            await RefreshStateSnapshotsAsync(result.ArchivePath);
-            LastStateSnapshotText = result.ArchivePath;
-            StatusText = "状态快照已导出";
-            AddLog($"已导出本地状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项。");
-            OnPropertyChanged(nameof(StateSnapshotFolderPathText));
-        }
-        catch (Exception ex)
-        {
-            StatusText = "导出状态快照失败";
-            AddLog($"导出状态快照失败：{ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"导出状态快照失败：\n{ex.Message}",
-                "导出状态快照失败",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-        finally
-        {
-            UpdateCommandStates();
-        }
+        ApplyCommandResult(await _controlPlaneSession.ExportStateSnapshotAsync());
+        OnPropertyChanged(nameof(StateSnapshotFolderPathText));
     }
 
     private async Task ExportSafeStateSnapshotAsync()
     {
-        if (!IsBackendRootValid)
-        {
-            StatusText = "后端目录无效";
-            AddLog("后端目录无效，无法导出安全状态快照。");
-            return;
-        }
-
-        try
-        {
-            StatusText = "正在导出安全状态快照...";
-            var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
-            LastStateSnapshotText = result.ArchivePath;
-            await RefreshStateSnapshotsAsync(result.ArchivePath);
-            LastStateSnapshotText = result.ArchivePath;
-            StatusText = "安全状态快照已导出";
-            AddLog($"已导出安全状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项，且不含 .env 密钥。");
-            OnPropertyChanged(nameof(StateSnapshotFolderPathText));
-        }
-        catch (Exception ex)
-        {
-            StatusText = "导出安全状态快照失败";
-            AddLog($"导出安全状态快照失败：{ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"导出安全状态快照失败：\n{ex.Message}",
-                "导出安全状态快照失败",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-        finally
-        {
-            UpdateCommandStates();
-        }
+        ApplyCommandResult(await _controlPlaneSession.ExportSafeStateSnapshotAsync());
+        OnPropertyChanged(nameof(StateSnapshotFolderPathText));
     }
 
     private async Task ExportSafeRollbackSnapshotAsync()
@@ -1539,34 +1479,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var restoreTargetArchivePath = SelectedStateSnapshot.ArchivePath;
-        var restoreTargetFileName = SelectedStateSnapshot.FileName;
-
-        try
-        {
-            StatusText = "正在导出安全回滚快照...";
-            var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
-            LastStateSnapshotText = result.ArchivePath;
-            await RefreshStateSnapshotsAsync(restoreTargetArchivePath);
-            LastStateSnapshotText = result.ArchivePath;
-            StatusText = "安全回滚快照已导出";
-            AddLog($"已在恢复 {restoreTargetFileName} 前导出安全回滚快照到 {result.ArchivePath}，原始恢复目标保持选中。");
-            OnPropertyChanged(nameof(StateSnapshotFolderPathText));
-        }
-        catch (Exception ex)
-        {
-            StatusText = "导出安全回滚快照失败";
-            AddLog($"导出安全回滚快照失败：{ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"导出安全回滚快照失败：\n{ex.Message}",
-                "导出安全回滚快照失败",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-        finally
-        {
-            UpdateCommandStates();
-        }
+        ApplyCommandResult(await _controlPlaneSession.ExportSafeRollbackSnapshotAsync(SelectedStateSnapshot.ArchivePath));
+        OnPropertyChanged(nameof(StateSnapshotFolderPathText));
     }
 
     private async Task RestoreLatestStateSnapshotAsync()

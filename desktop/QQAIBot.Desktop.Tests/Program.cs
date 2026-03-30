@@ -71,6 +71,7 @@ await RunTestAsync("DesktopControlPlaneSession selects NapCat review guidance wh
 await RunTestAsync("DesktopControlPlaneSession targets selected snapshot for preview restore and delete", TestDesktopControlPlaneSessionSnapshotTargetingAsync);
 await RunTestAsync("DesktopControlPlaneSession projects snapshot preview and restore presentation from selected snapshot context", TestDesktopControlPlaneSessionSnapshotPresentationAsync);
 await RunTestAsync("DesktopControlPlaneSession preserves pinned activity selection and failure filtering across runtime updates", TestDesktopControlPlaneSessionActivitySelectionStabilityAsync);
+await RunTestAsync("DesktopControlPlaneSession exports snapshots and preserves rollback selection", TestDesktopControlPlaneSessionSnapshotExportAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
@@ -2806,6 +2807,35 @@ async Task TestDesktopControlPlaneSessionActivitySelectionStabilityAsync()
     AssertTrue(filteredState.RecentActivityState.ShowOnlyQqFailures, "Session should persist QQ failures-only filter.");
     AssertTrue(filteredState.RecentActivityState.SelectedQqRecentActivity?.IsFailure == true, "Failure filtering should move selection onto a failure event.");
     AssertContains(filteredState.RecentActivityState.SelectedQqRecentActivity?.Summary ?? string.Empty, "search timed out", "Failure filtering should keep the latest QQ failure selected.");
+}
+
+async Task TestDesktopControlPlaneSessionSnapshotExportAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-snapshot-export-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+
+    var exportResult = await session.ExportStateSnapshotAsync();
+    AssertTrue(exportResult.Succeeded, "State snapshot export should succeed.");
+    AssertEqual(1, context.FakeLocalStateSnapshotService.ExportCallCount, "State snapshot export should invoke the snapshot service once.");
+    AssertEqual(context.RootPath, context.FakeLocalStateSnapshotService.LastBackendRootPath, "State snapshot export should use the current backend root.");
+    AssertEqual(context.FakeLocalStateSnapshotService.Result.ArchivePath, exportResult.NextState?.SnapshotState.LastStateSnapshotText, "State snapshot export should update the shell state's latest snapshot text.");
+
+    var safeExportResult = await session.ExportSafeStateSnapshotAsync();
+    AssertTrue(safeExportResult.Succeeded, "Safe state snapshot export should succeed.");
+    AssertEqual(1, context.FakeLocalStateSnapshotService.ExportSafeCallCount, "Safe snapshot export should invoke the safe export service once.");
+    AssertContains(safeExportResult.NextState?.SnapshotState.LastStateSnapshotText ?? string.Empty, "runtime-state-safe-test.zip", "Safe snapshot export should update the shell state's latest snapshot text.");
+
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    var rollbackExportResult = await session.ExportSafeRollbackSnapshotAsync(selectedSnapshot.ArchivePath);
+    AssertTrue(rollbackExportResult.Succeeded, "Safe rollback snapshot export should succeed.");
+    AssertEqual(2, context.FakeLocalStateSnapshotService.ExportSafeCallCount, "Safe rollback snapshot export should reuse the safe export service.");
+    AssertContains(rollbackExportResult.NextState?.SnapshotState.LastStateSnapshotText ?? string.Empty, "runtime-state-safe-test.zip", "Safe rollback snapshot export should update the latest snapshot text.");
+    AssertEqual(selectedSnapshot.ArchivePath, rollbackExportResult.NextState?.SnapshotState.SelectedStateSnapshot?.ArchivePath, "Safe rollback snapshot export should preserve the original restore target selection.");
 }
 
 Task TestDesktopControlPlaneFeedbackAsync()

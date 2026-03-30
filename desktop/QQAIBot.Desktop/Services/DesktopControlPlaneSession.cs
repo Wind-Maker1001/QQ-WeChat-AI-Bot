@@ -638,6 +638,183 @@ public sealed class DesktopControlPlaneSession
         return _shellState;
     }
 
+    public async Task<DesktopCommandResult> ExportStateSnapshotAsync()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot export state snapshot because backend root is invalid."]);
+        }
+
+        try
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Exporting state snapshot..."
+                }
+            };
+
+            var result = await _dependencies.LocalStateSnapshotService.ExportAsync(_shellState.LocalDocumentState.BackendRootPath);
+            await RefreshStateSnapshotsAsyncInternal(result.ArchivePath);
+            _shellState = _shellState with
+            {
+                SnapshotState = _shellState.SnapshotState with
+                {
+                    LastStateSnapshotText = result.ArchivePath
+                }
+            };
+
+            return BuildResult(
+                succeeded: true,
+                statusText: "State snapshot exported",
+                logMessages: [$"Exported local state snapshot to {result.ArchivePath}, including {result.IncludedEntries.Count} entries."]);
+        }
+        catch (Exception ex)
+        {
+            return BuildResult(
+                succeeded: false,
+                statusText: "State snapshot export failed",
+                logMessages: [$"State snapshot export failed: {ex.Message}"],
+                error: new DesktopUserFacingOperationError
+                {
+                    StatusText = "State snapshot export failed",
+                    DialogTitle = "State snapshot export failed",
+                    DialogMessage = $"State snapshot export failed:{Environment.NewLine}{ex.Message}"
+                });
+        }
+    }
+
+    public async Task<DesktopCommandResult> ExportSafeStateSnapshotAsync()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot export safe state snapshot because backend root is invalid."]);
+        }
+
+        try
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Exporting safe state snapshot..."
+                }
+            };
+
+            var result = await _dependencies.LocalStateSnapshotService.ExportSafeAsync(_shellState.LocalDocumentState.BackendRootPath);
+            await RefreshStateSnapshotsAsyncInternal(result.ArchivePath);
+            _shellState = _shellState with
+            {
+                SnapshotState = _shellState.SnapshotState with
+                {
+                    LastStateSnapshotText = result.ArchivePath
+                }
+            };
+
+            return BuildResult(
+                succeeded: true,
+                statusText: "Safe state snapshot exported",
+                logMessages: [$"Exported safe state snapshot to {result.ArchivePath}, including {result.IncludedEntries.Count} entries and excluding .env secrets."]);
+        }
+        catch (Exception ex)
+        {
+            return BuildResult(
+                succeeded: false,
+                statusText: "Safe state snapshot export failed",
+                logMessages: [$"Safe state snapshot export failed: {ex.Message}"],
+                error: new DesktopUserFacingOperationError
+                {
+                    StatusText = "Safe state snapshot export failed",
+                    DialogTitle = "Safe state snapshot export failed",
+                    DialogMessage = $"Safe state snapshot export failed:{Environment.NewLine}{ex.Message}"
+                });
+        }
+    }
+
+    public async Task<DesktopCommandResult> ExportSafeRollbackSnapshotAsync(string restoreTargetArchivePath)
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot export safe rollback snapshot because backend root is invalid."]);
+        }
+
+        try
+        {
+            var selectedSnapshot = _shellState.SnapshotState.SelectedStateSnapshot;
+            var restoreTargetFileName = selectedSnapshot?.FileName ?? Path.GetFileName(restoreTargetArchivePath);
+
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Exporting safe rollback snapshot..."
+                }
+            };
+
+            var result = await _dependencies.LocalStateSnapshotService.ExportSafeAsync(_shellState.LocalDocumentState.BackendRootPath);
+            await RefreshStateSnapshotsAsyncInternal(restoreTargetArchivePath);
+            _shellState = _shellState with
+            {
+                SnapshotState = _shellState.SnapshotState with
+                {
+                    LastStateSnapshotText = result.ArchivePath
+                }
+            };
+
+            return BuildResult(
+                succeeded: true,
+                statusText: "Safe rollback snapshot exported",
+                logMessages: [$"Exported safe rollback snapshot to {result.ArchivePath} before restoring {restoreTargetFileName}, while keeping the original restore target selected."]);
+        }
+        catch (Exception ex)
+        {
+            return BuildResult(
+                succeeded: false,
+                statusText: "Safe rollback snapshot export failed",
+                logMessages: [$"Safe rollback snapshot export failed: {ex.Message}"],
+                error: new DesktopUserFacingOperationError
+                {
+                    StatusText = "Safe rollback snapshot export failed",
+                    DialogTitle = "Safe rollback snapshot export failed",
+                    DialogMessage = $"Safe rollback snapshot export failed:{Environment.NewLine}{ex.Message}"
+                });
+        }
+    }
+
     public DesktopShellState ApplyActivityState(DesktopActivityState? state)
     {
         ApplyActivityStateCore(state);

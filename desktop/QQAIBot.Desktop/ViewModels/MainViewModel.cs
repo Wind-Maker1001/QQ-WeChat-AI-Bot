@@ -151,7 +151,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private DesktopGuideFlow _guideFlow = new();
     private BackendControlApiPollState _controlApiPollState = new();
     private bool _controlApiRecoveryInProgress;
-    private bool _restoringActivityState;
     private bool _disposed;
     private bool _pinSelectedQqActivity;
     private bool _pinSelectedWechatActivity;
@@ -271,6 +270,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         RefreshAutoStartState();
         AutoDetectBackendRoot();
+        ApplyState(_controlPlaneSession.BuildCurrentShellState());
         AddLog("Desktop 控制台已初始化。");
     }
 
@@ -697,9 +697,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _pinSelectedQqActivity;
         set
         {
-            if (SetProperty(ref _pinSelectedQqActivity, value))
+            if (_pinSelectedQqActivity != value)
             {
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(pinSelectedQqActivity: value));
             }
         }
     }
@@ -709,14 +709,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _showOnlyQqFailures;
         set
         {
-            if (SetProperty(ref _showOnlyQqFailures, value))
+            if (_showOnlyQqFailures != value)
             {
-                QqRecentActivitiesView.Refresh();
-                SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    QqRecentActivities,
-                    SelectedQqRecentActivity,
-                    ShowOnlyQqFailures);
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(showOnlyQqFailures: value));
             }
         }
     }
@@ -726,12 +721,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _selectedQqRecentActivity;
         set
         {
-            if (SetProperty(ref _selectedQqRecentActivity, value))
+            if (!ReferenceEquals(_selectedQqRecentActivity, value))
             {
-                OnPropertyChanged(nameof(SelectedQqRecentActivitySummaryText));
-                OnPropertyChanged(nameof(SelectedQqRecentActivityMetaText));
-                OnPropertyChanged(nameof(SelectedQqRecentActivityDetailText));
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(
+                    selectedQqRecentActivity: value,
+                    updateQqSelection: true));
             }
         }
     }
@@ -789,9 +783,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _pinSelectedWechatActivity;
         set
         {
-            if (SetProperty(ref _pinSelectedWechatActivity, value))
+            if (_pinSelectedWechatActivity != value)
             {
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(pinSelectedWechatActivity: value));
             }
         }
     }
@@ -801,14 +795,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _showOnlyWechatFailures;
         set
         {
-            if (SetProperty(ref _showOnlyWechatFailures, value))
+            if (_showOnlyWechatFailures != value)
             {
-                WechatRecentActivitiesView.Refresh();
-                SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    WechatRecentActivities,
-                    SelectedWechatRecentActivity,
-                    ShowOnlyWechatFailures);
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(showOnlyWechatFailures: value));
             }
         }
     }
@@ -818,12 +807,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => _selectedWechatRecentActivity;
         set
         {
-            if (SetProperty(ref _selectedWechatRecentActivity, value))
+            if (!ReferenceEquals(_selectedWechatRecentActivity, value))
             {
-                OnPropertyChanged(nameof(SelectedWechatRecentActivitySummaryText));
-                OnPropertyChanged(nameof(SelectedWechatRecentActivityMetaText));
-                OnPropertyChanged(nameof(SelectedWechatRecentActivityDetailText));
-                PersistActivityStateIfPossible();
+                ApplyState(_controlPlaneSession.ApplyActivityStateSelection(
+                    selectedWechatRecentActivity: value,
+                    updateWechatSelection: true));
             }
         }
     }
@@ -1038,7 +1026,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (SetProperty(ref _controlApiToken, value))
             {
-                RefreshHealthReport();
+                SyncSessionEditorState();
             }
         }
     }
@@ -1189,10 +1177,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (SetProperty(ref _selectedStateSnapshot, value))
             {
-                _selectedStateSnapshotPreview = null;
-                OnPropertyChanged(nameof(SelectedStateSnapshotSummaryText));
-                OnPropertyChanged(nameof(SelectedStateSnapshotDetailText));
-                ApplySelectedStateSnapshotPresentation();
+                ApplyState(_controlPlaneSession.UpdateSelectedStateSnapshot(value));
                 _ = RefreshSelectedStateSnapshotPreviewAsync();
                 UpdateCommandStates();
             }
@@ -1495,6 +1480,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await _localStateSnapshotService.ExportAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(result.ArchivePath);
+            LastStateSnapshotText = result.ArchivePath;
             StatusText = "状态快照已导出";
             AddLog($"已导出本地状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
@@ -1530,6 +1516,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(result.ArchivePath);
+            LastStateSnapshotText = result.ArchivePath;
             StatusText = "安全状态快照已导出";
             AddLog($"已导出安全状态快照到 {result.ArchivePath}，包含 {result.IncludedEntries.Count} 项，且不含 .env 密钥。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
@@ -1566,6 +1553,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await _localStateSnapshotService.ExportSafeAsync(BackendRootPath);
             LastStateSnapshotText = result.ArchivePath;
             await RefreshStateSnapshotsAsync(restoreTargetArchivePath);
+            LastStateSnapshotText = result.ArchivePath;
             StatusText = "安全回滚快照已导出";
             AddLog($"已在恢复 {restoreTargetFileName} 前导出安全回滚快照到 {result.ArchivePath}，原始恢复目标保持选中。");
             OnPropertyChanged(nameof(StateSnapshotFolderPathText));
@@ -1612,14 +1600,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             StatusText = "正在恢复最新状态快照...";
-            var result = await _localStateSnapshotService.RestoreLatestAsync(BackendRootPath);
-            LastStateRestoreText = result.ArchivePath;
-            ApplyRestoreResultSummary(result, preview);
-            StatusText = "最新状态快照已恢复";
-            AddLog($"已从 {result.ArchivePath} 恢复本地状态快照，共恢复 {result.RestoredEntries.Count} 项。");
-            await RefreshStateSnapshotsAsync(result.ArchivePath);
-            await LoadConfigAsync();
-            ApplyRestoreAvailabilityCheck();
+            ApplyCommandResult(await _controlPlaneSession.RestoreLatestStateSnapshotAsync());
         }
         catch (Exception ex)
         {
@@ -1660,16 +1641,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             StatusText = "正在恢复选中状态快照...";
-            var result = await _localStateSnapshotService.RestoreAsync(
-                BackendRootPath,
-                SelectedStateSnapshot.ArchivePath);
-            LastStateRestoreText = result.ArchivePath;
-            ApplyRestoreResultSummary(result, preview);
-            StatusText = "选中状态快照已恢复";
-            AddLog($"已从 {result.ArchivePath} 恢复选中状态快照，共恢复 {result.RestoredEntries.Count} 项。");
-            await RefreshStateSnapshotsAsync(result.ArchivePath);
-            await LoadConfigAsync();
-            ApplyRestoreAvailabilityCheck();
+            ApplyCommandResult(await _controlPlaneSession.RestoreSelectedStateSnapshotAsync(SelectedStateSnapshot.ArchivePath));
         }
         catch (Exception ex)
         {
@@ -1708,20 +1680,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             StatusText = "正在删除选中快照...";
-            await _localStateSnapshotService.DeleteAsync(archivePath);
-            AddLog($"已删除状态快照：{archivePath}");
-            await RefreshStateSnapshotsAsync();
-            StatusText = "选中快照已删除";
-
-            if (string.Equals(LastStateSnapshotText, archivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                LastStateSnapshotText = "尚未导出状态快照";
-            }
-
-            if (string.Equals(LastStateRestoreText, archivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                ResetRestoreResultState();
-            }
+            ApplyCommandResult(await _controlPlaneSession.DeleteSelectedStateSnapshotAsync(archivePath));
         }
         catch (Exception ex)
         {
@@ -2030,71 +1989,17 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task RefreshStateSnapshotsAsync()
     {
-        await RefreshStateSnapshotsAsync(selectArchivePath: null);
+        ApplyCommandResult(await _controlPlaneSession.RefreshStateSnapshotsAsync(selectArchivePath: null), showErrorDialog: false);
     }
 
     private async Task RefreshStateSnapshotsAsync(string? selectArchivePath)
     {
-        if (!IsBackendRootValid)
-        {
-            ReplaceStateSnapshots([]);
-            SelectedStateSnapshot = null;
-            ApplySelectedStateSnapshotPresentation();
-            return;
-        }
-
-        var snapshots = await _localStateSnapshotService.ListAsync(BackendRootPath);
-        var selectedArchivePath = !string.IsNullOrWhiteSpace(selectArchivePath)
-            ? selectArchivePath
-            : SelectedStateSnapshot?.ArchivePath;
-
-        ReplaceStateSnapshots(snapshots);
-        SelectedStateSnapshot = StateSnapshots.FirstOrDefault(
-            (snapshot) => string.Equals(snapshot.ArchivePath, selectedArchivePath, StringComparison.OrdinalIgnoreCase))
-            ?? StateSnapshots.FirstOrDefault();
+        ApplyCommandResult(await _controlPlaneSession.RefreshStateSnapshotsAsync(selectArchivePath), showErrorDialog: false);
     }
 
     private async Task RefreshSelectedStateSnapshotPreviewAsync()
     {
-        var selectedSnapshot = SelectedStateSnapshot;
-
-        if (selectedSnapshot is null || !IsBackendRootValid)
-        {
-            _selectedStateSnapshotPreview = null;
-            ApplySelectedStateSnapshotPresentation();
-            return;
-        }
-
-        ApplySelectedStateSnapshotPresentation(
-            diffTextOverride: "Loading diff preview...",
-            adviceTextOverride: "Loading restore advice...");
-
-        try
-        {
-            var preview = await _localStateSnapshotService.PreviewAsync(
-                BackendRootPath,
-                selectedSnapshot.ArchivePath);
-
-            if (!string.Equals(SelectedStateSnapshot?.ArchivePath, selectedSnapshot.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            _selectedStateSnapshotPreview = preview;
-            ApplySelectedStateSnapshotPresentation();
-        }
-        catch (Exception ex)
-        {
-            if (!string.Equals(SelectedStateSnapshot?.ArchivePath, selectedSnapshot.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            _selectedStateSnapshotPreview = null;
-            ApplySelectedStateSnapshotPresentation(
-                diffTextOverride: $"Diff preview unavailable: {ex.Message}",
-                adviceTextOverride: "Review the snapshot details carefully before restoring.");
-        }
+        ApplyCommandResult(await _controlPlaneSession.RefreshSelectedStateSnapshotPreviewAsync(), showErrorDialog: false);
     }
 
     private void ReplaceHealthChecks(IEnumerable<DesktopHealthCheckItem> items)
@@ -2321,11 +2226,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         QqRecentActivitiesView.Refresh();
         WechatRecentActivitiesView.Refresh();
 
-        RefreshLatestTurnOverview();
-        RefreshHealthReport();
-        ApplySelectedStateSnapshotPresentation();
-        ApplyRestorePresentation();
-
         foreach (var propertyName in DesktopShellPropertyCatalog.AllPropertyNames())
         {
             OnPropertyChanged(propertyName);
@@ -2487,183 +2387,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         OnPropertyChanged(nameof(ControlApiEndpointText));
-    }
-
-    private void ApplyBackendRuntimeStatus(BackendRuntimeStatus? status, bool controlApiReachable)
-    {
-        var projection = BackendRuntimeSnapshotCoordinator.ProjectRuntimeStatus(
-            status,
-            controlApiReachable,
-            new BackendChannelActivityContext(
-                QqRecentActivities,
-                _lastQqRequestEventKey,
-                _lastQqFailureEventKey,
-                PinSelectedQqActivity,
-                SelectedQqRecentActivity),
-            new BackendChannelActivityContext(
-                WechatRecentActivities,
-                _lastWechatRequestEventKey,
-                _lastWechatFailureEventKey,
-                PinSelectedWechatActivity,
-                SelectedWechatRecentActivity));
-
-        BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(QqRecentActivities, projection.QqActivity.Items);
-        BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(WechatRecentActivities, projection.WechatActivity.Items);
-        _lastQqRequestEventKey = projection.QqActivity.LastRequestEventKey;
-        _lastQqFailureEventKey = projection.QqActivity.LastFailureEventKey;
-        _selectedQqRecentActivity = projection.QqActivity.SelectedItem;
-        _lastWechatRequestEventKey = projection.WechatActivity.LastRequestEventKey;
-        _lastWechatFailureEventKey = projection.WechatActivity.LastFailureEventKey;
-        _selectedWechatRecentActivity = projection.WechatActivity.SelectedItem;
-        IsProcessRunning = projection.SnapshotState.RuntimeActive == true;
-        _runtimeSnapshot = projection.SnapshotState;
-        RefreshLatestTurnOverview();
-        RefreshHealthReport();
-
-        if (HasStateRestoreResult)
-        {
-            ApplyRestoreAvailabilityCheck();
-        }
-
-        OnPropertyChanged(nameof(IsControlApiReachable));
-        NotifyRuntimeSnapshotChanged();
-        PersistActivityStateIfPossible();
-    }
-
-    private void LoadActivityState()
-    {
-        if (!IsBackendRootValid)
-        {
-            ApplyActivityState(_activityStatePolicy.CreateDefaultState());
-            return;
-        }
-
-        ApplyActivityState(_activityStateStore.Load(BackendRootPath));
-    }
-
-    private void PersistActivityStateIfPossible()
-    {
-        if (_restoringActivityState || !IsBackendRootValid)
-        {
-            return;
-        }
-
-        var state = _activityStatePolicy.CreateSnapshot(
-            QqRecentActivities,
-            WechatRecentActivities,
-            SelectedQqRecentActivity,
-            SelectedWechatRecentActivity,
-            PinSelectedQqActivity,
-            PinSelectedWechatActivity,
-            ShowOnlyQqFailures,
-            ShowOnlyWechatFailures);
-
-        try
-        {
-            _activityStateStore.Save(BackendRootPath, state);
-        }
-        catch (Exception ex)
-        {
-            AddLog($"Failed to persist local activity state: {ex.Message}");
-        }
-    }
-
-    private void ApplyActivityState(DesktopActivityState? state)
-    {
-        var projection = BackendRuntimeSnapshotCoordinator.ProjectActivityRestore(
-            _activityStatePolicy,
-            state);
-
-        _restoringActivityState = true;
-        try
-        {
-            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(QqRecentActivities, projection.QqRecentActivities);
-            BackendRuntimeSnapshotViewHelper.ReplaceRecentActivities(WechatRecentActivities, projection.WechatRecentActivities);
-            _pinSelectedQqActivity = projection.PinSelectedQqActivity;
-            _pinSelectedWechatActivity = projection.PinSelectedWechatActivity;
-            _showOnlyQqFailures = projection.ShowOnlyQqFailures;
-            _showOnlyWechatFailures = projection.ShowOnlyWechatFailures;
-            _selectedQqRecentActivity = projection.SelectedQqRecentActivity;
-            _selectedWechatRecentActivity = projection.SelectedWechatRecentActivity;
-        }
-        finally
-        {
-            _restoringActivityState = false;
-        }
-
-        QqRecentActivitiesView.Refresh();
-        WechatRecentActivitiesView.Refresh();
-        SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-            QqRecentActivities,
-            SelectedQqRecentActivity,
-            ShowOnlyQqFailures);
-        SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-            WechatRecentActivities,
-            SelectedWechatRecentActivity,
-            ShowOnlyWechatFailures);
-        RefreshGuideFlow();
-        NotifyRuntimeSnapshotChanged();
-    }
-
-    private void ResetControlApiFailureState()
-    {
-        _controlApiPollState = new BackendControlApiPollState();
-        _controlApiRecoveryInProgress = false;
-    }
-
-    private async Task TryRecoverControlApiAsync(string reason)
-    {
-        if (_controlApiRecoveryInProgress || !IsBackendRootValid)
-        {
-            return;
-        }
-
-        _controlApiRecoveryInProgress = true;
-
-        try
-        {
-            var outcome = await BackendControlApiRecoveryCoordinator.TryRecoverAsync(
-                reason,
-                prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
-                tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
-                getLastFailure: () => _backendControlApiService.LastFailure,
-                isImmediateFailure: IsImmediateControlApiFailure,
-                isProcessRunning: () => _botProcessService.IsRunning,
-                startProcess: () => _botProcessService.Start(BackendRootPath),
-                tryStartAsync: (cancellationToken) => _backendControlApiService.TryStartAsync(cancellationToken),
-                waitForStatusAsync: (cancellationToken) => BackendControlApiStatusWaiter.WaitForStatusAsync(
-                    (innerCancellationToken) => _backendControlApiService.TryGetStatusAsync(innerCancellationToken),
-                    () => _backendControlApiService.LastFailure,
-                    cancellationToken: cancellationToken),
-                detachProcess: () => _botProcessService.Detach());
-
-            foreach (var logMessage in outcome.LogMessages)
-            {
-                AddLog(logMessage);
-            }
-
-            if (outcome.RecoveredStatus is not null)
-            {
-                ApplyBackendRuntimeStatus(outcome.RecoveredStatus, true);
-                ResetControlApiFailureState();
-            }
-        }
-        finally
-        {
-            _controlApiRecoveryInProgress = false;
-        }
-    }
-
-    private async Task<BackendControlConfigResponse> SaveConfigThroughControlApiAsync(BotConfig config)
-    {
-        return await BackendControlPlaneFacade.SaveConfigAsync(
-            prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
-            config,
-            trySaveConfigAsync: (submittedConfig, cancellationToken) => _backendControlApiService.TrySaveConfigAsync(submittedConfig, cancellationToken),
-            getLastFailure: () => _backendControlApiService.LastFailure,
-            tryGetStatusAsync: (cancellationToken) => _backendControlApiService.TryGetStatusAsync(cancellationToken),
-            isImmediateFailure: IsImmediateControlApiFailure,
-            tryRecoverControlApiAsync: () => TryRecoverControlApiAsync("save-config"));
     }
 
     private async Task<EnvDocument> LoadLocalEnvDocumentAsync(bool suppressErrors = false)

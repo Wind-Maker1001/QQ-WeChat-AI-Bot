@@ -73,6 +73,7 @@ await RunTestAsync("DesktopControlPlaneSession projects snapshot preview and res
 await RunTestAsync("DesktopControlPlaneSession preserves pinned activity selection and failure filtering across runtime updates", TestDesktopControlPlaneSessionActivitySelectionStabilityAsync);
 await RunTestAsync("DesktopControlPlaneSession exports snapshots and preserves rollback selection", TestDesktopControlPlaneSessionSnapshotExportAsync);
 await RunTestAsync("DesktopControlPlaneSession builds snapshot confirmation payloads", TestDesktopControlPlaneSessionSnapshotConfirmationAsync);
+await RunTestAsync("DesktopControlPlaneSession routes local path operations through the path service", TestDesktopControlPlaneSessionLocalPathOperationsAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
@@ -2870,6 +2871,31 @@ async Task TestDesktopControlPlaneSessionSnapshotConfirmationAsync()
     AssertContains(deletePrompt.Message, "永久移除", "Delete confirmation should explain permanence.");
 }
 
+async Task TestDesktopControlPlaneSessionLocalPathOperationsAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-local-paths-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    await session.LoadConfigAsync();
+
+    var openSessionStoreResult = session.OpenSessionStoreFolder();
+    AssertTrue(openSessionStoreResult.Succeeded, "Opening the session store folder should succeed.");
+    AssertContains(context.FakeLocalPathOperationsService.OpenedFolders[0], "data", "Session store action should open the data folder.");
+
+    var openImageCacheResult = session.OpenImageCacheFolder();
+    AssertTrue(openImageCacheResult.Succeeded, "Opening the image cache folder should succeed.");
+    AssertContains(context.FakeLocalPathOperationsService.OpenedFolders[1], "image-cache", "Image cache action should open the image cache folder.");
+
+    var clearImageCacheResult = session.ClearImageCache();
+    AssertTrue(clearImageCacheResult.Succeeded, "Clearing the image cache should succeed.");
+    AssertEqual(1, context.FakeLocalPathOperationsService.ClearCallCount, "Clear image cache should invoke the path operation service.");
+    AssertContains(context.FakeLocalPathOperationsService.LastClearedDirectory, "image-cache", "Clear image cache should target the image cache path.");
+
+    var openSnapshotFolderResult = session.OpenStateSnapshotFolder();
+    AssertTrue(openSnapshotFolderResult.Succeeded, "Opening the state snapshot folder should succeed.");
+    AssertContains(context.FakeLocalPathOperationsService.OpenedFolders[^1], "state-snapshots", "Open snapshot folder should target the snapshot directory.");
+}
+
 Task TestDesktopControlPlaneFeedbackAsync()
 {
     var statusText = string.Empty;
@@ -5194,6 +5220,7 @@ async Task TestMainWindowHealthActionsAsync()
                 // UI smoke no longer asserts rollback-export selection preservation.
                 refreshStateSnapshotsButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.ListCallCount >= 2, "state snapshot list refresh");
+                stateSnapshotsListBox.SelectedIndex = 1;
 
                 fakeConfirmationDialogService.Results.Enqueue(true);
                 restoreSelectedStateSnapshotButton.Command.Execute(null);

@@ -638,6 +638,131 @@ public sealed class DesktopControlPlaneSession
         return _shellState;
     }
 
+    public DesktopCommandResult OpenSessionStoreFolder()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot open session store folder because backend root is invalid."]);
+        }
+
+        var sessionDirectory = Path.Combine(_shellState.LocalDocumentState.BackendRootPath, "data");
+        _dependencies.LocalPathOperationsService.OpenFolder(sessionDirectory);
+        return BuildResult(
+            succeeded: true,
+            statusText: "Opened session store folder",
+            logMessages: [$"Opened session store folder: {sessionDirectory}"]);
+    }
+
+    public DesktopCommandResult OpenImageCacheFolder()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot open image cache folder because backend root is invalid."]);
+        }
+
+        var imageCachePath = Path.Combine(_shellState.LocalDocumentState.BackendRootPath, "data", "image-cache");
+        _dependencies.LocalPathOperationsService.OpenFolder(imageCachePath);
+        return BuildResult(
+            succeeded: true,
+            statusText: "Opened image cache folder",
+            logMessages: [$"Opened image cache folder: {imageCachePath}"]);
+    }
+
+    public DesktopCommandResult ClearImageCache()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot clear image cache because backend root is invalid."]);
+        }
+
+        try
+        {
+            var imageCachePath = Path.Combine(_shellState.LocalDocumentState.BackendRootPath, "data", "image-cache");
+            var removedEntries = _dependencies.LocalPathOperationsService.ClearDirectoryContents(imageCachePath);
+            var statusText = removedEntries > 0 ? "Image cache cleared" : "Image cache was already empty";
+            var logMessage = removedEntries > 0
+                ? $"Cleared image cache {imageCachePath}, removing {removedEntries} entries."
+                : $"Image cache was already empty: {imageCachePath}";
+
+            return BuildResult(
+                succeeded: true,
+                statusText: statusText,
+                logMessages: [logMessage]);
+        }
+        catch (Exception ex)
+        {
+            return BuildResult(
+                succeeded: false,
+                statusText: "Image cache clear failed",
+                logMessages: [$"Image cache clear failed: {ex.Message}"],
+                error: new DesktopUserFacingOperationError
+                {
+                    StatusText = "Image cache clear failed",
+                    DialogTitle = "Image cache clear failed",
+                    DialogMessage = $"Image cache clear failed:{Environment.NewLine}{ex.Message}"
+                });
+        }
+    }
+
+    public DesktopCommandResult OpenStateSnapshotFolder()
+    {
+        if (!IsBackendRootValid())
+        {
+            _shellState = _shellState with
+            {
+                UiFeedbackState = _shellState.UiFeedbackState with
+                {
+                    StatusText = "Backend root is invalid"
+                }
+            };
+
+            return BuildResult(
+                succeeded: false,
+                statusText: "Backend root is invalid",
+                logMessages: ["Cannot open state snapshot folder because backend root is invalid."]);
+        }
+
+        var snapshotFolderPath = Path.Combine(_shellState.LocalDocumentState.BackendRootPath, "artifacts", "state-snapshots");
+        _dependencies.LocalPathOperationsService.OpenFolder(snapshotFolderPath);
+        return BuildResult(
+            succeeded: true,
+            statusText: "Opened state snapshot folder",
+            logMessages: [$"Opened state snapshot folder: {snapshotFolderPath}"]);
+    }
+
     public async Task<DesktopCommandResult> ExportStateSnapshotAsync()
     {
         if (!IsBackendRootValid())

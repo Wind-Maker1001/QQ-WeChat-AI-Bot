@@ -1408,56 +1408,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void OpenSessionStoreFolder()
     {
-        if (!IsBackendRootValid)
-        {
-            return;
-        }
-
-        var sessionDirectory = Path.GetDirectoryName(SessionStorePathText) ?? Path.Combine(BackendRootPath, "data");
-        _localPathOperationsService.OpenFolder(sessionDirectory);
-        StatusText = "Opened session store folder";
-        AddLog($"Opened session store folder: {sessionDirectory}");
+        ApplyCommandResult(_controlPlaneSession.OpenSessionStoreFolder());
     }
 
     private void OpenImageCacheFolder()
     {
-        if (!IsBackendRootValid)
-        {
-            return;
-        }
-
-        _localPathOperationsService.OpenFolder(ImageCachePathText);
-        StatusText = "Opened image cache folder";
-        AddLog($"Opened image cache folder: {ImageCachePathText}");
+        ApplyCommandResult(_controlPlaneSession.OpenImageCacheFolder());
     }
 
     private void ClearImageCache()
     {
-        if (!IsBackendRootValid)
-        {
-            return;
-        }
-
-        try
-        {
-            var removedEntries = _localPathOperationsService.ClearDirectoryContents(ImageCachePathText);
-            StatusText = removedEntries > 0 ? "图片缓存已清理" : "图片缓存本来就是空的";
-            AddLog(
-                removedEntries > 0
-                    ? $"已清理图片缓存 {ImageCachePathText}，移除了 {removedEntries} 个条目。"
-                    : $"图片缓存本来就是空的: {ImageCachePathText}");
-            OnPropertyChanged(nameof(ImageCacheStateText));
-        }
-        catch (Exception ex)
-        {
-            StatusText = "清空图片缓存失败";
-            AddLog($"清空图片缓存失败：{ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"清空图片缓存失败：\n{ex.Message}",
-                "清空图片缓存失败",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
+        ApplyCommandResult(_controlPlaneSession.ClearImageCache());
+        OnPropertyChanged(nameof(ImageCacheStateText));
     }
 
     private async Task ExportStateSnapshotAsync()
@@ -1606,14 +1568,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void OpenStateSnapshotFolder()
     {
-        if (!IsBackendRootValid)
-        {
-            return;
-        }
-
-        _localPathOperationsService.OpenFolder(StateSnapshotFolderPathText);
-        StatusText = "已打开状态快照目录";
-        AddLog($"已打开状态快照目录：{StateSnapshotFolderPathText}");
+        ApplyCommandResult(_controlPlaneSession.OpenStateSnapshotFolder());
     }
 
     private void ApplyBaseUrlPreset(object? parameter)

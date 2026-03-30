@@ -1494,17 +1494,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            var snapshots = await _localStateSnapshotService.ListAsync(BackendRootPath);
-            var latestSnapshot = snapshots.FirstOrDefault()
-                ?? throw new InvalidOperationException("当前没有可恢复的状态快照。");
-            var preview = await _localStateSnapshotService.PreviewAsync(BackendRootPath, latestSnapshot.ArchivePath);
+            var confirmation = await _controlPlaneSession.BuildRestoreLatestStateSnapshotConfirmationAsync();
 
             if (!_confirmationDialogService.Confirm(
-                    "恢复最新快照",
-                    BuildRestoreConfirmationMessage(latestSnapshot, preview)))
+                    confirmation.Title,
+                    confirmation.Message))
             {
                 StatusText = "已取消恢复最新快照";
-                AddLog($"已取消恢复最新快照：{latestSnapshot.ArchivePath}");
+                AddLog($"已取消恢复最新快照：{confirmation.ArchivePath}");
                 return;
             }
 
@@ -1536,16 +1533,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            var preview = await _localStateSnapshotService.PreviewAsync(
-                BackendRootPath,
+            var confirmation = await _controlPlaneSession.BuildRestoreSelectedStateSnapshotConfirmationAsync(
                 SelectedStateSnapshot.ArchivePath);
 
             if (!_confirmationDialogService.Confirm(
-                    "恢复选中快照",
-                    BuildRestoreConfirmationMessage(SelectedStateSnapshot, preview)))
+                    confirmation.Title,
+                    confirmation.Message))
             {
                 StatusText = "已取消恢复选中快照";
-                AddLog($"已取消恢复选中快照：{SelectedStateSnapshot.ArchivePath}");
+                AddLog($"已取消恢复选中快照：{confirmation.ArchivePath}");
                 return;
             }
 
@@ -1578,10 +1574,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var archivePath = SelectedStateSnapshot.ArchivePath;
+            var confirmation = _controlPlaneSession.BuildDeleteSelectedStateSnapshotConfirmation(archivePath);
 
             if (!_confirmationDialogService.Confirm(
-                    "删除选中快照",
-                    BuildDeleteConfirmationMessage(SelectedStateSnapshot)))
+                    confirmation.Title,
+                    confirmation.Message))
             {
                 StatusText = "已取消删除快照";
                 AddLog($"已取消删除选中快照：{archivePath}");
@@ -2296,44 +2293,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         return $"{normalizedSystemPrompt}{Environment.NewLine}{Environment.NewLine}附加人格设定:{Environment.NewLine}{normalizedPersona}";
-    }
-
-    private static string BuildRestoreConfirmationMessage(
-        LocalStateSnapshotDescriptor snapshot,
-        LocalStateSnapshotPreviewResult preview)
-    {
-        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(snapshot, preview);
-
-        return string.Join(
-            Environment.NewLine,
-            [
-                $"恢复快照：{snapshot.FileName}",
-                snapshot.Summary,
-                "会被覆盖的内容",
-                presentation.ImpactText,
-                string.Empty,
-                "恢复前建议",
-                presentation.SafetyHeadlineText,
-                presentation.SafetyRecommendationText,
-                presentation.RollbackHintText,
-                string.Empty,
-                "当前状态 vs 快照",
-                presentation.DiffText,
-                presentation.AdviceText,
-                "是否继续？"
-            ]);
-    }
-
-    private static string BuildDeleteConfirmationMessage(LocalStateSnapshotDescriptor snapshot)
-    {
-        return string.Join(
-            Environment.NewLine,
-            [
-                $"删除快照：{snapshot.FileName}",
-                snapshot.Summary,
-                "这会从本地快照目录中永久移除当前选中的归档。",
-                "是否继续？"
-            ]);
     }
 
     private void ClearQqActivityHistory()

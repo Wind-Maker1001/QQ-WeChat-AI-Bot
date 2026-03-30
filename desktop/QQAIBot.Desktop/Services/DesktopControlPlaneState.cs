@@ -175,6 +175,15 @@ public sealed record DesktopCommandResult
     public string? SuggestedHealthActionKey { get; init; }
 }
 
+public sealed record DesktopConfirmationPrompt
+{
+    public string Title { get; init; } = string.Empty;
+
+    public string Message { get; init; } = string.Empty;
+
+    public string ArchivePath { get; init; } = string.Empty;
+}
+
 public sealed record DesktopSessionDependencies
 {
     public required ILocalConfigFallbackReader LocalConfigFallbackReader { get; init; }

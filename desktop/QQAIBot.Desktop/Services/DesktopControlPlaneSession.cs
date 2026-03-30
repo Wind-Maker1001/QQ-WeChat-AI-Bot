@@ -815,6 +815,56 @@ public sealed class DesktopControlPlaneSession
         }
     }
 
+    public async Task<DesktopConfirmationPrompt> BuildRestoreLatestStateSnapshotConfirmationAsync()
+    {
+        var latestSnapshot = (await _dependencies.LocalStateSnapshotService.ListAsync(
+            _shellState.LocalDocumentState.BackendRootPath)).FirstOrDefault()
+            ?? throw new InvalidOperationException("当前没有可恢复的状态快照。");
+        var preview = await _dependencies.LocalStateSnapshotService.PreviewAsync(
+            _shellState.LocalDocumentState.BackendRootPath,
+            latestSnapshot.ArchivePath);
+
+        return new DesktopConfirmationPrompt
+        {
+            Title = "恢复最新快照",
+            Message = BuildRestoreConfirmationMessage(latestSnapshot, preview),
+            ArchivePath = latestSnapshot.ArchivePath
+        };
+    }
+
+    public async Task<DesktopConfirmationPrompt> BuildRestoreSelectedStateSnapshotConfirmationAsync(string archivePath)
+    {
+        var snapshot = _shellState.SnapshotState.StateSnapshots.FirstOrDefault(
+                (candidate) => string.Equals(candidate.ArchivePath, archivePath, StringComparison.OrdinalIgnoreCase))
+            ?? _shellState.SnapshotState.SelectedStateSnapshot
+            ?? throw new InvalidOperationException("当前没有选中的状态快照。");
+        var preview = await _dependencies.LocalStateSnapshotService.PreviewAsync(
+            _shellState.LocalDocumentState.BackendRootPath,
+            snapshot.ArchivePath);
+
+        return new DesktopConfirmationPrompt
+        {
+            Title = "恢复选中快照",
+            Message = BuildRestoreConfirmationMessage(snapshot, preview),
+            ArchivePath = snapshot.ArchivePath
+        };
+    }
+
+    public DesktopConfirmationPrompt BuildDeleteSelectedStateSnapshotConfirmation(string archivePath)
+    {
+        var snapshot = _shellState.SnapshotState.StateSnapshots.FirstOrDefault(
+                (candidate) => string.Equals(candidate.ArchivePath, archivePath, StringComparison.OrdinalIgnoreCase))
+            ?? _shellState.SnapshotState.SelectedStateSnapshot
+            ?? throw new InvalidOperationException("当前没有选中的状态快照。");
+
+        return new DesktopConfirmationPrompt
+        {
+            Title = "删除选中快照",
+            Message = BuildDeleteConfirmationMessage(snapshot),
+            ArchivePath = snapshot.ArchivePath
+        };
+    }
+
     public DesktopShellState ApplyActivityState(DesktopActivityState? state)
     {
         ApplyActivityStateCore(state);
@@ -1524,6 +1574,44 @@ public sealed class DesktopControlPlaneSession
         };
         CopyLocalExtraValues(source, nextDocument);
         return nextDocument;
+    }
+
+    private static string BuildRestoreConfirmationMessage(
+        LocalStateSnapshotDescriptor snapshot,
+        LocalStateSnapshotPreviewResult preview)
+    {
+        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(snapshot, preview);
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"恢复快照：{snapshot.FileName}",
+                snapshot.Summary,
+                "会被覆盖的内容：",
+                presentation.ImpactText,
+                string.Empty,
+                "恢复前建议：",
+                presentation.SafetyHeadlineText,
+                presentation.SafetyRecommendationText,
+                presentation.RollbackHintText,
+                string.Empty,
+                "当前状态 vs 快照",
+                presentation.DiffText,
+                presentation.AdviceText,
+                "是否继续？"
+            ]);
+    }
+
+    private static string BuildDeleteConfirmationMessage(LocalStateSnapshotDescriptor snapshot)
+    {
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"删除快照：{snapshot.FileName}",
+                snapshot.Summary,
+                "这会从本地快照目录中永久移除当前选中的归档。",
+                "是否继续？"
+            ]);
     }
 
     private DesktopCommandResult BuildResult(

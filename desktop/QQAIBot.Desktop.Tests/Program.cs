@@ -72,6 +72,7 @@ await RunTestAsync("DesktopControlPlaneSession targets selected snapshot for pre
 await RunTestAsync("DesktopControlPlaneSession projects snapshot preview and restore presentation from selected snapshot context", TestDesktopControlPlaneSessionSnapshotPresentationAsync);
 await RunTestAsync("DesktopControlPlaneSession preserves pinned activity selection and failure filtering across runtime updates", TestDesktopControlPlaneSessionActivitySelectionStabilityAsync);
 await RunTestAsync("DesktopControlPlaneSession exports snapshots and preserves rollback selection", TestDesktopControlPlaneSessionSnapshotExportAsync);
+await RunTestAsync("DesktopControlPlaneSession builds snapshot confirmation payloads", TestDesktopControlPlaneSessionSnapshotConfirmationAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
@@ -2838,6 +2839,37 @@ async Task TestDesktopControlPlaneSessionSnapshotExportAsync()
     AssertEqual(selectedSnapshot.ArchivePath, rollbackExportResult.NextState?.SnapshotState.SelectedStateSnapshot?.ArchivePath, "Safe rollback snapshot export should preserve the original restore target selection.");
 }
 
+async Task TestDesktopControlPlaneSessionSnapshotConfirmationAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-snapshot-confirmation-");
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    await session.LoadConfigAsync();
+    await session.RefreshStateSnapshotsAsync();
+    var selectedSnapshot = context.FakeLocalStateSnapshotService.Snapshots.Last();
+    session.UpdateSelectedStateSnapshot(selectedSnapshot);
+
+    var restorePrompt = await session.BuildRestoreSelectedStateSnapshotConfirmationAsync(selectedSnapshot.ArchivePath);
+    AssertEqual("恢复选中快照", restorePrompt.Title, "Restore confirmation should expose the selected-snapshot title.");
+    AssertContains(restorePrompt.Message, "恢复前建议", "Restore confirmation should include a dedicated pre-restore safety section.");
+    AssertContains(restorePrompt.Message, "安全回滚快照", "Restore confirmation should recommend a safe rollback snapshot before overwriting current state.");
+    AssertContains(restorePrompt.Message, ".env", "Restore confirmation should mention env overwrite risk.");
+    AssertContains(restorePrompt.Message, "与当前状态不同", "Restore confirmation should include diff preview lines.");
+    AssertContains(restorePrompt.Message, "OPENAI_API_KEY", "Restore confirmation should list tracked env keys that change.");
+    AssertContains(restorePrompt.Message, "********1234", "Restore confirmation should keep secret values masked.");
+    AssertContains(restorePrompt.Message, "sessions.json", "Restore confirmation should list changed data files.");
+    AssertContains(restorePrompt.Message, "仅当前存在的数据文件：无", "Restore confirmation should include current-only data summary.");
+    AssertContains(restorePrompt.Message, "sessions.json 会话数：当前 3 -> 快照 2", "Restore confirmation should include session count changes.");
+    AssertContains(restorePrompt.Message, "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC", "Restore confirmation should include latest session activity timestamps.");
+    AssertContains(restorePrompt.Message, "qq:group-c/user-c", "Restore confirmation should include changed conversation keys.");
+    AssertContains(restorePrompt.Message, "恢复前先导出当前状态", "Restore confirmation should include restore advice.");
+    AssertContains(restorePrompt.Message, "不要把归档分享", "Restore confirmation should include secret handling advice.");
+
+    var deletePrompt = session.BuildDeleteSelectedStateSnapshotConfirmation(selectedSnapshot.ArchivePath);
+    AssertEqual("删除选中快照", deletePrompt.Title, "Delete confirmation should expose the selected-snapshot title.");
+    AssertContains(deletePrompt.Message, "永久移除", "Delete confirmation should explain permanence.");
+}
+
 Task TestDesktopControlPlaneFeedbackAsync()
 {
     var statusText = string.Empty;
@@ -5172,19 +5204,7 @@ async Task TestMainWindowHealthActionsAsync()
                 // Session tests cover restore archive targeting.
                 // Session tests cover restore preview targeting.
                 AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "恢复前建议", "Restore confirmation should include a dedicated pre-restore safety section.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "安全回滚快照", "Restore confirmation should recommend a safe rollback snapshot before overwriting current state.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, ".env", "Restore confirmation should mention env overwrite risk.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "与当前状态不同", "Restore confirmation should include diff preview lines.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "OPENAI_API_KEY", "Restore confirmation should list tracked env keys that change.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "********1234", "Restore confirmation should keep secret values masked.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json", "Restore confirmation should list changed data files.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "仅当前存在的数据文件：无", "Restore confirmation should include current-only data summary.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json 会话数：当前 3 -> 快照 2", "Restore confirmation should include session count changes.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC", "Restore confirmation should include latest session activity timestamps.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "qq:group-c/user-c", "Restore confirmation should include changed conversation keys.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "恢复前先导出当前状态", "Restore confirmation should include restore advice.");
-                AssertContains(fakeConfirmationDialogService.LastMessage, "不要把归档分享", "Restore confirmation should include secret handling advice.");
+                AssertFalse(string.IsNullOrWhiteSpace(fakeConfirmationDialogService.LastMessage), "Restore confirmation should keep a visible confirmation message.");
 
                 fakeConfirmationDialogService.Results.Enqueue(false);
                 deleteSelectedStateSnapshotButton.Command.Execute(null);

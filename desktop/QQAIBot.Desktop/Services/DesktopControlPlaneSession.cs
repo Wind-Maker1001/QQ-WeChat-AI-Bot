@@ -10,6 +10,7 @@ public sealed class DesktopControlPlaneSession
     private const int ControlApiRecoveryAttemptThreshold = 2;
     private const int ControlApiOutageNotificationThreshold = 3;
     private const string ControlApiTokenEnvKey = "QQ_AI_BOT_CONTROL_API_TOKEN";
+    private static readonly DesktopActivityStateStoragePolicy ActivityStateStoragePolicy = new();
 
     private readonly DesktopSessionDependencies _dependencies;
     private DesktopShellState _shellState;
@@ -21,6 +22,7 @@ public sealed class DesktopControlPlaneSession
     {
         _dependencies = dependencies;
         _shellState = initialState;
+        ApplyLocalDocumentProjection();
         RecalculateDerivedState();
     }
 
@@ -74,6 +76,7 @@ public sealed class DesktopControlPlaneSession
         };
 
         LoadActivityStateCore();
+        ApplyLocalDocumentProjection();
         RecalculateDerivedState();
         return _shellState;
     }
@@ -153,6 +156,7 @@ public sealed class DesktopControlPlaneSession
                 }
             };
 
+            ApplyLocalDocumentProjection();
             ApplyBackendRuntimeStatusCore(apiStatus, apiStatus is not null);
             await RefreshStateSnapshotsAsyncInternal(selectArchivePath: null);
             _shellState = _shellState with
@@ -717,6 +721,7 @@ public sealed class DesktopControlPlaneSession
                 ? $"Cleared image cache {imageCachePath}, removing {removedEntries} entries."
                 : $"Image cache was already empty: {imageCachePath}";
 
+            ApplyLocalDocumentProjection();
             return BuildResult(
                 succeeded: true,
                 statusText: statusText,
@@ -1458,6 +1463,7 @@ public sealed class DesktopControlPlaneSession
                 }
             };
             ApplySelectedStateSnapshotPresentationCore();
+            ApplyLocalDocumentProjection();
             return;
         }
 
@@ -1480,10 +1486,12 @@ public sealed class DesktopControlPlaneSession
             }
         };
         ApplySelectedStateSnapshotPresentationCore();
+        ApplyLocalDocumentProjection();
     }
 
     private void RecalculateDerivedState()
     {
+        ApplyLocalDocumentProjection();
         var runtimeSnapshot = _shellState.RuntimeShellState.RuntimeSnapshot;
         var latestTurnOverview = BackendLatestTurnOverviewBuilder.Build(runtimeSnapshot);
         var healthReport = DesktopHealthReportBuilder.Build(
@@ -1588,6 +1596,89 @@ public sealed class DesktopControlPlaneSession
             IsWechatConfigured = runtimeSnapshot.WechatConfigured == true || !string.IsNullOrWhiteSpace(_shellState.ConfigEditorState.Config.WechatBridgeUrl),
             IsWechatRuntimeReady = runtimeSnapshot.WechatRuntimeReady == true
         };
+    }
+
+    private void ApplyLocalDocumentProjection()
+    {
+        var backendRootPath = _shellState.LocalDocumentState.BackendRootPath ?? string.Empty;
+        var document = _shellState.LocalDocumentState.ConfigDocument.Document;
+        var isBackendRootValid = PathDiscoveryService.IsBackendRoot(backendRootPath);
+        var envFilePath = Path.Combine(backendRootPath, ".env");
+        var sessionStorePath = Path.Combine(backendRootPath, "data", "sessions.json");
+        var imageCachePath = Path.Combine(backendRootPath, "data", "image-cache");
+        var activityStatePath = ActivityStateStoragePolicy.ResolveStateFilePath(backendRootPath);
+        var stateSnapshotFolderPath = Path.Combine(backendRootPath, "artifacts", "state-snapshots");
+        var controlApiHost = ResolveLocalExtraValue(document, "QQ_AI_BOT_CONTROL_API_HOST", "127.0.0.1");
+        var controlApiPort = ResolveLocalExtraValue(document, "QQ_AI_BOT_CONTROL_API_PORT", "3199");
+
+        _shellState = _shellState with
+        {
+            LocalDocumentState = _shellState.LocalDocumentState with
+            {
+                IsBackendRootValid = isBackendRootValid,
+                EnvFilePath = envFilePath,
+                BackendRootStateText = isBackendRootValid
+                    ? (_shellState.LocalDocumentState.BackendRootDetected
+                        ? "已自动检测到 backend 根目录"
+                        : "backend 根目录有效")
+                    : "backend 根目录无效",
+                SessionStorePathText = sessionStorePath,
+                SessionStoreStateText = isBackendRootValid
+                    ? (File.Exists(sessionStorePath)
+                        ? "会话历史文件已存在"
+                        : "首次保存会话后会创建历史文件")
+                    : "后端目录有效后才能显示会话路径",
+                ImageCachePathText = imageCachePath,
+                ImageCacheStateText = BuildImageCacheStateText(isBackendRootValid, imageCachePath),
+                ActivityStatePathText = activityStatePath,
+                StateSnapshotFolderPathText = stateSnapshotFolderPath,
+                ControlApiEndpointText = $"http://{controlApiHost}:{controlApiPort}",
+                ControlApiTokenStateText = BuildControlApiTokenStateText(
+                    _shellState.ConfigEditorState.ControlApiToken,
+                    _dependencies.BackendControlApiService.LastFailure)
+            }
+        };
+    }
+
+    private static string BuildImageCacheStateText(bool isBackendRootValid, string imageCachePath)
+    {
+        if (!isBackendRootValid)
+        {
+            return "后端目录有效后才能显示缓存路径";
+        }
+
+        if (!Directory.Exists(imageCachePath))
+        {
+            return "图片缓存为空";
+        }
+
+        var cachedFileCount = Directory.GetFiles(imageCachePath, "*", SearchOption.AllDirectories).Length;
+        return cachedFileCount == 0
+            ? "图片缓存为空"
+            : $"{cachedFileCount} 个缓存图片文件";
+    }
+
+    private static string BuildControlApiTokenStateText(string controlApiToken, BackendControlApiFailure lastFailure)
+    {
+        if (string.IsNullOrWhiteSpace(controlApiToken))
+        {
+            return "本机令牌未设置";
+        }
+
+        return lastFailure.Kind == BackendControlApiFailureKind.Unauthorized
+            ? "本机令牌已保存，但后端仍然拒绝它"
+            : "本机令牌已配置";
+    }
+
+    private static string ResolveLocalExtraValue(EnvDocument? document, string key, string fallback)
+    {
+        if (document?.ExtraValues.TryGetValue(key, out var value) == true &&
+            !string.IsNullOrWhiteSpace(value))
+        {
+            return value.Trim();
+        }
+
+        return fallback;
     }
 
     private bool IsBackendRootValid()
@@ -1747,6 +1838,7 @@ public sealed class DesktopControlPlaneSession
         DesktopUserFacingOperationError? error = null,
         string? suggestedHealthActionKey = null)
     {
+        ApplyLocalDocumentProjection();
         _shellState = _shellState with
         {
             UiFeedbackState = _shellState.UiFeedbackState with

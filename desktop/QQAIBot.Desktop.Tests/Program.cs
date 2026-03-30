@@ -74,6 +74,7 @@ await RunTestAsync("DesktopControlPlaneSession preserves pinned activity selecti
 await RunTestAsync("DesktopControlPlaneSession exports snapshots and preserves rollback selection", TestDesktopControlPlaneSessionSnapshotExportAsync);
 await RunTestAsync("DesktopControlPlaneSession builds snapshot confirmation payloads", TestDesktopControlPlaneSessionSnapshotConfirmationAsync);
 await RunTestAsync("DesktopControlPlaneSession routes local path operations through the path service", TestDesktopControlPlaneSessionLocalPathOperationsAsync);
+await RunTestAsync("DesktopControlPlaneSession projects backend-root local document paths and cache state", TestDesktopControlPlaneSessionLocalDocumentProjectionAsync);
 await RunTestAsync("DesktopControlPlaneFeedback applies outcomes and errors to shell callbacks", TestDesktopControlPlaneFeedbackAsync);
 await RunTestAsync("DesktopOperationErrorFormatter translates common control-plane failures into user guidance", TestDesktopOperationErrorFormatterAsync);
 await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
@@ -95,6 +96,7 @@ await RunTestAsync("SingleInstanceCoordinator signals ensure-runtime event to pr
 await RunTestAsync("Desktop app secondary process restores primary instance and ensure-runtime process signals runtime", TestDesktopCrossProcessSingleInstanceActivationAsync);
 await RunTestAsync("MainWindow smoke automation binds controls and routes save/start/stop commands", TestMainWindowSmokeAutomationAsync);
 await RunTestAsync("MainViewModel dispose does not stop backend launcher ownership after attach", TestMainViewModelDisposeDoesNotStopBackendProcessAsync);
+await RunTestAsync("MainViewModel preserves default editor state when startup auto-start is already disabled", TestMainViewModelPreservesDefaultEditorStateOnStartupAsync);
 await RunTestAsync("MainViewModel auto-recovers control API before showing outage warning", TestMainViewModelAutoRecoversControlApiBeforeWarningAsync);
 await RunTestAsync("DesktopControlPlaneSession rejects unknown control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnknownConfigFailureBeforeFallbackAsync);
 await RunTestAsync("DesktopControlPlaneSession rejects unauthorized control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
@@ -2824,6 +2826,10 @@ async Task TestDesktopControlPlaneSessionSnapshotExportAsync()
     AssertEqual(1, context.FakeLocalStateSnapshotService.ExportCallCount, "State snapshot export should invoke the snapshot service once.");
     AssertEqual(context.RootPath, context.FakeLocalStateSnapshotService.LastBackendRootPath, "State snapshot export should use the current backend root.");
     AssertEqual(context.FakeLocalStateSnapshotService.Result.ArchivePath, exportResult.NextState?.SnapshotState.LastStateSnapshotText, "State snapshot export should update the shell state's latest snapshot text.");
+    AssertEqual(
+        Path.Combine(context.RootPath, "artifacts", "state-snapshots"),
+        exportResult.NextState?.LocalDocumentState.StateSnapshotFolderPathText,
+        "State snapshot export should keep projecting the snapshot folder path through local-document state.");
 
     var safeExportResult = await session.ExportSafeStateSnapshotAsync();
     AssertTrue(safeExportResult.Succeeded, "Safe state snapshot export should succeed.");
@@ -2890,10 +2896,64 @@ async Task TestDesktopControlPlaneSessionLocalPathOperationsAsync()
     AssertTrue(clearImageCacheResult.Succeeded, "Clearing the image cache should succeed.");
     AssertEqual(1, context.FakeLocalPathOperationsService.ClearCallCount, "Clear image cache should invoke the path operation service.");
     AssertContains(context.FakeLocalPathOperationsService.LastClearedDirectory, "image-cache", "Clear image cache should target the image cache path.");
+    AssertEqual("图片缓存为空", clearImageCacheResult.NextState?.LocalDocumentState.ImageCacheStateText, "Clearing the image cache should refresh the projected cache-state text.");
 
     var openSnapshotFolderResult = session.OpenStateSnapshotFolder();
     AssertTrue(openSnapshotFolderResult.Succeeded, "Opening the state snapshot folder should succeed.");
     AssertContains(context.FakeLocalPathOperationsService.OpenedFolders[^1], "state-snapshots", "Open snapshot folder should target the snapshot directory.");
+}
+
+async Task TestDesktopControlPlaneSessionLocalDocumentProjectionAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-session-local-document-");
+    context.FakeLocalFallbackReader.Document.ExtraValues["QQ_AI_BOT_CONTROL_API_HOST"] = "10.8.0.5";
+    context.FakeLocalFallbackReader.Document.ExtraValues["QQ_AI_BOT_CONTROL_API_PORT"] = "4319";
+    Directory.CreateDirectory(Path.Combine(context.RootPath, "data", "image-cache", "nested"));
+    await File.WriteAllTextAsync(Path.Combine(context.RootPath, "data", "sessions.json"), "{}", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(context.RootPath, "data", "image-cache", "one.txt"), "one", Encoding.UTF8);
+    await File.WriteAllTextAsync(Path.Combine(context.RootPath, "data", "image-cache", "nested", "two.txt"), "two", Encoding.UTF8);
+
+    var session = CreateDesktopControlPlaneSessionForTests(context);
+
+    var invalidRootPath = Path.Combine(context.RootPath, "missing-backend");
+    var invalidState = session.UpdateBackendRoot(invalidRootPath, false);
+    AssertFalse(invalidState.LocalDocumentState.IsBackendRootValid, "Missing backend root should project as invalid.");
+    AssertEqual(Path.Combine(invalidRootPath, ".env"), invalidState.LocalDocumentState.EnvFilePath, "Invalid backend root should still project the env file path.");
+    AssertEqual("backend 根目录无效", invalidState.LocalDocumentState.BackendRootStateText, "Invalid backend root should project the invalid-state text.");
+    AssertEqual("后端目录有效后才能显示会话路径", invalidState.LocalDocumentState.SessionStoreStateText, "Invalid backend root should suppress session-store status.");
+    AssertEqual("后端目录有效后才能显示缓存路径", invalidState.LocalDocumentState.ImageCacheStateText, "Invalid backend root should suppress image-cache status.");
+
+    var validState = session.UpdateBackendRoot(context.RootPath, true);
+    AssertTrue(validState.LocalDocumentState.IsBackendRootValid, "Test backend root should project as valid.");
+    AssertEqual(Path.Combine(context.RootPath, ".env"), validState.LocalDocumentState.EnvFilePath, "Valid backend root should project the env file path.");
+    AssertEqual("已自动检测到 backend 根目录", validState.LocalDocumentState.BackendRootStateText, "Detected backend root should project the detected-state text.");
+    AssertEqual(Path.Combine(context.RootPath, "data", "sessions.json"), validState.LocalDocumentState.SessionStorePathText, "Valid backend root should project the session store path.");
+    AssertEqual("会话历史文件已存在", validState.LocalDocumentState.SessionStoreStateText, "Existing sessions.json should project as present.");
+    AssertEqual(Path.Combine(context.RootPath, "data", "image-cache"), validState.LocalDocumentState.ImageCachePathText, "Valid backend root should project the image cache path.");
+    AssertEqual("2 个缓存图片文件", validState.LocalDocumentState.ImageCacheStateText, "Image cache projection should count nested cached files.");
+    AssertEqual(new DesktopActivityStateStoragePolicy().ResolveStateFilePath(context.RootPath), validState.LocalDocumentState.ActivityStatePathText, "Activity state path should continue to resolve through the storage policy.");
+    AssertEqual(Path.Combine(context.RootPath, "artifacts", "state-snapshots"), validState.LocalDocumentState.StateSnapshotFolderPathText, "Snapshot folder path should be projected through local-document state.");
+    AssertEqual("http://10.8.0.5:4319", validState.LocalDocumentState.ControlApiEndpointText, "Control API endpoint should be projected from local extra values.");
+    AssertEqual("本机令牌已配置", validState.LocalDocumentState.ControlApiTokenStateText, "Saved control-plane token should project as configured.");
+
+    context.FakeBackend.StatusFailureKind = BackendControlApiFailureKind.Unauthorized;
+    context.FakeBackend.StatusFailureMessage = "Control API authentication failed.";
+    var pollResult = await session.PollStatusAsync();
+    AssertEqual(
+        "本机令牌已保存，但后端仍然拒绝它",
+        pollResult.NextState?.LocalDocumentState.ControlApiTokenStateText,
+        "Unauthorized control API failures should project the rejected-token state text.");
+
+    var clearedTokenState = session.UpdateEditorState(
+        session.BuildCurrentShellState().ConfigEditorState.Config,
+        string.Empty,
+        hasUnsavedChanges: false,
+        lastLoadedAtText: session.BuildCurrentShellState().ConfigEditorState.LastLoadedAtText,
+        lastSavedAtText: session.BuildCurrentShellState().ConfigEditorState.LastSavedAtText,
+        autoStartEnabled: session.BuildCurrentShellState().RuntimeShellState.AutoStartEnabled,
+        canStartBackend: session.BuildCurrentShellState().RuntimeShellState.CanStartBackend,
+        logText: session.BuildCurrentShellState().UiFeedbackState.LogText);
+    AssertEqual("本机令牌未设置", clearedTokenState.LocalDocumentState.ControlApiTokenStateText, "Blank control-plane token should project the unset-token state text.");
 }
 
 Task TestDesktopControlPlaneFeedbackAsync()
@@ -2902,6 +2962,7 @@ Task TestDesktopControlPlaneFeedbackAsync()
     var logs = new List<string>();
     var notifications = new List<TrayNotification>();
     var dialogs = new List<(string Title, string Message)>();
+    var suggestedActions = new List<string>();
 
     DesktopControlPlaneFeedback.ApplyOutcome(
         statusText: "Backend stopped",
@@ -2937,6 +2998,69 @@ Task TestDesktopControlPlaneFeedbackAsync()
     AssertEqual(1, dialogs.Count, "Feedback helper should trigger the error dialog when requested.");
     AssertEqual("Save failed", dialogs[0].Title, "Feedback helper should pass dialog title through.");
     AssertContains(dialogs[0].Message, "boom", "Feedback helper should pass dialog message through.");
+
+    DesktopControlPlaneFeedback.ApplyCommandResult(
+        new DesktopCommandResult
+        {
+            NextState = null,
+            Succeeded = false,
+            StatusText = "Rejected save",
+            LogMessages = ["Save rejected by control API."],
+            Notifications =
+            [
+                new TrayNotification
+                {
+                    Title = "Local AI Runtime",
+                    Message = "Review the rejected field."
+                }
+            ],
+            Error = new DesktopUserFacingOperationError
+            {
+                StatusText = "Rejected save",
+                DialogTitle = "Save rejected",
+                DialogMessage = "WECHAT_BRIDGE_URL must be a valid ws:// or wss:// URL"
+            },
+            SuggestedHealthActionKey = DesktopHealthActionKeys.FocusWechatUrl
+        },
+        showDialog: true,
+        setStatusText: (text) => statusText = text,
+        addLog: (message) => logs.Add(message),
+        notify: (notification) => notifications.Add(notification),
+        showErrorDialog: (title, message) => dialogs.Add((title, message)),
+        routeSuggestedAction: (actionKey) => suggestedActions.Add(actionKey));
+
+    AssertEqual("Rejected save", statusText, "Feedback helper should forward DesktopCommandResult status text.");
+    AssertTrue(logs.Any(static message => message.Contains("Save rejected by control API.", StringComparison.Ordinal)), "Feedback helper should forward DesktopCommandResult logs even when no next state is provided.");
+    AssertEqual(2, notifications.Count, "Feedback helper should forward DesktopCommandResult notifications.");
+    AssertEqual(2, dialogs.Count, "Feedback helper should trigger dialog routing for DesktopCommandResult errors when requested.");
+    AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, suggestedActions[^1], "Feedback helper should route the suggested health action from DesktopCommandResult.");
+
+    DesktopControlPlaneFeedback.ApplyCommandResult(
+        new DesktopCommandResult
+        {
+            NextState = null,
+            Succeeded = false,
+            StatusText = "Poll failed",
+            LogMessages = ["Control API is unreachable."],
+            Error = new DesktopUserFacingOperationError
+            {
+                StatusText = "Poll failed",
+                DialogTitle = "Poll failed",
+                DialogMessage = "Control API is unreachable."
+            },
+            SuggestedHealthActionKey = DesktopHealthActionKeys.ReloadConfig
+        },
+        showDialog: false,
+        setStatusText: (text) => statusText = text,
+        addLog: (message) => logs.Add(message),
+        notify: (notification) => notifications.Add(notification),
+        showErrorDialog: (title, message) => dialogs.Add((title, message)),
+        routeSuggestedAction: (actionKey) => suggestedActions.Add(actionKey));
+
+    AssertEqual("Poll failed", statusText, "Feedback helper should still update status text when dialogs are suppressed.");
+    AssertTrue(logs.Any(static message => message.Contains("Control API is unreachable.", StringComparison.Ordinal)), "Feedback helper should keep forwarding logs when dialogs are suppressed.");
+    AssertEqual(2, dialogs.Count, "Feedback helper should skip dialog routing when showDialog is false.");
+    AssertEqual(DesktopHealthActionKeys.ReloadConfig, suggestedActions[^1], "Feedback helper should still route suggested health actions when dialogs are suppressed.");
     return Task.CompletedTask;
 }
 
@@ -3062,6 +3186,9 @@ Task TestDesktopShellPropertyCatalogAsync()
     AssertTrue(
         DesktopShellPropertyCatalog.RuntimeSnapshotPropertyNames.Contains("LatestTurnHeadlineText", StringComparer.Ordinal),
         "Runtime property catalog should include latest-turn projection properties.");
+    AssertTrue(
+        DesktopShellPropertyCatalog.RuntimeSnapshotPropertyNames.Contains("IsProcessRunning", StringComparer.Ordinal),
+        "Runtime property catalog should include direct runtime state properties used by UI triggers.");
     AssertTrue(
         DesktopShellPropertyCatalog.HealthPropertyNames.Contains("HealthLatestIssueText", StringComparer.Ordinal),
         "Health property catalog should include latest-issue projection properties.");
@@ -4137,6 +4264,53 @@ async Task TestMainViewModelDisposeDoesNotStopBackendProcessAsync()
     }
 }
 
+async Task TestMainViewModelPreservesDefaultEditorStateOnStartupAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-default-startup-");
+    var rootPath = context.RootPath;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBackend = context.FakeBackend;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var fakeLocalBootstrapStore = context.FakeLocalBootstrapStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeAutoStart.Enabled = false;
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore,
+                fakeLocalBootstrapStore);
+
+            try
+            {
+                AssertEqual("gpt-5.4", viewModel.OpenAiDefaultModel, "Startup initialization should preserve the default model even when auto-start stays disabled.");
+                AssertEqual("gpt-5.4", viewModel.OpenAiModel, "Startup initialization should preserve the advanced model default.");
+                AssertFalse(viewModel.AutoStartEnabled, "Startup initialization should preserve disabled auto-start state.");
+                AssertEqual("本机令牌未设置", viewModel.ControlApiTokenStateText, "Startup initialization should keep the unset-token projection before config load.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
 async Task TestMainViewModelAutoRecoversControlApiBeforeWarningAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-recover-control-api-");
@@ -5134,24 +5308,12 @@ async Task TestMainWindowHealthActionsAsync()
                     ?? throw new InvalidOperationException("OpenStateSnapshotFolderButton not found.");
                 var stateSnapshotsListBox = window.FindName("StateSnapshotsListBox") as ListBox
                     ?? throw new InvalidOperationException("StateSnapshotsListBox not found.");
-                var sessionStoreStateTextBlock = window.FindName("SessionStoreStateTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SessionStoreStateTextBlock not found.");
-                var imageCacheStateTextBlock = window.FindName("ImageCacheStateTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("ImageCacheStateTextBlock not found.");
-                var lastStateSnapshotTextBlock = window.FindName("LastStateSnapshotTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("LastStateSnapshotTextBlock not found.");
                 var restoreResultReloadButton = window.FindName("RestoreResultReloadButton") as Button
                     ?? throw new InvalidOperationException("RestoreResultReloadButton not found.");
                 var restoreResultStartBackendButton = window.FindName("RestoreResultStartBackendButton") as Button
                     ?? throw new InvalidOperationException("RestoreResultStartBackendButton not found.");
                 var restoreResultLocalSettingsButton = window.FindName("RestoreResultLocalSettingsButton") as Button
                     ?? throw new InvalidOperationException("RestoreResultLocalSettingsButton not found.");
-                var selectedStateSnapshotSummaryTextBlock = window.FindName("SelectedStateSnapshotSummaryTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotSummaryTextBlock not found.");
-                var selectedStateSnapshotImpactTextBlock = window.FindName("SelectedStateSnapshotImpactTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotImpactTextBlock not found.");
-                var selectedStateSnapshotDiffTextBlock = window.FindName("SelectedStateSnapshotDiffTextBlock") as TextBlock
-                    ?? throw new InvalidOperationException("SelectedStateSnapshotDiffTextBlock not found.");
                 var exportSafeRollbackSnapshotButton = window.FindName("ExportSafeRollbackSnapshotButton") as Button
                     ?? throw new InvalidOperationException("ExportSafeRollbackSnapshotButton not found.");
                 var restoreSelectedSnapshotFromSafetyButton = window.FindName("RestoreSelectedSnapshotFromSafetyButton") as Button
@@ -5159,13 +5321,7 @@ async Task TestMainWindowHealthActionsAsync()
 
                 AssertEqual("启动后端", healthPrimaryActionButton.Content?.ToString(), "Health primary action button should expose the next runtime action.");
                 AssertEqual("desktop-token", controlApiTokenTextBox.Text, "Local control-plane token textbox should reflect the local env value.");
-                AssertFalse(string.IsNullOrWhiteSpace(sessionStoreStateTextBlock.Text), "Session state text should be visible.");
-                AssertFalse(string.IsNullOrWhiteSpace(imageCacheStateTextBlock.Text), "Image cache state text should be visible.");
                 await WaitForAsync(() => stateSnapshotsListBox.Items.Count == 2, "state snapshot list load");
-                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "项", "State snapshot selection should expose a summary.");
-                AssertContains(selectedStateSnapshotSummaryTextBlock.Text, "包含密钥", "State snapshot summary should expose secret-risk metadata.");
-                AssertContains(selectedStateSnapshotImpactTextBlock.Text, ".env", "State snapshot impact text should explain env overwrite risk.");
-                await WaitForAsync(() => !string.IsNullOrWhiteSpace(selectedStateSnapshotDiffTextBlock.Text), "state snapshot diff preview");
                 AssertTrue(exportSafeRollbackSnapshotButton.IsEnabled, "Selected snapshot safety action should allow exporting a rollback snapshot.");
                 AssertTrue(restoreSelectedSnapshotFromSafetyButton.IsEnabled, "Selected snapshot safety action should still allow restoring the selected archive.");
 
@@ -5207,11 +5363,9 @@ async Task TestMainWindowHealthActionsAsync()
                 exportStateSnapshotButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.ExportCallCount == 1, "state snapshot export");
                 AssertEqual(viewModel.BackendRootPath, fakeLocalStateSnapshotService.LastBackendRootPath, "State snapshot export should use the current backend root.");
-                AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-test.zip", "State snapshot export should update the latest export text.");
 
                 exportSafeStateSnapshotButton.Command.Execute(null);
                 await WaitForAsync(() => fakeLocalStateSnapshotService.ExportSafeCallCount == 1, "safe state snapshot export");
-                AssertContains(lastStateSnapshotTextBlock.Text, "runtime-state-safe-test.zip", "Safe state snapshot export should update the latest export text.");
 
                 stateSnapshotsListBox.SelectedIndex = 1;
                 // UI smoke no longer asserts rollback-export side effects; session/snapshot tests own archive targeting.
@@ -5231,7 +5385,6 @@ async Task TestMainWindowHealthActionsAsync()
                 // Session tests cover restore archive targeting.
                 // Session tests cover restore preview targeting.
                 AssertEqual("恢复选中快照", fakeConfirmationDialogService.LastTitle, "Restoring a snapshot should show a restore confirmation title.");
-                AssertFalse(string.IsNullOrWhiteSpace(fakeConfirmationDialogService.LastMessage), "Restore confirmation should keep a visible confirmation message.");
 
                 fakeConfirmationDialogService.Results.Enqueue(false);
                 deleteSelectedStateSnapshotButton.Command.Execute(null);

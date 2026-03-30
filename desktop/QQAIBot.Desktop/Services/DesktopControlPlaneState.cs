@@ -133,6 +133,28 @@ public sealed record DesktopLocalDocumentState
 
     public bool BackendRootDetected { get; init; }
 
+    public bool IsBackendRootValid { get; init; }
+
+    public string EnvFilePath { get; init; } = string.Empty;
+
+    public string BackendRootStateText { get; init; } = string.Empty;
+
+    public string SessionStorePathText { get; init; } = string.Empty;
+
+    public string SessionStoreStateText { get; init; } = string.Empty;
+
+    public string ImageCachePathText { get; init; } = string.Empty;
+
+    public string ImageCacheStateText { get; init; } = string.Empty;
+
+    public string ActivityStatePathText { get; init; } = string.Empty;
+
+    public string StateSnapshotFolderPathText { get; init; } = string.Empty;
+
+    public string ControlApiEndpointText { get; init; } = string.Empty;
+
+    public string ControlApiTokenStateText { get; init; } = string.Empty;
+
     public DesktopConfigDocumentState ConfigDocument { get; init; } = new();
 }
 

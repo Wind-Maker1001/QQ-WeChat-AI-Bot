@@ -70,6 +70,7 @@ public static class DesktopShellPropertyCatalog
         "LatestWechatFailureUpgradeText",
         "LatestWechatFailureErrorText",
         "IsControlApiReachable",
+        "IsProcessRunning",
         "ProcessStateText",
         "ShellRuntimeBoundaryText",
         "CloseToTrayBehaviorText",

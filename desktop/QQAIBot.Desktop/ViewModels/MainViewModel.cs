@@ -241,10 +241,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _runHealthActionCommand = new RelayCommand(ExecuteHealthAction);
         _clearLogsCommand = new RelayCommand(_ => ClearLogs());
         _clearQqActivityHistoryCommand = new RelayCommand(
-            _ => ClearActivityHistory(QqRecentActivities, () => SelectedQqRecentActivity = null, () => PinSelectedQqActivity = false),
+            _ => ClearQqActivityHistory(),
             _ => QqRecentActivities.Count > 0);
         _clearWechatActivityHistoryCommand = new RelayCommand(
-            _ => ClearActivityHistory(WechatRecentActivities, () => SelectedWechatRecentActivity = null, () => PinSelectedWechatActivity = false),
+            _ => ClearWechatActivityHistory(),
             _ => WechatRecentActivities.Count > 0);
         QqRecentActivitiesView = CollectionViewSource.GetDefaultView(QqRecentActivities);
         QqRecentActivitiesView.Filter = FilterQqRecentActivity;
@@ -318,10 +318,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (SetProperty(ref _backendRootPath, value))
             {
-                LastStateSnapshotText = "尚未导出状态快照";
-                ResetRestoreResultState();
-                ReplaceStateSnapshots([]);
-                SelectedStateSnapshot = null;
                 ApplyState(_controlPlaneSession.UpdateBackendRoot(value, _backendRootDetected));
                 OnPropertyChanged(nameof(EnvFilePath));
                 OnPropertyChanged(nameof(IsBackendRootValid));
@@ -1433,7 +1429,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _localPathOperationsService.OpenFolder(ImageCachePathText);
         StatusText = "Opened image cache folder";
         AddLog($"Opened image cache folder: {ImageCachePathText}");
-        RefreshHealthReport();
     }
 
     private void ClearImageCache()
@@ -1885,106 +1880,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void RefreshLatestTurnOverview()
-    {
-        _latestTurnOverview = BackendLatestTurnOverviewBuilder.Build(_runtimeSnapshot);
-        OnPropertyChanged(nameof(LatestTurnState));
-        OnPropertyChanged(nameof(LatestTurnHeadlineText));
-        OnPropertyChanged(nameof(LatestTurnSummaryText));
-        OnPropertyChanged(nameof(LatestTurnCapabilitiesText));
-        OnPropertyChanged(nameof(LatestTurnReasonText));
-        OnPropertyChanged(nameof(LatestTurnOutcomeText));
-        OnPropertyChanged(nameof(LatestTurnActionLabel));
-        OnPropertyChanged(nameof(LatestTurnActionKey));
-    }
-
-    private void RefreshGuideFlow()
-    {
-        _guideFlow = DesktopGuideFlowBuilder.Build(
-            new DesktopGuideFlowContext
-            {
-                IsBackendRootValid = IsBackendRootValid,
-                HasUnsavedChanges = HasUnsavedChanges,
-                CanStartBackend = StartCommand.CanExecute(null),
-                IsProcessRunning = IsProcessRunning,
-                IsQqRuntimeReady = _runtimeSnapshot.RuntimeReady == true,
-                AutoStartEnabled = AutoStartEnabled,
-                HealthLatestIssueText = HealthLatestIssueText,
-                HealthLatestIssueActionLabel = HealthLatestIssueActionLabel,
-                HealthLatestIssueActionKey = HealthLatestIssueActionKey,
-                HealthChecks = _healthReport.Checks,
-                QqRecentActivities = QqRecentActivities.ToArray(),
-                WechatRecentActivities = WechatRecentActivities.ToArray()
-            });
-        OnPropertyChanged(nameof(IsOverallReadinessReady));
-        OnPropertyChanged(nameof(IsOverallReadinessSetupComplete));
-        OnPropertyChanged(nameof(OverallReadinessStateText));
-        OnPropertyChanged(nameof(OverallReadinessSummaryText));
-        OnPropertyChanged(nameof(OverallReadinessRecentActivityText));
-        OnPropertyChanged(nameof(OverallReadinessActionLabel));
-        OnPropertyChanged(nameof(OverallReadinessActionKey));
-        OnPropertyChanged(nameof(FirstRunGuideText));
-        OnPropertyChanged(nameof(FirstRunGuideSteps));
-        OnPropertyChanged(nameof(FirstRunGuideProgressText));
-        OnPropertyChanged(nameof(FirstRunGuideCurrentStepText));
-        OnPropertyChanged(nameof(IsFirstRunGuideComplete));
-        OnPropertyChanged(nameof(FirstRunGuideCompletionText));
-        OnPropertyChanged(nameof(FirstRunStepsText));
-        OnPropertyChanged(nameof(DailyUseGuideText));
-        OnPropertyChanged(nameof(DailyUseGuideSteps));
-        OnPropertyChanged(nameof(DailyUseGuideProgressText));
-        OnPropertyChanged(nameof(DailyUseGuideCurrentStepText));
-        OnPropertyChanged(nameof(IsDailyUseGuideComplete));
-        OnPropertyChanged(nameof(DailyUseGuideCompletionText));
-        OnPropertyChanged(nameof(DailyUseStepsText));
-    }
-
     private async void OnStatusPollTimerTick(object? sender, EventArgs e)
     {
         SyncSessionEditorState();
         ApplyCommandResult(await _controlPlaneSession.PollStatusAsync(), showErrorDialog: false);
-    }
-
-    private void NotifyRuntimeSnapshotChanged()
-    {
-        BackendRuntimeSnapshotViewHelper.NotifyRuntimeSnapshotChanged(OnPropertyChanged);
-    }
-
-    private void RefreshHealthReport()
-    {
-        _healthReport = DesktopHealthReportBuilder.Build(
-            BuildConfig(),
-            _runtimeSnapshot,
-            _backendControlApiService.LastFailure,
-            IsBackendRootValid,
-            HasUnsavedChanges,
-            AutoStartEnabled);
-        ReplaceHealthChecks(_healthReport.Checks);
-        OnPropertyChanged(nameof(HealthStateText));
-        OnPropertyChanged(nameof(HealthSummaryText));
-        OnPropertyChanged(nameof(HealthChecklistStatusText));
-        OnPropertyChanged(nameof(HealthReadyNowText));
-        OnPropertyChanged(nameof(HealthPrimaryActionText));
-        OnPropertyChanged(nameof(HealthPrimaryActionLabel));
-        OnPropertyChanged(nameof(HealthPrimaryActionKey));
-        OnPropertyChanged(nameof(HealthActionSummaryText));
-        OnPropertyChanged(nameof(HealthNextActions));
-        OnPropertyChanged(nameof(HasHealthNextActions));
-        OnPropertyChanged(nameof(HealthRuntimeExplanationText));
-        OnPropertyChanged(nameof(HealthLatestIssueText));
-        OnPropertyChanged(nameof(HealthLatestIssueActionLabel));
-        OnPropertyChanged(nameof(HealthLatestIssueActionKey));
-        RefreshGuideFlow();
-        OnPropertyChanged(nameof(ControlApiTokenStateText));
-        OnPropertyChanged(nameof(ControlApiEndpointText));
-        OnPropertyChanged(nameof(SessionStorePathText));
-        OnPropertyChanged(nameof(SessionStoreStateText));
-        OnPropertyChanged(nameof(ImageCachePathText));
-        OnPropertyChanged(nameof(ImageCacheStateText));
-        OnPropertyChanged(nameof(ActivityStatePathText));
-        OnPropertyChanged(nameof(StateSnapshotFolderPathText));
-        OnPropertyChanged(nameof(LastStateRestoreText));
-        OnPropertyChanged(nameof(SnapshotRetentionHintText));
     }
 
     private async Task RefreshStateSnapshotsAsync()
@@ -2511,81 +2410,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             ]);
     }
 
-    private void ApplyRestoreResultSummary(
-        LocalStateSnapshotRestoreResult restoreResult,
-        LocalStateSnapshotPreviewResult? preview)
-    {
-        _lastStateRestoreResult = restoreResult;
-        _lastStateRestorePreview = preview;
-        ApplyRestorePresentation();
-    }
-
-    private void ApplyRestoreAvailabilityCheck()
-    {
-        ApplyRestorePresentation();
-    }
-
-    private void ApplySelectedStateSnapshotPresentation(
-        string? diffTextOverride = null,
-        string? adviceTextOverride = null)
-    {
-        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(
-            SelectedStateSnapshot,
-            _selectedStateSnapshotPreview,
-            diffTextOverride,
-            adviceTextOverride);
-        SelectedStateSnapshotImpactText = presentation.ImpactText;
-        SelectedStateSnapshotDiffText = presentation.DiffText;
-        SelectedStateSnapshotAdviceText = presentation.AdviceText;
-        SelectedStateSnapshotSafetyHeadlineText = presentation.SafetyHeadlineText;
-        SelectedStateSnapshotSafetyRecommendationText = presentation.SafetyRecommendationText;
-        SelectedStateSnapshotRollbackHintText = presentation.RollbackHintText;
-    }
-
-    private void ApplyRestorePresentation()
-    {
-        var presentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
-            _lastStateRestoreResult,
-            _lastStateRestorePreview,
-            BuildRestorePresentationContext());
-        LastStateRestoreSummaryText = presentation.SummaryText;
-        LastStateRestoreIssueText = presentation.IssueText;
-        LastStateRestoreTargetsText = presentation.TargetsText;
-        LastStateRestoreSessionsText = presentation.SessionsText;
-        LastStateRestoreLatestActivityText = presentation.LatestActivityText;
-        LastStateRestoreAdviceText = presentation.AdviceText;
-        LastStateRestoreControlPlaneText = presentation.ControlPlaneText;
-        LastStateRestoreRuntimeText = presentation.RuntimeText;
-        LastStateRestoreNextStepText = presentation.NextStepText;
-        LastStateRestorePrimaryActionLabel = presentation.PrimaryAction.Label;
-        LastStateRestorePrimaryActionKey = presentation.PrimaryAction.Key;
-        LastStateRestoreSecondaryActionLabel = presentation.SecondaryAction.Label;
-        LastStateRestoreSecondaryActionKey = presentation.SecondaryAction.Key;
-        LastStateRestoreTertiaryActionLabel = presentation.TertiaryAction.Label;
-        LastStateRestoreTertiaryActionKey = presentation.TertiaryAction.Key;
-    }
-
-    private LocalStateSnapshotRestoreRuntimeContext BuildRestorePresentationContext()
-    {
-        return new LocalStateSnapshotRestoreRuntimeContext
-        {
-            ControlApiFailure = _backendControlApiService.LastFailure,
-            IsControlApiReachable = IsControlApiReachable,
-            CanStartBackend = StartCommand.CanExecute(null),
-            IsQqRuntimeReady = _runtimeSnapshot.RuntimeReady == true,
-            IsWechatConfigured = _runtimeSnapshot.WechatConfigured == true || !string.IsNullOrWhiteSpace(WechatBridgeUrl),
-            IsWechatRuntimeReady = _runtimeSnapshot.WechatRuntimeReady == true
-        };
-    }
-
-    private void ResetRestoreResultState()
-    {
-        _lastStateRestoreResult = null;
-        _lastStateRestorePreview = null;
-        LastStateRestoreText = "尚未恢复状态快照";
-        ApplyRestorePresentation();
-    }
-
     private static string BuildDeleteConfirmationMessage(LocalStateSnapshotDescriptor snapshot)
     {
         return string.Join(
@@ -2598,17 +2422,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             ]);
     }
 
-    private void ClearActivityHistory(
-        ObservableCollection<BackendRecentActivityItem> recentActivityItems,
-        Action clearSelection,
-        Action clearPinnedState)
+    private void ClearQqActivityHistory()
     {
-        recentActivityItems.Clear();
-        clearSelection();
-        clearPinnedState();
-        RefreshGuideFlow();
+        ApplyState(_controlPlaneSession.ClearQqActivityHistory());
         UpdateCommandStates();
-        NotifyRuntimeSnapshotChanged();
+    }
+
+    private void ClearWechatActivityHistory()
+    {
+        ApplyState(_controlPlaneSession.ClearWechatActivityHistory());
+        UpdateCommandStates();
     }
 
     private void OnLogFlushTimerTick(object? sender, EventArgs e)

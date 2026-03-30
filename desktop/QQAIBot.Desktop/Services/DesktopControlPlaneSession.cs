@@ -70,14 +70,7 @@ public sealed class DesktopControlPlaneSession
                 BackendRootPath = backendRootPath ?? string.Empty,
                 BackendRootDetected = backendRootDetected
             },
-            SnapshotState = _shellState.SnapshotState with
-            {
-                StateSnapshots = [],
-                SelectedStateSnapshot = null,
-                SelectedStateSnapshotPreview = null,
-                LastStateRestoreResult = null,
-                LastStateRestorePreview = null
-            }
+            SnapshotState = new DesktopSnapshotState()
         };
 
         LoadActivityStateCore();
@@ -604,6 +597,44 @@ public sealed class DesktopControlPlaneSession
     public DesktopShellState ReloadActivityState()
     {
         LoadActivityStateCore();
+        return _shellState;
+    }
+
+    public DesktopShellState ClearQqActivityHistory()
+    {
+        _shellState = _shellState with
+        {
+            RecentActivityState = _shellState.RecentActivityState with
+            {
+                QqRecentActivities = [],
+                LastQqRequestEventKey = string.Empty,
+                LastQqFailureEventKey = string.Empty,
+                PinSelectedQqActivity = false,
+                SelectedQqRecentActivity = null
+            }
+        };
+
+        PersistActivityStateIfPossible();
+        RecalculateDerivedState();
+        return _shellState;
+    }
+
+    public DesktopShellState ClearWechatActivityHistory()
+    {
+        _shellState = _shellState with
+        {
+            RecentActivityState = _shellState.RecentActivityState with
+            {
+                WechatRecentActivities = [],
+                LastWechatRequestEventKey = string.Empty,
+                LastWechatFailureEventKey = string.Empty,
+                PinSelectedWechatActivity = false,
+                SelectedWechatRecentActivity = null
+            }
+        };
+
+        PersistActivityStateIfPossible();
+        RecalculateDerivedState();
         return _shellState;
     }
 

@@ -36,7 +36,7 @@ export async function readControlConfig({ cwd = process.cwd() } = {}) {
   const result = await ensureRuntimeSettings({ cwd });
 
   return {
-    envPath: result.settingsPath,
+    configPath: result.settingsPath,
     bootstrapEnvPath: result.bootstrapEnvPath,
     config: buildControlConfigFromEnvValues(
       buildRuntimeEnvValuesFromSettingsSnapshot(result.runtimeSettingsSnapshot),
@@ -57,7 +57,7 @@ export async function writeControlConfig({
   });
 
   return {
-    envPath: result.settingsPath,
+    configPath: result.settingsPath,
     bootstrapEnvPath: result.bootstrapEnvPath,
     config: buildControlConfigFromEnvValues(
       buildRuntimeEnvValuesFromSettingsSnapshot(result.runtimeSettingsSnapshot),

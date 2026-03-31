@@ -1,11 +1,12 @@
-import { resolveRouteDecision, DEFAULT_ADVANCED_TRIGGER_PREFIXES, normalizeTriggerPrefixes } from '../../domain/route-decision.mjs';
-import { createConversationDelta } from '../../domain/llm-reply-outcome.mjs';
 import {
-  createExecutionProjection,
-  EXECUTION_KIND_DIRECT,
-  EXECUTION_RECOVERY_PROVIDER_FALLBACK_TO_DEEPSEEK,
-  EXECUTION_STAGE_DIRECT
-} from '../../domain/execution-projection.mjs';
+  DEFAULT_ADVANCED_TRIGGER_PREFIXES,
+  normalizeTriggerPrefixes
+} from '../../domain/message-analysis-policy.mjs';
+import {
+  buildProviderFallbackReply,
+  createProviderFallbackDecision
+} from '../../domain/provider-fallback-policy.mjs';
+import { resolveRouteDecision } from '../../domain/route-decision.mjs';
 import {
   API_STYLE_RESPONSES,
   buildEnabledToolKinds,
@@ -20,153 +21,6 @@ import {
 
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-const TRANSIENT_ERROR_CODES = new Set([
-  'ECONNABORTED',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'EHOSTUNREACH',
-  'EPIPE',
-  'ETIMEDOUT',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'UND_ERR_CONNECT_TIMEOUT',
-  'UND_ERR_HEADERS_TIMEOUT',
-  'UND_ERR_SOCKET'
-]);
-
-function normalizeErrorStatus(error) {
-  if (!error || typeof error !== 'object') {
-    return null;
-  }
-
-  const status = error.status ?? error.statusCode ?? error.cause?.status ?? error.cause?.statusCode;
-  return Number.isInteger(status) ? status : null;
-}
-
-function isTransientProviderError(error) {
-  const status = normalizeErrorStatus(error);
-
-  if (Number.isInteger(status)) {
-    return status >= 500 && status < 600;
-  }
-
-  const candidates = [
-    error?.code,
-    error?.errno,
-    error?.cause?.code,
-    error?.cause?.errno
-  ]
-    .filter((value) => typeof value === 'string' && value)
-    .map((value) => value.toUpperCase());
-
-  if (candidates.some((value) => TRANSIENT_ERROR_CODES.has(value))) {
-    return true;
-  }
-
-  const name = typeof error?.name === 'string' ? error.name.toLowerCase() : '';
-  const message =
-    error instanceof Error
-      ? error.message.toLowerCase()
-      : typeof error?.message === 'string'
-        ? error.message.toLowerCase()
-        : '';
-
-  if (
-    name.includes('timeout') ||
-    name.includes('connection') ||
-    message.includes('timeout') ||
-    message.includes('timed out') ||
-    message.includes('socket hang up') ||
-    message.includes('connection error') ||
-    message.includes('fetch failed') ||
-    message.includes('network error')
-  ) {
-    return true;
-  }
-
-  return error?.cause ? isTransientProviderError(error.cause) : false;
-}
-
-function isImplicitGpt5ResponsesDefault(routePolicy) {
-  const normalizedModel =
-    typeof routePolicy?.model === 'string' ? routePolicy.model.trim().toLowerCase() : '';
-
-  return (
-    routePolicy?.apiStyle === API_STYLE_RESPONSES &&
-    normalizedModel.startsWith('gpt-5') &&
-    routePolicy?.reasoningEffort === 'high' &&
-    routePolicy?.textVerbosity === 'high'
-  );
-}
-
-function canUseDeepSeekFallback({ routePolicy, request, effectiveRequest, deepseekProvider }) {
-  if (!deepseekProvider) {
-    return false;
-  }
-
-  if (Array.isArray(request?.imageInputs) && request.imageInputs.length > 0) {
-    return false;
-  }
-
-  if (effectiveRequest.enableWebSearch === true || effectiveRequest.enableCodeInterpreter === true) {
-    return false;
-  }
-
-  const hasExplicitReasoningOverride =
-    typeof request?.reasoningEffortOverride === 'string' && request.reasoningEffortOverride.trim();
-  const hasExplicitVerbosityOverride =
-    typeof request?.textVerbosityOverride === 'string' && request.textVerbosityOverride.trim();
-
-  if (hasExplicitReasoningOverride || hasExplicitVerbosityOverride) {
-    return false;
-  }
-
-  if (
-    routePolicy.apiStyle === API_STYLE_RESPONSES &&
-    !isImplicitGpt5ResponsesDefault(routePolicy) &&
-    (routePolicy.reasoningEffort || routePolicy.textVerbosity)
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-function buildFallbackReply({
-  primaryRoutePolicy,
-  fallbackReply
-}) {
-  return {
-    ...fallbackReply,
-    route: primaryRoutePolicy.routeName,
-    configuredModel: primaryRoutePolicy.model,
-    apiStyle:
-      primaryRoutePolicy.apiStyle === fallbackReply.effectiveApiStyle
-        ? fallbackReply.effectiveApiStyle
-        : `${primaryRoutePolicy.apiStyle}->${fallbackReply.effectiveApiStyle}`,
-    configuredApiStyle: primaryRoutePolicy.apiStyle,
-    configuredReasoningEffort: primaryRoutePolicy.reasoningEffort,
-    configuredTextVerbosity: primaryRoutePolicy.textVerbosity,
-    configuredEnableWebSearch: primaryRoutePolicy.enableWebSearch,
-    configuredEnableCodeInterpreter: primaryRoutePolicy.enableCodeInterpreter,
-    configuredTools: buildEnabledToolKinds({
-      enableWebSearch: primaryRoutePolicy.enableWebSearch,
-      enableCodeInterpreter: primaryRoutePolicy.enableCodeInterpreter
-    }),
-    conversationDelta: createConversationDelta({
-      ...fallbackReply.conversationDelta,
-      previousResponseId: null,
-      clearPreviousResponseId: true
-    }),
-    executionProjection: createExecutionProjection({
-      kind: EXECUTION_KIND_DIRECT,
-      failedStage: '',
-      completedStages: [EXECUTION_STAGE_DIRECT],
-      degraded: true,
-      recoveries: [EXECUTION_RECOVERY_PROVIDER_FALLBACK_TO_DEEPSEEK]
-    })
-  };
-}
 
 export function createLlmRouter({
   defaultRoute,
@@ -368,15 +222,15 @@ export function createLlmRouter({
     try {
       return await provider.generateReply(request);
     } catch (error) {
-      if (
-        !isTransientProviderError(error) ||
-        !canUseDeepSeekFallback({
-          routePolicy,
-          request,
-          effectiveRequest,
-          deepseekProvider
-        })
-      ) {
+      const fallbackDecision = createProviderFallbackDecision({
+        routePolicy,
+        request,
+        effectiveRequest,
+        deepseekProvider,
+        primaryError: error
+      });
+
+      if (!fallbackDecision.shouldFallback) {
         throw error;
       }
 
@@ -385,7 +239,7 @@ export function createLlmRouter({
         previousResponseId: null
       });
 
-      return buildFallbackReply({
+      return buildProviderFallbackReply({
         primaryRoutePolicy: routePolicy,
         fallbackReply
       });

@@ -26,8 +26,12 @@ test('change requirements require desktop regression updates for desktop control
     'desktop/QQAIBot.Desktop/ViewModels/MainViewModel.cs'
   ]);
 
-  assert.equal(result.failures.length, 1);
-  assert.equal(result.failures[0].id, 'desktop-control-coverage');
+  assert.equal(result.failures.length, 2);
+  assert.equal(result.failures.some((failure) => failure.id === 'desktop-control-coverage'), true);
+  assert.equal(
+    result.failures.some((failure) => failure.id === 'architecture-boundaries-coverage'),
+    true
+  );
 });
 
 test('change requirements accept desktop control-plane changes when desktop regression is updated', () => {
@@ -46,4 +50,26 @@ test('change requirements require contract coverage for control-api/config chang
 
   assert.equal(result.failures.length, 1);
   assert.equal(result.failures[0].id, 'control-contract-coverage');
+});
+
+test('change requirements require direct policy coverage for new strategy policy files', () => {
+  const result = evaluateChangeRequirements([
+    'src/domain/message-analysis-policy.mjs'
+  ]);
+
+  assert.equal(result.failures.some((failure) => failure.id === 'strategy-coverage'), true);
+  assert.equal(
+    result.failures.some((failure) => failure.id === 'architecture-boundaries-coverage'),
+    true
+  );
+});
+
+test('change requirements accept policy boundary changes when direct tests are updated', () => {
+  const result = evaluateChangeRequirements([
+    'src/domain/provider-fallback-policy.mjs',
+    'tests/provider-fallback-policy.test.mjs',
+    'tests/architecture-boundaries.test.mjs'
+  ]);
+
+  assert.equal(result.failures.length, 0);
 });

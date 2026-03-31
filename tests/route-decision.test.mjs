@@ -2,130 +2,135 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildRouteDecisionSummary,
+  createRouteDecision,
   formatRouteDecisionReason,
   getRouteDecisionReasonGroups,
   getRouteDecisionRequestedCapabilities,
-  getRouteDecisionTrigger,
-  resolveRouteDecision
+  getRouteDecisionTrigger
 } from '../src/domain/route-decision.mjs';
 
-function createDecision(userText, overrides = {}) {
-  return resolveRouteDecision({
-    userText,
-    imageInputs: [],
-    defaultRoute: {
+test('createRouteDecision normalizes structured reason groups and requested capabilities', () => {
+  const decision = createRouteDecision({
+    route: 'advanced',
+    userText: 'analyze this',
+    imageCount: 1,
+    selectedRoute: {
       model: 'gpt-5.4',
       apiStyle: 'responses'
     },
-    advancedRoute: {
-      model: 'gpt-5.4',
-      apiStyle: 'responses'
+    trigger: {
+      kind: 'image'
     },
-    ...overrides
-  });
-}
-
-test('complex requests boost thinking without requiring a manual advanced prefix', () => {
-  const decision = createDecision(
-    '请详细分析一下这个重构方案为什么会造成边界泄漏，并分步骤比较两种替代实现的优缺点。'
-  );
-
-  assert.equal(decision.route, 'default');
-  assert.equal(decision.trigger.kind, 'default');
-  assert.equal(decision.requestedCapabilities.reasoningEffort, 'high');
-  assert.equal(decision.requestedCapabilities.textVerbosity, 'high');
-  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
-    triggerReasons: [],
-    capabilityReasons: ['complex'],
-    upgradeReasons: []
-  });
-  assert.deepEqual(decision.decisionMetadata.reasonTags, ['complex']);
-  assert.equal(formatRouteDecisionReason(decision), 'complex');
-});
-
-test('time-sensitive requests ask for web search automatically', () => {
-  const decision = createDecision('帮我查一下 OpenAI 最新官方文档里对 Responses API 的建议。');
-
-  assert.equal(decision.route, 'default');
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableWebSearch, true);
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
-  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
-    triggerReasons: [],
-    capabilityReasons: ['web_search'],
-    upgradeReasons: []
-  });
-  assert.deepEqual(decision.decisionMetadata.reasonTags, ['web_search']);
-  assert.equal(formatRouteDecisionReason(decision), 'web_search');
-});
-
-test('data-analysis requests ask for code interpreter automatically', () => {
-  const decision = createDecision('我有一个 CSV 表格，帮我做统计分析并画图。');
-
-  assert.equal(decision.route, 'default');
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableCodeInterpreter, true);
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
-  assert.ok(getRouteDecisionReasonGroups(decision).capabilityReasons.includes('code_interpreter'));
-  assert.ok(decision.decisionMetadata.reasonTags.includes('code_interpreter'));
-  assert.match(formatRouteDecisionReason(decision), /code_interpreter/);
-});
-
-test('capability upgrade routes to advanced when default route cannot satisfy responses features', () => {
-  const decision = resolveRouteDecision({
-    userText: '请详细分析这个架构设计的取舍，并给出分步骤方案。',
-    imageInputs: [],
-    defaultRoute: {
-      model: 'legacy-model',
-      apiStyle: 'chat_completions'
+    reasonGroups: {
+      triggerReasons: ['image'],
+      capabilityReasons: ['web_search'],
+      upgradeReasons: ['capability_upgrade']
     },
-    advancedRoute: {
-      model: 'gpt-5.4',
-      apiStyle: 'responses'
+    requestedCapabilities: {
+      reasoningEffort: 'high',
+      textVerbosity: 'high',
+      enableWebSearch: true,
+      enableCodeInterpreter: false
     }
   });
 
   assert.equal(decision.route, 'advanced');
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).reasoningEffort, 'high');
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableWebSearch, false);
-  assert.equal(getRouteDecisionRequestedCapabilities(decision).enableCodeInterpreter, false);
-  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
-    triggerReasons: [],
-    capabilityReasons: ['complex'],
-    upgradeReasons: ['capability_upgrade']
-  });
-  assert.deepEqual(decision.decisionMetadata.reasonTags, ['complex', 'capability_upgrade']);
-  assert.equal(formatRouteDecisionReason(decision), 'complex+capability_upgrade');
-});
-
-test('directive and image triggers are exposed as structured trigger metadata', () => {
-  const directiveDecision = createDecision('/vision analyze this');
-  const imageDecision = resolveRouteDecision({
-    userText: 'look at this',
-    imageInputs: [{ imageUrl: 'data:image/png;base64,abc' }],
-    defaultRoute: {
-      model: 'gpt-5.4',
-      apiStyle: 'responses'
-    },
-    advancedRoute: {
-      model: 'gpt-5.4',
-      apiStyle: 'responses'
-    }
-  });
-
-  assert.deepEqual(getRouteDecisionTrigger(directiveDecision), {
-    kind: 'directive',
-    matchedPrefix: '/vision'
-  });
-  assert.deepEqual(getRouteDecisionReasonGroups(directiveDecision), {
-    triggerReasons: ['directive:/vision'],
-    capabilityReasons: ['complex'],
-    upgradeReasons: []
-  });
-  assert.deepEqual(getRouteDecisionTrigger(imageDecision), {
+  assert.equal(decision.model, 'gpt-5.4');
+  assert.equal(decision.apiStyle, 'responses');
+  assert.deepEqual(getRouteDecisionTrigger(decision), {
     kind: 'image',
     matchedPrefix: ''
   });
-  assert.deepEqual(getRouteDecisionReasonGroups(imageDecision), {
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
     triggerReasons: ['image'],
+    capabilityReasons: ['web_search'],
+    upgradeReasons: ['capability_upgrade']
+  });
+  assert.deepEqual(getRouteDecisionRequestedCapabilities(decision), {
+    reasoningEffort: 'high',
+    textVerbosity: 'high',
+    enableWebSearch: true,
+    enableCodeInterpreter: false,
+    needsResponsesCapabilities: true
+  });
+  assert.equal(formatRouteDecisionReason(decision), 'image+web_search+capability_upgrade');
+});
+
+test('createRouteDecision infers trigger reasons from directive metadata when not provided', () => {
+  const decision = createRouteDecision({
+    route: 'advanced',
+    userText: 'look at this',
+    selectedRoute: {
+      model: 'gpt-5.4',
+      apiStyle: 'responses'
+    },
+    trigger: {
+      kind: 'directive',
+      matchedPrefix: '/vision'
+    }
+  });
+
+  assert.deepEqual(getRouteDecisionTrigger(decision), {
+    kind: 'directive',
+    matchedPrefix: '/vision'
+  });
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
+    triggerReasons: ['directive:/vision'],
+    capabilityReasons: [],
+    upgradeReasons: []
+  });
+});
+
+test('buildRouteDecisionSummary exposes normalized route metadata', () => {
+  const decision = createRouteDecision({
+    route: 'default',
+    userText: 'hello',
+    selectedRoute: {
+      model: 'gpt-5.4',
+      apiStyle: 'responses'
+    },
+    reasonGroups: {
+      capabilityReasons: ['complex']
+    },
+    requestedCapabilities: {
+      reasoningEffort: 'high',
+      textVerbosity: 'high'
+    }
+  });
+
+  assert.deepEqual(buildRouteDecisionSummary(decision), {
+    trigger: {
+      kind: 'default',
+      matchedPrefix: ''
+    },
+    reasonTags: ['complex'],
+    reasonGroups: {
+      triggerReasons: [],
+      capabilityReasons: ['complex'],
+      upgradeReasons: []
+    },
+    requestedCapabilities: {
+      reasoningEffort: 'high',
+      textVerbosity: 'high',
+      enableWebSearch: undefined,
+      enableCodeInterpreter: undefined,
+      needsResponsesCapabilities: true
+    },
+    routeReason: 'complex',
+    matchedPrefix: ''
+  });
+});
+
+test('createRouteDecision falls back to default reason tag when no explicit groups exist', () => {
+  const decision = createRouteDecision({
+    route: 'default',
+    userText: 'hello'
+  });
+
+  assert.equal(formatRouteDecisionReason(decision), 'default');
+  assert.deepEqual(getRouteDecisionReasonGroups(decision), {
+    triggerReasons: [],
     capabilityReasons: [],
     upgradeReasons: []
   });

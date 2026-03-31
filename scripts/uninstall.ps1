@@ -157,6 +157,7 @@ $installRootPath = Resolve-InstallRootPath -RequestedInstallRoot $InstallRoot
 $appRootPath = Join-Path $installRootPath "app"
 $envPath = Join-Path $appRootPath ".env"
 $dataPath = Join-Path $appRootPath "data"
+$runtimeConfigPath = Join-Path $dataPath "runtime-settings.json"
 $sessionStorePath = Join-Path $dataPath "sessions.json"
 $imageCachePath = Join-Path $dataPath "image-cache"
 $snapshotRootPath = Join-Path $appRootPath "artifacts\state-snapshots"
@@ -172,7 +173,8 @@ Write-Step "Install root: $installRootPath"
 if ($ValidateOnly) {
     Write-Step "Validation succeeded."
     Write-Host "Expected app root:              $appRootPath"
-    Write-Host "Expected config file (.env):    $envPath"
+    Write-Host "Expected runtime config file:   $runtimeConfigPath"
+    Write-Host "Expected bootstrap env (.env):  $envPath"
     Write-Host "Expected sessions store:        $sessionStorePath"
     Write-Host "Expected image cache:           $imageCachePath"
     Write-Host "Expected state snapshots:       $snapshotRootPath"
@@ -200,7 +202,7 @@ if (-not (Test-Path $installRootPath)) {
 }
 
 if ($KeepState) {
-    Write-Step "Removing installed application files and keeping .env/data/snapshots"
+    Write-Step "Removing installed application files and keeping bootstrap .env/data/snapshots"
 
     if (Test-Path $appRootPath) {
         $preservedNames = @(".env", "data", "artifacts")
@@ -220,8 +222,11 @@ if ($KeepState) {
     Write-Host ""
     Write-Host "Uninstall completed."
     $preservedStateLines = @()
+    if (Test-Path $runtimeConfigPath) {
+        $preservedStateLines += "Runtime config file:         $runtimeConfigPath"
+    }
     if (Test-Path $envPath) {
-        $preservedStateLines += "Config file (.env):          $envPath"
+        $preservedStateLines += "Bootstrap env (.env):        $envPath"
     }
     if (Test-Path $sessionStorePath) {
         $preservedStateLines += "Sessions store:              $sessionStorePath"
@@ -260,7 +265,7 @@ Remove-DirectoryIfEmpty -Path $installRootPath
 
 Write-Host ""
 Write-Host "Uninstall completed."
-Write-Host "Removed config, data, state snapshots, and desktop activity state for this install."
+Write-Host "Removed runtime config, bootstrap .env, data, state snapshots, and desktop activity state for this install."
 if (Test-Path $installRootPath) {
     Write-Host "Install root still exists because it contains extra files: $installRootPath"
 }

@@ -194,6 +194,7 @@ $desktopExePath = Join-Path $desktopPublishPath "QQAIBot.Desktop.exe"
 $installInfoPath = Join-Path $installRootPath "install-info.json"
 $envPath = Join-Path $appRootPath ".env"
 $dataRootPath = Join-Path $appRootPath "data"
+$runtimeConfigPath = Join-Path $dataRootPath "runtime-settings.json"
 $sessionStorePath = Join-Path $dataRootPath "sessions.json"
 $imageCachePath = Join-Path $dataRootPath "image-cache"
 $snapshotRootPath = Join-Path $appRootPath "artifacts\state-snapshots"
@@ -239,7 +240,8 @@ if (-not $SkipDesktopPublish -and -not $hasBundledDesktopPublish) {
 if ($ValidateOnly) {
     Write-Step "Validation succeeded."
     Write-Host "Expected app root:              $appRootPath"
-    Write-Host "Expected config file (.env):    $envPath"
+    Write-Host "Expected runtime config file:   $runtimeConfigPath"
+    Write-Host "Expected bootstrap env (.env):  $envPath"
     Write-Host "Expected sessions store:        $sessionStorePath"
     Write-Host "Expected image cache:           $imageCachePath"
     Write-Host "Expected state snapshots:       $snapshotRootPath"
@@ -384,6 +386,8 @@ $installInfo = @{
     appRoot = $appRootPath
     desktopExePath = $desktopExePath
     envPath = $envPath
+    bootstrapEnvPath = $envPath
+    runtimeConfigPath = $runtimeConfigPath
     dataRootPath = $dataRootPath
     sessionStorePath = $sessionStorePath
     imageCachePath = $imageCachePath
@@ -413,7 +417,8 @@ Write-Host ""
 Write-Host "Install completed."
 Write-Host "App root:                    $appRootPath"
 Write-Host "Desktop binary:              $desktopExePath"
-Write-Host "Config file (.env):          $envPath"
+Write-Host "Runtime config file:         $runtimeConfigPath"
+Write-Host "Bootstrap env (.env):        $envPath"
 Write-Host "Sessions store:              $sessionStorePath"
 Write-Host "Image cache:                 $imageCachePath"
 Write-Host "State snapshots:             $snapshotRootPath"
@@ -429,5 +434,5 @@ Write-Host "Config status:               $([string]::Join('; ', $configStatusPar
 Write-Host ""
 Write-Host "Upgrade behavior:"
 Write-Host "- Re-run this script with a newer package to upgrade in place."
-Write-Host "- Upgrades replace app files under app\ and keep .env, data\, artifacts\state-snapshots, and the desktop activity state file."
-Write-Host "- If this was the first install, fill in .env before starting the runtime."
+Write-Host "- Upgrades replace app files under app\ and keep bootstrap .env, data\ (including runtime-settings.json), artifacts\state-snapshots, and the desktop activity state file."
+Write-Host "- If this was the first install, fill in .env before starting the runtime; desktop saves later runtime edits into data\runtime-settings.json."

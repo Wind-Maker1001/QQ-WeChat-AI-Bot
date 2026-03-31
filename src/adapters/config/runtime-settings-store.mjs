@@ -7,7 +7,7 @@ import { loadRuntimeConfig } from './load-runtime-config.mjs';
 import { validateRuntimeConfig } from '../../domain/runtime-config.mjs';
 
 export const RUNTIME_SETTINGS_FILE_NAME = 'runtime-settings.json';
-export const RUNTIME_SETTINGS_VERSION = 1;
+export const RUNTIME_SETTINGS_VERSION = 2;
 
 const SETTINGS_LOCK_TIMEOUT_MS = 5000;
 const STALE_SETTINGS_LOCK_AGE_MS = 15000;
@@ -147,30 +147,64 @@ async function withSettingsFileLock(settingsPath, task, timeoutMs = SETTINGS_LOC
   }
 }
 
-function normalizeHiddenSettings(hiddenSettings, bootstrapEnvValues = {}) {
-  const source = hiddenSettings && typeof hiddenSettings === 'object' ? hiddenSettings : {};
-
-  return {
-    openAiDefaultApiStyle:
-      typeof source.openAiDefaultApiStyle === 'string' && source.openAiDefaultApiStyle.trim()
-        ? source.openAiDefaultApiStyle.trim()
+function normalizeApiStyles(apiStyles, bootstrapEnvValues = {}, legacyHiddenSettings = {}) {
+  const source = apiStyles && typeof apiStyles === 'object' ? apiStyles : {};
+  const legacySource =
+    legacyHiddenSettings && typeof legacyHiddenSettings === 'object' ? legacyHiddenSettings : {};
+  const defaultApiStyle =
+    typeof source.default === 'string' && source.default.trim()
+      ? source.default.trim()
+      : typeof legacySource.openAiDefaultApiStyle === 'string' && legacySource.openAiDefaultApiStyle.trim()
+        ? legacySource.openAiDefaultApiStyle.trim()
         : typeof bootstrapEnvValues.OPENAI_DEFAULT_API_STYLE === 'string' &&
             bootstrapEnvValues.OPENAI_DEFAULT_API_STYLE.trim()
           ? bootstrapEnvValues.OPENAI_DEFAULT_API_STYLE.trim()
-          : 'responses',
-    openAiAdvancedApiStyle:
-      typeof source.openAiAdvancedApiStyle === 'string' && source.openAiAdvancedApiStyle.trim()
-        ? source.openAiAdvancedApiStyle.trim()
+          : 'responses';
+  const advancedApiStyle =
+    typeof source.advanced === 'string' && source.advanced.trim()
+      ? source.advanced.trim()
+      : typeof legacySource.openAiAdvancedApiStyle === 'string' && legacySource.openAiAdvancedApiStyle.trim()
+        ? legacySource.openAiAdvancedApiStyle.trim()
         : typeof bootstrapEnvValues.OPENAI_ADVANCED_API_STYLE === 'string' &&
             bootstrapEnvValues.OPENAI_ADVANCED_API_STYLE.trim()
           ? bootstrapEnvValues.OPENAI_ADVANCED_API_STYLE.trim()
-          : 'responses'
+          : 'responses';
+
+  return {
+    default: defaultApiStyle,
+    advanced: advancedApiStyle
   };
+}
+
+function createImportRuntimeConfig({ cwd = process.cwd(), bootstrapEnvValues = {} } = {}) {
+  return loadRuntimeConfig({
+    cwd,
+    env: bootstrapEnvValues,
+    loadDotenv: false
+  });
+}
+
+function shouldPersistNormalizedSnapshot(parsedSnapshot, normalizedSnapshot) {
+  if (!parsedSnapshot || typeof parsedSnapshot !== 'object' || Array.isArray(parsedSnapshot)) {
+    return true;
+  }
+
+  if (parsedSnapshot.version !== RUNTIME_SETTINGS_VERSION) {
+    return true;
+  }
+
+  if (!parsedSnapshot.apiStyles || typeof parsedSnapshot.apiStyles !== 'object') {
+    return true;
+  }
+
+  const normalizedRaw = JSON.stringify(normalizedSnapshot);
+  const parsedRaw = JSON.stringify(parsedSnapshot);
+  return normalizedRaw !== parsedRaw;
 }
 
 export function buildRuntimeEnvValuesFromSettingsSnapshot(snapshot) {
   const settings = normalizeControlConfigInput(snapshot?.settings, EMPTY_CONTROL_CONFIG);
-  const hiddenSettings = normalizeHiddenSettings(snapshot?.hiddenSettings);
+  const apiStyles = normalizeApiStyles(snapshot?.apiStyles);
 
   return {
     OPENAI_API_KEY: settings.openAiApiKey,
@@ -182,8 +216,8 @@ export function buildRuntimeEnvValuesFromSettingsSnapshot(snapshot) {
     OPENAI_BASE_URL: settings.openAiBaseUrl,
     OPENAI_DEFAULT_BASE_URL: settings.openAiDefaultBaseUrl,
     OPENAI_ADVANCED_BASE_URL: settings.openAiBaseUrl,
-    OPENAI_DEFAULT_API_STYLE: hiddenSettings.openAiDefaultApiStyle,
-    OPENAI_ADVANCED_API_STYLE: hiddenSettings.openAiAdvancedApiStyle,
+    OPENAI_DEFAULT_API_STYLE: apiStyles.default,
+    OPENAI_ADVANCED_API_STYLE: apiStyles.advanced,
     OPENAI_DEFAULT_REASONING_EFFORT: settings.openAiDefaultReasoningEffort,
     OPENAI_ADVANCED_REASONING_EFFORT: settings.openAiAdvancedReasoningEffort,
     OPENAI_DEFAULT_TEXT_VERBOSITY: settings.openAiDefaultTextVerbosity,
@@ -219,12 +253,7 @@ export function buildRuntimeConfigFromSettingsSnapshot({ cwd = process.cwd(), sn
   });
 }
 
-function normalizeRuntimeSettingsSnapshot(snapshot, bootstrapEnvValues, runtimeConfig) {
-  const fallbackConfig = buildControlConfigFromEnvValues(
-    bootstrapEnvValues,
-    runtimeConfig
-  );
-
+function normalizeRuntimeSettingsSnapshot(snapshot, bootstrapEnvValues, fallbackConfig = EMPTY_CONTROL_CONFIG) {
   return {
     version: RUNTIME_SETTINGS_VERSION,
     savedAt:
@@ -232,7 +261,7 @@ function normalizeRuntimeSettingsSnapshot(snapshot, bootstrapEnvValues, runtimeC
         ? snapshot.savedAt.trim()
         : new Date().toISOString(),
     settings: normalizeControlConfigInput(snapshot?.settings, fallbackConfig),
-    hiddenSettings: normalizeHiddenSettings(snapshot?.hiddenSettings, bootstrapEnvValues)
+    apiStyles: normalizeApiStyles(snapshot?.apiStyles, bootstrapEnvValues, snapshot?.hiddenSettings)
   };
 }
 
@@ -249,16 +278,14 @@ async function readRuntimeSettingsFile(settingsPath) {
 
 export async function readBootstrapConfig({ cwd = process.cwd() } = {}) {
   const { envPath, values } = await readEnvFileValues({ cwd });
-  const runtimeConfig = loadRuntimeConfig({
-    cwd,
-    env: values,
-    loadDotenv: false
-  });
 
   return {
     envPath,
     envValues: values,
-    runtimeConfig
+    importRuntimeConfig: createImportRuntimeConfig({
+      cwd,
+      bootstrapEnvValues: values
+    })
   };
 }
 
@@ -269,15 +296,31 @@ export async function ensureRuntimeSettings({ cwd = process.cwd() } = {}) {
 
   try {
     const parsedSettings = await readRuntimeSettingsFile(settingsPath);
+    const fallbackConfig =
+      parsedSettings.version === RUNTIME_SETTINGS_VERSION && parsedSettings.apiStyles
+        ? EMPTY_CONTROL_CONFIG
+        : buildControlConfigFromEnvValues(
+            bootstrapConfig.envValues,
+            bootstrapConfig.importRuntimeConfig
+          );
     const runtimeSettingsSnapshot = normalizeRuntimeSettingsSnapshot(
       parsedSettings,
       bootstrapConfig.envValues,
-      bootstrapConfig.runtimeConfig
+      fallbackConfig
     );
     const runtimeConfig = buildRuntimeConfigFromSettingsSnapshot({
       cwd,
       snapshot: runtimeSettingsSnapshot
     });
+
+    if (shouldPersistNormalizedSnapshot(parsedSettings, runtimeSettingsSnapshot)) {
+      await withSettingsFileLock(settingsPath, async () => {
+        await writeTextFileAtomically(
+          settingsPath,
+          `${JSON.stringify(runtimeSettingsSnapshot, null, 2)}\n`
+        );
+      });
+    }
 
     return {
       settingsPath,
@@ -295,7 +338,7 @@ export async function ensureRuntimeSettings({ cwd = process.cwd() } = {}) {
   const runtimeSettingsSnapshot = normalizeRuntimeSettingsSnapshot(
     {},
     bootstrapConfig.envValues,
-    bootstrapConfig.runtimeConfig
+    buildControlConfigFromEnvValues(bootstrapConfig.envValues, bootstrapConfig.importRuntimeConfig)
   );
   runtimeSettingsSnapshot.savedAt = new Date().toISOString();
   await writeTextFileAtomically(settingsPath, `${JSON.stringify(runtimeSettingsSnapshot, null, 2)}\n`);
@@ -319,15 +362,14 @@ export async function writeRuntimeSettings({
 } = {}) {
   const currentState = await ensureRuntimeSettings({ cwd });
   const baseSnapshot = existingSnapshot ?? currentState.runtimeSettingsSnapshot;
-  const fallbackConfig = buildControlConfigFromEnvValues(
-    buildRuntimeEnvValuesFromSettingsSnapshot(baseSnapshot),
-    currentState.runtimeConfig
-  );
   const nextSnapshot = {
     version: RUNTIME_SETTINGS_VERSION,
     savedAt: new Date().toISOString(),
-    settings: normalizeControlConfigInput(config, fallbackConfig),
-    hiddenSettings: normalizeHiddenSettings(baseSnapshot.hiddenSettings, currentState.bootstrapEnvValues)
+    settings: normalizeControlConfigInput(
+      config,
+      normalizeControlConfigInput(baseSnapshot?.settings, EMPTY_CONTROL_CONFIG)
+    ),
+    apiStyles: normalizeApiStyles(baseSnapshot?.apiStyles, currentState.bootstrapEnvValues)
   };
   const nextRuntimeConfig = buildRuntimeConfigFromSettingsSnapshot({
     cwd,

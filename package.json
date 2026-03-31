@@ -8,7 +8,7 @@
     "start": "node ./src/index.mjs",
     "check:changes": "node ./scripts/check-change-requirements.mjs",
     "test": "npm run test:node && npm run test:desktop",
-    "test:node": "node --test",
+    "test:node": "node ./scripts/run-node-tests.mjs",
     "test:desktop": "dotnet build ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj -nologo && dotnet run --no-build --project ./desktop/QQAIBot.Desktop.Tests/QQAIBot.Desktop.Tests.csproj",
     "setup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install.ps1",
     "setup:validate": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\install.ps1 -ValidateOnly",

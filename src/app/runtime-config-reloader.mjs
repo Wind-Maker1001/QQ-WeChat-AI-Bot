@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { loadRuntimeConfig } from '../adapters/config/load-runtime-config.mjs';
+import { buildRuntimeConfigFromSettingsSnapshot } from '../adapters/config/runtime-settings-store.mjs';
 import { readControlConfig } from '../adapters/config/control-config-file.mjs';
 import { formatError } from '../utils.mjs';
 
@@ -12,52 +12,49 @@ export function createRuntimeConfigReloader({
   logError,
   logPrefix
 }) {
-  let envWatcher = null;
-  let envReloadTimer = null;
-  let lastEnvMtimeMs = 0;
+  let configWatcher = null;
+  let configReloadTimer = null;
+  let lastConfigMtimeMs = 0;
 
   async function reloadRuntimeConfigFromDisk(source) {
-    const runtimeConfig = getRuntimeConfig();
     const result = await readControlConfig({
-      cwd: process.cwd(),
-      runtimeConfig
+      cwd: process.cwd()
     });
-    const nextRuntimeConfig = loadRuntimeConfig({
+    const nextRuntimeConfig = buildRuntimeConfigFromSettingsSnapshot({
       cwd: process.cwd(),
-      env: result.envValues,
-      loadDotenv: false
+      snapshot: result.runtimeSettingsSnapshot
     });
 
     return applyRuntimeConfig(nextRuntimeConfig, source);
   }
 
-  function scheduleEnvReload(source) {
-    if (envReloadTimer) {
-      clearTimeout(envReloadTimer);
+  function scheduleConfigReload(source) {
+    if (configReloadTimer) {
+      clearTimeout(configReloadTimer);
     }
 
-    envReloadTimer = setTimeout(() => {
-      envReloadTimer = null;
+    configReloadTimer = setTimeout(() => {
+      configReloadTimer = null;
       void reloadRuntimeConfigFromDisk(source).catch((error) => {
         logError(`[${logPrefix}] Config reload from ${source} failed: ${formatError(error)}`);
       });
     }, 250);
   }
 
-  async function refreshEnvMtime(envFilePath) {
+  async function refreshConfigMtime(configFilePath) {
     try {
-      const stats = await fs.promises.stat(envFilePath);
+      const stats = await fs.promises.stat(configFilePath);
       return stats.mtimeMs;
     } catch {
       return 0;
     }
   }
 
-  function watchRuntimeConfigFile(envFilePath) {
-    const envDirPath = path.dirname(envFilePath);
-    const envFileName = path.basename(envFilePath);
+  function watchRuntimeConfigFile(configFilePath) {
+    const configDirPath = path.dirname(configFilePath);
+    const configFileName = path.basename(configFilePath);
 
-    return fs.watch(envDirPath, (_eventType, filename) => {
+    return fs.watch(configDirPath, (_eventType, filename) => {
       const normalizedFilename =
         typeof filename === 'string'
           ? filename
@@ -65,46 +62,44 @@ export function createRuntimeConfigReloader({
             ? filename.toString('utf8')
             : '';
 
-      const isEnvRelatedEvent =
+      const isConfigRelatedEvent =
         !normalizedFilename ||
-        normalizedFilename === envFileName ||
-        normalizedFilename === `${envFileName}.tmp`;
+        normalizedFilename === configFileName ||
+        normalizedFilename === `${configFileName}.tmp`;
 
-      if (!isEnvRelatedEvent) {
+      if (!isConfigRelatedEvent) {
         return;
       }
 
-      void refreshEnvMtime(envFilePath).then((mtimeMs) => {
-        if (!mtimeMs || mtimeMs === lastEnvMtimeMs) {
+      void refreshConfigMtime(configFilePath).then((mtimeMs) => {
+        if (!mtimeMs || mtimeMs === lastConfigMtimeMs) {
           return;
         }
 
-        lastEnvMtimeMs = mtimeMs;
-        scheduleEnvReload('env-watch');
+        lastConfigMtimeMs = mtimeMs;
+        scheduleConfigReload('config-watch');
       });
     });
   }
 
   async function startWatching() {
-    const runtimeConfig = getRuntimeConfig();
     const initialControlConfig = await readControlConfig({
-      cwd: process.cwd(),
-      runtimeConfig
+      cwd: process.cwd()
     });
-    lastEnvMtimeMs = await refreshEnvMtime(initialControlConfig.envPath);
-    envWatcher = watchRuntimeConfigFile(initialControlConfig.envPath);
-    logInfo(`[${logPrefix}] Watching config file: ${initialControlConfig.envPath}`);
-    return initialControlConfig.envPath;
+    lastConfigMtimeMs = await refreshConfigMtime(initialControlConfig.configPath);
+    configWatcher = watchRuntimeConfigFile(initialControlConfig.configPath);
+    logInfo(`[${logPrefix}] Watching runtime config file: ${initialControlConfig.configPath}`);
+    return initialControlConfig.configPath;
   }
 
   function stopWatching() {
-    if (envReloadTimer) {
-      clearTimeout(envReloadTimer);
-      envReloadTimer = null;
+    if (configReloadTimer) {
+      clearTimeout(configReloadTimer);
+      configReloadTimer = null;
     }
 
-    envWatcher?.close();
-    envWatcher = null;
+    configWatcher?.close();
+    configWatcher = null;
   }
 
   return Object.freeze({

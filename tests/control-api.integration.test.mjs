@@ -45,7 +45,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
       const result = await readControlConfig({ cwd, runtimeConfig });
       return {
         ...result.config,
-        envPath: result.envPath,
+        configPath: result.configPath,
+        bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };
     },
@@ -59,7 +60,7 @@ test('control API serves allowedChatIds contract and updates config through HTTP
 
       return {
         ...result.config,
-        envPath: result.envPath,
+        configPath: result.configPath,
         bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };
@@ -96,7 +97,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(configPayload.deepSeekFallbackEnabled, 'false');
     assert.equal(configPayload.deepSeekModel, 'deepseek-chat');
     assert.equal('allowedGroupIds' in configPayload, false);
-    assert.match(configPayload.envPath, /runtime-settings\.json$/);
+    assert.match(configPayload.configPath, /runtime-settings\.json$/);
+    assert.match(configPayload.bootstrapEnvPath, /\.env$/);
 
     const updateResponse = await fetch(`${baseUrl}/config`, {
       method: 'PUT',
@@ -121,7 +123,8 @@ test('control API serves allowedChatIds contract and updates config through HTTP
     assert.equal(updatedPayload.deepSeekFallbackEnabled, 'true');
     assert.equal(updatedPayload.deepSeekApiKey, 'deepseek-key');
     assert.equal('allowedGroupIds' in updatedPayload, false);
-    assert.match(updatedPayload.envPath, /runtime-settings\.json$/);
+    assert.match(updatedPayload.configPath, /runtime-settings\.json$/);
+    assert.match(updatedPayload.bootstrapEnvPath, /\.env$/);
 
     const envText = await fs.readFile(path.join(cwd, '.env'), 'utf8');
     assert.match(envText, /BOT_SYSTEM_PROMPT=base prompt/);
@@ -174,7 +177,8 @@ test('control API returns 400 for rejected config updates', async () => {
       const result = await readControlConfig({ cwd, runtimeConfig });
       return {
         ...result.config,
-        envPath: result.envPath,
+        configPath: result.configPath,
+        bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };
     },
@@ -188,7 +192,7 @@ test('control API returns 400 for rejected config updates', async () => {
 
       return {
         ...result.config,
-        envPath: result.envPath,
+        configPath: result.configPath,
         bootstrapEnvPath: result.bootstrapEnvPath,
         restartRequired: false
       };

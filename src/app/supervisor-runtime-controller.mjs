@@ -58,7 +58,7 @@ export function createSupervisorRuntimeController({
     });
 
     setRuntimeSettingsState({
-      settingsPath: result.envPath,
+      settingsPath: result.configPath,
       bootstrapEnvPath: result.bootstrapEnvPath,
       runtimeConfig: result.runtimeConfig,
       runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
@@ -66,7 +66,8 @@ export function createSupervisorRuntimeController({
 
     return {
       ...result.config,
-      envPath: result.envPath,
+      configPath: result.configPath,
+      bootstrapEnvPath: result.bootstrapEnvPath,
       restartRequired: false
     };
   }
@@ -113,7 +114,7 @@ export function createSupervisorRuntimeController({
       config: payload
     });
     const runtimeSettingsState = {
-      settingsPath: result.envPath,
+      settingsPath: result.configPath,
       bootstrapEnvPath: result.bootstrapEnvPath,
       runtimeConfig: result.runtimeConfig,
       runtimeSettingsSnapshot: result.runtimeSettingsSnapshot
@@ -159,7 +160,8 @@ export function createSupervisorRuntimeController({
 
     return {
       ...result.config,
-      envPath: result.envPath,
+      configPath: result.configPath,
+      bootstrapEnvPath: result.bootstrapEnvPath,
       restartRequired: false,
       savedAt: lastConfigSavedAt
     };

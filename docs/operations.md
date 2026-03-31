@@ -33,6 +33,11 @@ npm install
 Copy-Item .env.example .env
 ```
 
+Runtime config note:
+
+- Desktop saves runtime settings to `data/runtime-settings.json`.
+- `.env` remains the bootstrap and local control-plane file.
+
 Main env keys:
 
 ```env
@@ -190,6 +195,11 @@ If `QQ_AI_BOT_CONTROL_API_TOKEN` is set, requests must include:
 ```text
 Authorization: Bearer <token>
 ```
+
+Control API config responses:
+
+- `configPath`: runtime config file path, typically `data/runtime-settings.json`
+- `bootstrapEnvPath`: bootstrap/local control-plane `.env` path
 
 ## Source of Truth
 

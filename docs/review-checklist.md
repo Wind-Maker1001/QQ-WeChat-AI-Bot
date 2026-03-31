@@ -19,14 +19,17 @@ Read this together with [current-architecture.md](current-architecture.md).
 ### Strategy Path
 
 - `src/application/message-orchestrator.mjs` is still acting as an orchestrator, not as the strategy center.
-- Route policy, execution-mode rules, and execution projection metadata remain in the dedicated strategy/policy modules.
+- Route policy, intent-analysis heuristics, fallback rules, and execution projection metadata remain in the dedicated strategy/policy modules.
 - If execution tags or execution projection changed, `src/domain/execution-projection.mjs` was updated instead of scattering new string literals.
+- `src/domain/message-analysis-policy.mjs` owns heuristics; `src/domain/route-decision.mjs` owns decision objects and summaries.
+- `src/domain/provider-fallback-policy.mjs` owns fallback eligibility and degraded fallback wrapping.
 
 ### Desktop Control Plane
 
 - New control-plane logic was added to facade/coordinator/helper layers before considering `MainViewModel`.
 - `desktop/QQAIBot.Desktop/ViewModels/MainViewModel.cs` did not absorb a new state machine, projection formatter, or recovery workflow.
 - Desktop projection text was changed in helpers/formatters, not by inline string assembly in the ViewModel.
+- Derived shell state still flows through `DesktopShellProjector.cs` rather than being rebuilt ad hoc inside `DesktopControlPlaneSession.cs` or `MainViewModel.cs`.
 
 ## Gravity-Well Checks
 
@@ -35,6 +38,7 @@ Watch these files closely:
 - `src/application/message-orchestrator.mjs`
 - `src/adapters/llm/llm-router.mjs`
 - `desktop/QQAIBot.Desktop/ViewModels/MainViewModel.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopControlPlaneSession.cs`
 
 For each touched gravity-well candidate, ask:
 
@@ -53,12 +57,16 @@ For each touched gravity-well candidate, ask:
 At minimum, reviewers should confirm that the author ran the right scope of validation:
 
 - strategy/policy changes:
+  - `node tests/message-analysis-policy.test.mjs`
+  - `node tests/provider-fallback-policy.test.mjs`
   - relevant node tests
   - supervisor e2e if status or telemetry changed
 - desktop control-plane changes:
   - `npm run test:desktop`
 - cross-cutting contract changes:
   - `npm test`
+- architecture boundary changes:
+  - `node tests/architecture-boundaries.test.mjs`
 
 Current automation note:
 

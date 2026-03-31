@@ -83,8 +83,15 @@ Read these when changing worker lifecycle, reconnect/recovery, hot reload, or en
 The desktop regression harness is:
 
 - `desktop/QQAIBot.Desktop.Tests/Program.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopConfigWorkflowTests.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopRuntimeWorkflowTests.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopSnapshotWorkflowTests.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopActivityWorkflowTests.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopShellProjectorTests.cs`
+- `desktop/QQAIBot.Desktop.Tests/DesktopControlPlaneSessionFacadeTests.cs`
 
 It is intentionally broad and acts as the current desktop behavior contract.
+`Program.cs` is now also the runner/dispatcher for direct workflow/projector tests that live in separate source files.
 
 Important desktop coverage areas:
 

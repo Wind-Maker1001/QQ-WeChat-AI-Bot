@@ -81,7 +81,8 @@ Key files:
 
 ### Config Layer
 
-Desktop is control-API first. Config file access is still present, but it is a fallback and persistence substrate, not the primary control path.
+Desktop is control-API first. Runtime config now has one persisted source of truth: `data/runtime-settings.json`.
+`.env` remains the bootstrap and local control-plane file and should not regain runtime-setting authority after migration.
 
 Key files:
 
@@ -89,6 +90,17 @@ Key files:
 - `src/adapters/config/control-config-mapper.mjs`
 - `src/adapters/config/control-config-file.mjs`
 - `src/adapters/config/load-runtime-config.mjs`
+- `src/adapters/config/runtime-settings-store.mjs`
+
+Current config ownership:
+
+- runtime settings:
+  - `data/runtime-settings.json`
+- bootstrap / local control-plane extras:
+  - `.env`
+- desktop fallback reader:
+  - reads runtime config from `runtime-settings.json`
+  - reads only local control-plane extras from `.env`
 
 ### Desktop Control Plane
 
@@ -106,6 +118,7 @@ The current request/strategy chain is:
 
 ```text
 incoming message
+  -> message intent analysis
   -> route decision
   -> route request policy
   -> execution plan
@@ -116,6 +129,8 @@ incoming message
 
 Key ownership:
 
+- message intent analysis:
+  - `src/domain/message-analysis-policy.mjs`
 - route decision:
   - `src/domain/route-decision.mjs`
 - request policy:
@@ -129,6 +144,11 @@ Key ownership:
 - provider/router boundary:
   - `src/adapters/llm/llm-router.mjs`
   - `src/adapters/llm/openai-provider.mjs`
+- provider fallback policy:
+  - `src/domain/provider-fallback-policy.mjs`
+
+`route-decision.mjs` should stay as a decision object / summary layer.
+Heuristics should continue to live in `message-analysis-policy.mjs`, not drift back into `route-decision.mjs`.
 
 `message-orchestrator.mjs` should remain an orchestrator, not re-grow into the strategy center.
 
@@ -160,6 +180,16 @@ Primary files:
 
 The desktop side now has a clearer layering model.
 
+Current internal direction:
+
+```text
+DesktopShellSourceState
+  -> Desktop*Workflow state changes
+  -> DesktopShellProjector
+  -> DesktopShellState (compat output)
+  -> MainViewModel property application
+```
+
 ### Projection Formatters
 
 - `desktop/QQAIBot.Desktop/Services/BackendExecutionProjectionFormatter.cs`
@@ -181,9 +211,17 @@ The desktop side now has a clearer layering model.
 ### Snapshot Presentation
 
 - `desktop/QQAIBot.Desktop/Services/LocalStateSnapshotPresentationBuilder.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopShellProjector.cs`
 
 Snapshot archive IO and diff generation should stay in `LocalStateSnapshotService`.
 User-facing restore impact, safety, and post-restore action guidance should be derived in the presentation builder, not rebuilt inside `MainViewModel`.
+
+### Workflow Entry Points
+
+- `desktop/QQAIBot.Desktop/Services/DesktopConfigWorkflow.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopRuntimeWorkflow.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopSnapshotWorkflow.cs`
+- `desktop/QQAIBot.Desktop/Services/DesktopActivityWorkflow.cs`
 
 ### Control-Plane Coordination
 
@@ -219,8 +257,8 @@ This is the current intended shape:
 
 ```text
 MainViewModel
-  -> control-plane facade / coordinators
-  -> projection helpers
+  -> control-plane session facade
+  -> workflows / projector
   -> UI shell state + commands
 ```
 
@@ -263,12 +301,29 @@ It can own:
 - route selection handoff
 - provider construction
 - request description at the route/provider edge
+- fallback policy invocation
 
 It should not become:
 
+- the place where message heuristics live
+- the place where fallback eligibility rules are authored
 - the place where conversation/session policy lives
 - the place where desktop-facing projection logic is built
 - the place where orchestration mode decisions accumulate
+
+### `src/domain/message-analysis-policy.mjs`
+
+This layer owns:
+
+- complexity / search / code-interpreter heuristics
+- directive prefix handling
+- image-trigger analysis
+
+It should not become:
+
+- a provider-selection layer
+- a telemetry formatting layer
+- a persistence layer
 
 ### `desktop/QQAIBot.Desktop/ViewModels/MainViewModel.cs`
 
@@ -305,12 +360,16 @@ When behavior is unclear, prefer the tests over historical prose.
 
 Key backend tests:
 
+- `tests/message-analysis-policy.test.mjs`
+- `tests/provider-fallback-policy.test.mjs`
 - `tests/llm-request-policy.test.mjs`
 - `tests/llm-execution-plan.test.mjs`
 - `tests/message-turn-spec.test.mjs`
 - `tests/message-orchestrator-local-reply.test.mjs`
 - `tests/llm-router.test.mjs`
 - `tests/openai-provider-config.test.mjs`
+- `tests/runtime-settings-migration.test.mjs`
+- `tests/architecture-boundaries.test.mjs`
 - `tests/supervisor.e2e.test.mjs`
 
 Key desktop regression harness:

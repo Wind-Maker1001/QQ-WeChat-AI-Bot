@@ -93,6 +93,11 @@ npm run release:installer
 
 See [.env.example](.env.example) for the full template.
 
+Runtime config note:
+
+- desktop 保存的运行配置落在 `data/runtime-settings.json`
+- `.env` 保留给 bootstrap 和本机 control-plane 设置，例如 `QQ_AI_BOT_CONTROL_API_TOKEN`
+
 The most important keys are:
 
 - `OPENAI_API_KEY`
@@ -121,7 +126,8 @@ Default install root:
 Important paths:
 
 - app files: `%LOCALAPPDATA%\QQAIBot\app`
-- config file: `%LOCALAPPDATA%\QQAIBot\app\.env`
+- runtime config file: `%LOCALAPPDATA%\QQAIBot\app\data\runtime-settings.json`
+- bootstrap env file: `%LOCALAPPDATA%\QQAIBot\app\.env`
 - sessions and image cache: `%LOCALAPPDATA%\QQAIBot\app\data\`
 - state snapshots: `%LOCALAPPDATA%\QQAIBot\app\artifacts\state-snapshots\`
 - desktop activity state: `%LOCALAPPDATA%\QQAIBot.Desktop\activity-state\<hash>.json`
@@ -134,7 +140,7 @@ Install or upgrade:
 
 - `npm run setup:install`
 - Running the same install script again upgrades in place.
-- In-place upgrade replaces program files under `app\`, but keeps `.env`, `data\`, `artifacts\state-snapshots\`, and desktop activity state.
+- In-place upgrade replaces program files under `app\`, but keeps bootstrap `.env`, `data\` (including `runtime-settings.json`), `artifacts\state-snapshots\`, and desktop activity state.
 
 Uninstall:
 
@@ -144,7 +150,7 @@ Uninstall:
 Uninstall but keep state:
 
 - `npm run setup:uninstall:keep-state`
-- This removes binaries and shortcuts, but keeps `.env`, `data\`, `artifacts\state-snapshots\`, and desktop activity state so a later reinstall can reconnect to the same local state.
+- This removes binaries and shortcuts, but keeps bootstrap `.env`, `data\` (including `runtime-settings.json`), `artifacts\state-snapshots\`, and desktop activity state so a later reinstall can reconnect to the same local state.
 
 ## Docs
 

@@ -467,6 +467,9 @@ public partial class MainWindow : Window
             case "focus_openai_advanced_key":
                 FocusSettingsElement(ModelApiTabItem, OpenAiApiKeyTextBox);
                 return;
+            case "focus_deepseek_api_key":
+                FocusSettingsElement(ModelApiTabItem, DeepSeekApiKeyTextBox);
+                return;
             case "focus_napcat_url":
                 FocusSettingsElement(ChannelsTabItem, NapCatWsUrlTextBox);
                 return;

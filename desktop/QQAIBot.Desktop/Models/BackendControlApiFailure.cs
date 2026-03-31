@@ -6,7 +6,8 @@ public enum BackendControlApiFailureKind
     Unreachable = 1,
     Rejected = 2,
     Unauthorized = 3,
-    Unknown = 4
+    Unknown = 4,
+    Incompatible = 5
 }
 
 public sealed class BackendControlApiFailure

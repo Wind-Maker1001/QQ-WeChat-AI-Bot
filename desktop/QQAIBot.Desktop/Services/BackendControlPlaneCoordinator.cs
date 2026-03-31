@@ -14,10 +14,10 @@ public static class BackendControlPlaneCoordinator
     {
         var apiConfig = await tryGetConfigAsync(cancellationToken);
         var configFailure = getLastFailure();
-        var apiStatus = await tryGetStatusAsync(cancellationToken);
 
         if (apiConfig is not null)
         {
+            var apiStatus = await tryGetStatusAsync(cancellationToken);
             return (apiConfig, apiStatus);
         }
 
@@ -33,15 +33,16 @@ public static class BackendControlPlaneCoordinator
         {
             await tryRecoverControlApiAsync();
             apiConfig = await tryGetConfigAsync(cancellationToken);
-            apiStatus = await tryGetStatusAsync(cancellationToken);
 
             if (apiConfig is not null)
             {
+                var apiStatus = await tryGetStatusAsync(cancellationToken);
                 return (apiConfig, apiStatus);
             }
         }
 
-        return (null, apiStatus);
+        var fallbackStatus = await tryGetStatusAsync(cancellationToken);
+        return (null, fallbackStatus);
     }
 
     public static async Task<BackendControlConfigResponse> SaveThroughControlApiAsync(

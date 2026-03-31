@@ -102,6 +102,7 @@ public static class DesktopHealthActionKeys
     public const string FocusControlApiToken = "focus_control_api_token";
     public const string FocusOpenAiDefaultKey = "focus_openai_default_key";
     public const string FocusOpenAiAdvancedKey = "focus_openai_advanced_key";
+    public const string FocusDeepSeekApiKey = "focus_deepseek_api_key";
     public const string FocusNapCatUrl = "focus_napcat_url";
     public const string FocusNapCatToken = "focus_napcat_token";
     public const string FocusWechatUrl = "focus_wechat_url";

@@ -126,6 +126,15 @@ public static class DesktopHealthChecklistBuilder
                 detail: DefaultIfBlank(controlApiFailure.Message, "本地 control API 返回了意外结果。"),
                 actionLabel: "重新加载",
                 actionKey: DesktopHealthActionKeys.ReloadConfig),
+            BackendControlApiFailureKind.Incompatible => CreateCheck(
+                key: "control-api",
+                title: "Control API",
+                state: DesktopHealthState.Error,
+                stateText: "版本不兼容",
+                detail: DefaultIfBlank(controlApiFailure.Message, "本地 control API 版本过旧，无法与当前 desktop 配置协议兼容。"),
+                isBlocking: true,
+                actionLabel: "打开 backend 目录",
+                actionKey: DesktopHealthActionKeys.OpenBackendFolder),
             _ => CreateCheck(
                 key: "control-api",
                 title: "Control API",

@@ -13,6 +13,7 @@ public sealed class DesktopControlPlaneSession
     private static readonly DesktopActivityStateStoragePolicy ActivityStateStoragePolicy = new();
 
     private readonly DesktopSessionDependencies _dependencies;
+    private DesktopShellSourceState _sourceState;
     private DesktopShellState _shellState;
     private bool _restoringActivityState;
 
@@ -22,8 +23,8 @@ public sealed class DesktopControlPlaneSession
     {
         _dependencies = dependencies;
         _shellState = initialState;
-        ApplyLocalDocumentProjection();
-        RecalculateDerivedState();
+        _sourceState = DesktopShellProjector.CreateSourceState(initialState);
+        ProjectShellState();
     }
 
     public DesktopShellState BuildCurrentShellState() => _shellState;
@@ -38,26 +39,16 @@ public sealed class DesktopControlPlaneSession
         bool canStartBackend,
         string logText)
     {
-        _shellState = _shellState with
-        {
-            ConfigEditorState = _shellState.ConfigEditorState with
-            {
-                Config = BuildConfigCopy(config),
-                ControlApiToken = controlApiToken,
-                HasUnsavedChanges = hasUnsavedChanges,
-                LastLoadedAtText = lastLoadedAtText,
-                LastSavedAtText = lastSavedAtText
-            },
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                AutoStartEnabled = autoStartEnabled,
-                CanStartBackend = canStartBackend
-            },
-            UiFeedbackState = _shellState.UiFeedbackState with
-            {
-                LogText = logText
-            }
-        };
+        _sourceState = DesktopConfigWorkflow.UpdateEditorState(
+            _sourceState,
+            config,
+            controlApiToken,
+            hasUnsavedChanges,
+            lastLoadedAtText,
+            lastSavedAtText,
+            autoStartEnabled,
+            canStartBackend,
+            logText);
 
         RecalculateDerivedState();
         return _shellState;
@@ -65,15 +56,10 @@ public sealed class DesktopControlPlaneSession
 
     public DesktopShellState UpdateBackendRoot(string backendRootPath, bool backendRootDetected)
     {
-        _shellState = _shellState with
-        {
-            LocalDocumentState = _shellState.LocalDocumentState with
-            {
-                BackendRootPath = backendRootPath ?? string.Empty,
-                BackendRootDetected = backendRootDetected
-            },
-            SnapshotState = new DesktopSnapshotState()
-        };
+        _sourceState = DesktopActivityWorkflow.UpdateBackendRoot(
+            _sourceState,
+            backendRootPath,
+            backendRootDetected);
 
         LoadActivityStateCore();
         ApplyLocalDocumentProjection();
@@ -88,25 +74,26 @@ public sealed class DesktopControlPlaneSession
 
     public async Task<(BackendControlConfigResponse? ApiConfig, BackendRuntimeStatus? ApiStatus)> LoadAuthoritativeConfigAsync()
     {
-        return await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
+        var loadResult = await BackendControlPlaneFacade.LoadAuthoritativeConfigAsync(
             tryGetConfigAsync: (cancellationToken) => _dependencies.BackendControlApiService.TryGetConfigAsync(cancellationToken),
             getLastFailure: () => _dependencies.BackendControlApiService.LastFailure,
             tryGetStatusAsync: (cancellationToken) => _dependencies.BackendControlApiService.TryGetStatusAsync(cancellationToken),
             isImmediateFailure: IsImmediateControlApiFailure,
             tryRecoverControlApiAsync: () => TryRecoverControlApiAsyncInternal("load-config"));
+
+        if (loadResult.ApiConfig is not null)
+        {
+            EnsureCompatibleControlApiConfigResponse(loadResult.ApiConfig);
+        }
+
+        return loadResult;
     }
 
     public async Task<DesktopCommandResult> LoadConfigAsync()
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Backend root is invalid"
-                }
-            };
+            SetSourceStatusText("Backend root is invalid");
 
             return BuildResult(
                 succeeded: false,
@@ -116,13 +103,7 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Loading config..."
-                }
-            };
+            SetSourceStatusText("Loading config...");
 
             var localEnvDocument = await LoadLocalEnvDocumentAsync();
             var loadResult = await LoadAuthoritativeConfigAsync();
@@ -131,43 +112,25 @@ public sealed class DesktopControlPlaneSession
             var nextDocument = apiConfig is not null
                 ? new EnvDocument
                 {
-                    Config = BuildConfigCopy(apiConfig)
+                    Config = DesktopConfigWorkflow.BuildConfigCopy(apiConfig)
                 }
                 : localEnvDocument;
 
             CopyLocalExtraValues(localEnvDocument, nextDocument);
             ApplyControlApiAccessToken(nextDocument);
 
-            _shellState = _shellState with
-            {
-                LocalDocumentState = _shellState.LocalDocumentState with
-                {
-                    ConfigDocument = new DesktopConfigDocumentState
-                    {
-                        Document = nextDocument
-                    }
-                },
-                ConfigEditorState = _shellState.ConfigEditorState with
-                {
-                    Config = BuildConfigCopy(nextDocument.Config),
-                    ControlApiToken = ResolveControlApiToken(nextDocument),
-                    HasUnsavedChanges = false,
-                    LastLoadedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                }
-            };
+            _sourceState = DesktopConfigWorkflow.ApplyLoadedDocument(
+                _sourceState,
+                nextDocument,
+                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
 
             ApplyLocalDocumentProjection();
             ApplyBackendRuntimeStatusCore(apiStatus, apiStatus is not null);
             await RefreshStateSnapshotsAsyncInternal(selectArchivePath: null);
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = apiConfig?.RestartRequired == true
-                        ? "Config loaded (restart required)"
-                        : "Config loaded"
-                }
-            };
+            SetSourceStatusText(
+                apiConfig?.RestartRequired == true
+                    ? "Config loaded (restart required)"
+                    : "Config loaded");
             RecalculateDerivedState();
 
             return BuildResult(
@@ -176,8 +139,8 @@ public sealed class DesktopControlPlaneSession
                 logMessages:
                 [
                     apiConfig is not null
-                        ? $"Loaded config via control API: {apiConfig.EnvPath}"
-                        : $"Loaded config from file: {EnvFilePath()}"
+                        ? $"Loaded runtime config via control API: {apiConfig.ConfigPath}"
+                        : $"Loaded local fallback config: {ResolveLocalFallbackConfigPath()}"
                 ]);
         }
         catch (Exception ex)
@@ -187,16 +150,10 @@ public sealed class DesktopControlPlaneSession
                 fallbackStatusText: "Load failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _dependencies.BackendControlApiService.LastFailure,
-                envPath: EnvFilePath(),
-                canStartBackend: _shellState.RuntimeShellState.CanStartBackend);
-
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = userFacingError.StatusText
-                }
-            };
+                configPath: RuntimeConfigPath(),
+                bootstrapEnvPath: BootstrapEnvFilePath(),
+                canStartBackend: _sourceState.RuntimeSourceState.CanStartBackend);
+            SetSourceStatusText(userFacingError.StatusText);
 
             return BuildResult(
                 succeeded: false,
@@ -210,13 +167,7 @@ public sealed class DesktopControlPlaneSession
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Backend root is invalid"
-                }
-            };
+            SetSourceStatusText("Backend root is invalid");
 
             return BuildResult(
                 succeeded: false,
@@ -232,7 +183,7 @@ public sealed class DesktopControlPlaneSession
                 ControlApiTokenEnvKey,
                 normalizedToken);
 
-            var nextDocument = CloneEnvDocument(_shellState.LocalDocumentState.ConfigDocument.Document);
+            var nextDocument = DesktopConfigWorkflow.CloneEnvDocument(_shellState.LocalDocumentState.ConfigDocument.Document);
             if (string.IsNullOrWhiteSpace(normalizedToken))
             {
                 nextDocument.ExtraValues.Remove(ControlApiTokenEnvKey);
@@ -243,30 +194,17 @@ public sealed class DesktopControlPlaneSession
             }
 
             ApplyControlApiAccessToken(nextDocument);
-            _shellState = _shellState with
-            {
-                LocalDocumentState = _shellState.LocalDocumentState with
-                {
-                    ConfigDocument = new DesktopConfigDocumentState
-                    {
-                        Document = nextDocument
-                    }
-                },
-                ConfigEditorState = _shellState.ConfigEditorState with
-                {
-                    ControlApiToken = normalizedToken
-                },
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Local control-plane settings saved"
-                }
-            };
+            _sourceState = DesktopConfigWorkflow.ApplySavedLocalControlPlane(
+                _sourceState,
+                nextDocument,
+                normalizedToken);
+            SetSourceStatusText("Local control-plane settings saved");
             RecalculateDerivedState();
 
             return BuildResult(
                 succeeded: true,
                 statusText: "Local control-plane settings saved",
-                logMessages: [$"Saved local control-plane token to {EnvFilePath()}"]);
+                logMessages: [$"Saved local control-plane token to bootstrap .env: {BootstrapEnvFilePath()}"]);
         }
         catch (Exception ex)
         {
@@ -274,17 +212,10 @@ public sealed class DesktopControlPlaneSession
                 operationLabel: "Save local control settings",
                 fallbackStatusText: "Local control-plane save failed",
                 technicalMessage: ex.Message,
-                envPath: EnvFilePath(),
+                bootstrapEnvPath: BootstrapEnvFilePath(),
                 localControlSettingsOperation: true,
-                canStartBackend: _shellState.RuntimeShellState.CanStartBackend);
-
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = userFacingError.StatusText
-                }
-            };
+                canStartBackend: _sourceState.RuntimeSourceState.CanStartBackend);
+            SetSourceStatusText(userFacingError.StatusText);
 
             return BuildResult(
                 succeeded: false,
@@ -298,13 +229,7 @@ public sealed class DesktopControlPlaneSession
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Backend root is invalid"
-                }
-            };
+            SetSourceStatusText("Backend root is invalid");
 
             return BuildResult(
                 succeeded: false,
@@ -314,55 +239,25 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            _shellState = _shellState with
-            {
-                ConfigEditorState = _shellState.ConfigEditorState with
-                {
-                    Config = BuildConfigCopy(config)
-                },
-                LocalDocumentState = _shellState.LocalDocumentState with
-                {
-                    ConfigDocument = _shellState.LocalDocumentState.ConfigDocument with
-                    {
-                        Document = CloneEnvDocument(_shellState.LocalDocumentState.ConfigDocument.Document, config)
-                    }
-                },
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Saving config..."
-                }
-            };
+            _sourceState = DesktopConfigWorkflow.ApplySaveDraft(_sourceState, config);
+            SetSourceStatusText("Saving config...");
 
             var apiResult = await SaveConfigThroughControlApiAsync(config);
-            var mergedConfig = MergeSavedConfig(config, apiResult);
-            var nextDocument = CloneEnvDocument(_shellState.LocalDocumentState.ConfigDocument.Document, mergedConfig);
+            var mergedConfig = DesktopConfigWorkflow.MergeSavedConfig(config, apiResult);
+            var nextDocument = DesktopConfigWorkflow.CloneEnvDocument(_sourceState.LocalDocumentSourceState.ConfigDocument.Document, mergedConfig);
 
-            _shellState = _shellState with
-            {
-                ConfigEditorState = _shellState.ConfigEditorState with
-                {
-                    Config = BuildConfigCopy(mergedConfig),
-                    HasUnsavedChanges = false,
-                    LastSavedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                },
-                LocalDocumentState = _shellState.LocalDocumentState with
-                {
-                    ConfigDocument = _shellState.LocalDocumentState.ConfigDocument with
-                    {
-                        Document = nextDocument
-                    }
-                },
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = apiResult.RestartRequired ? "Config saved (restart required)" : "Config saved"
-                }
-            };
+            _sourceState = DesktopConfigWorkflow.ApplySavedConfig(
+                _sourceState,
+                mergedConfig,
+                nextDocument,
+                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            SetSourceStatusText(apiResult.RestartRequired ? "Config saved (restart required)" : "Config saved");
             RecalculateDerivedState();
 
             return BuildResult(
                 succeeded: true,
                 statusText: _shellState.UiFeedbackState.StatusText,
-                logMessages: [$"Saved config via control API: {apiResult.EnvPath}"]);
+                logMessages: [$"Saved runtime config via control API: {apiResult.ConfigPath}"]);
         }
         catch (Exception ex)
         {
@@ -371,16 +266,10 @@ public sealed class DesktopControlPlaneSession
                 fallbackStatusText: "Save failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _dependencies.BackendControlApiService.LastFailure,
-                envPath: EnvFilePath(),
-                canStartBackend: _shellState.RuntimeShellState.CanStartBackend);
-
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = userFacingError.StatusText
-                }
-            };
+                configPath: RuntimeConfigPath(),
+                bootstrapEnvPath: BootstrapEnvFilePath(),
+                canStartBackend: _sourceState.RuntimeSourceState.CanStartBackend);
+            SetSourceStatusText(userFacingError.StatusText);
 
             return BuildResult(
                 succeeded: false,
@@ -401,13 +290,7 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Starting backend..."
-                }
-            };
+            SetSourceStatusText("Starting backend...");
 
             var outcome = await BackendControlPlaneFacade.StartBackendAsync(
                 prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
@@ -436,13 +319,7 @@ public sealed class DesktopControlPlaneSession
                 await LoadConfigAsync();
             }
 
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = outcome.StatusText
-                }
-            };
+            SetSourceStatusText(outcome.StatusText);
 
             return BuildResult(
                 succeeded: true,
@@ -457,16 +334,10 @@ public sealed class DesktopControlPlaneSession
                 fallbackStatusText: "Start failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _dependencies.BackendControlApiService.LastFailure,
-                envPath: EnvFilePath(),
-                canStartBackend: _shellState.RuntimeShellState.CanStartBackend);
-
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = userFacingError.StatusText
-                }
-            };
+                configPath: RuntimeConfigPath(),
+                bootstrapEnvPath: BootstrapEnvFilePath(),
+                canStartBackend: _sourceState.RuntimeSourceState.CanStartBackend);
+            SetSourceStatusText(userFacingError.StatusText);
 
             return BuildResult(
                 succeeded: false,
@@ -480,13 +351,7 @@ public sealed class DesktopControlPlaneSession
     {
         try
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Stopping backend..."
-                }
-            };
+            SetSourceStatusText("Stopping backend...");
 
             var outcome = await BackendControlPlaneFacade.StopBackendAsync(
                 prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
@@ -497,13 +362,7 @@ public sealed class DesktopControlPlaneSession
                 stopProcessAsync: () => _dependencies.BotProcessService.StopAsync());
 
             ApplyBackendRuntimeStatusCore(outcome.AppliedStatus, outcome.ControlApiReachable);
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = outcome.StatusText
-                }
-            };
+            SetSourceStatusText(outcome.StatusText);
 
             return BuildResult(
                 succeeded: true,
@@ -518,16 +377,10 @@ public sealed class DesktopControlPlaneSession
                 fallbackStatusText: "Stop failed",
                 technicalMessage: ex.Message,
                 controlApiFailure: _dependencies.BackendControlApiService.LastFailure,
-                envPath: EnvFilePath(),
-                canStartBackend: _shellState.RuntimeShellState.CanStartBackend);
-
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = userFacingError.StatusText
-                }
-            };
+                configPath: RuntimeConfigPath(),
+                bootstrapEnvPath: BootstrapEnvFilePath(),
+                canStartBackend: _sourceState.RuntimeSourceState.CanStartBackend);
+            SetSourceStatusText(userFacingError.StatusText);
 
             return BuildResult(
                 succeeded: false,
@@ -543,21 +396,17 @@ public sealed class DesktopControlPlaneSession
         var status = await _dependencies.BackendControlApiService.TryGetStatusAsync();
         var statusFailure = _dependencies.BackendControlApiService.LastFailure;
         var pollOutcome = BackendControlApiStatusPollCoordinator.Evaluate(
-            _shellState.RuntimeShellState.RuntimeSnapshot,
-            _shellState.RuntimeShellState.ControlApiPollState,
+            _sourceState.RuntimeSourceState.RuntimeSnapshot,
+            _sourceState.RuntimeSourceState.ControlApiPollState,
             status,
             statusFailure,
             ControlApiRecoveryAttemptThreshold,
             ControlApiOutageNotificationThreshold);
 
-        _shellState = _shellState with
-        {
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                ControlApiPollState = pollOutcome.NextPollState,
-                RuntimeSnapshot = pollOutcome.NextRuntimeSnapshot
-            }
-        };
+        _sourceState = DesktopRuntimeWorkflow.ApplyPollOutcome(
+            _sourceState,
+            pollOutcome.NextPollState,
+            pollOutcome.NextRuntimeSnapshot);
 
         if (!pollOutcome.ShouldApplyRuntimeStatus)
         {
@@ -606,17 +455,7 @@ public sealed class DesktopControlPlaneSession
 
     public DesktopShellState ClearQqActivityHistory()
     {
-        _shellState = _shellState with
-        {
-            RecentActivityState = _shellState.RecentActivityState with
-            {
-                QqRecentActivities = [],
-                LastQqRequestEventKey = string.Empty,
-                LastQqFailureEventKey = string.Empty,
-                PinSelectedQqActivity = false,
-                SelectedQqRecentActivity = null
-            }
-        };
+        _sourceState = DesktopActivityWorkflow.ClearQqActivityHistory(_sourceState);
 
         PersistActivityStateIfPossible();
         RecalculateDerivedState();
@@ -625,17 +464,7 @@ public sealed class DesktopControlPlaneSession
 
     public DesktopShellState ClearWechatActivityHistory()
     {
-        _shellState = _shellState with
-        {
-            RecentActivityState = _shellState.RecentActivityState with
-            {
-                WechatRecentActivities = [],
-                LastWechatRequestEventKey = string.Empty,
-                LastWechatFailureEventKey = string.Empty,
-                PinSelectedWechatActivity = false,
-                SelectedWechatRecentActivity = null
-            }
-        };
+        _sourceState = DesktopActivityWorkflow.ClearWechatActivityHistory(_sourceState);
 
         PersistActivityStateIfPossible();
         RecalculateDerivedState();
@@ -788,23 +617,11 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Exporting state snapshot..."
-                }
-            };
+            SetSourceStatusText("Exporting state snapshot...");
 
             var result = await _dependencies.LocalStateSnapshotService.ExportAsync(_shellState.LocalDocumentState.BackendRootPath);
             await RefreshStateSnapshotsAsyncInternal(result.ArchivePath);
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    LastStateSnapshotText = result.ArchivePath
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ApplySnapshotExportResult(_sourceState, result.ArchivePath);
 
             return BuildResult(
                 succeeded: true,
@@ -830,13 +647,7 @@ public sealed class DesktopControlPlaneSession
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Backend root is invalid"
-                }
-            };
+            SetSourceStatusText("Backend root is invalid");
 
             return BuildResult(
                 succeeded: false,
@@ -846,23 +657,11 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Exporting safe state snapshot..."
-                }
-            };
+            SetSourceStatusText("Exporting safe state snapshot...");
 
             var result = await _dependencies.LocalStateSnapshotService.ExportSafeAsync(_shellState.LocalDocumentState.BackendRootPath);
             await RefreshStateSnapshotsAsyncInternal(result.ArchivePath);
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    LastStateSnapshotText = result.ArchivePath
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ApplySnapshotExportResult(_sourceState, result.ArchivePath);
 
             return BuildResult(
                 succeeded: true,
@@ -888,13 +687,7 @@ public sealed class DesktopControlPlaneSession
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Backend root is invalid"
-                }
-            };
+            SetSourceStatusText("Backend root is invalid");
 
             return BuildResult(
                 succeeded: false,
@@ -907,23 +700,11 @@ public sealed class DesktopControlPlaneSession
             var selectedSnapshot = _shellState.SnapshotState.SelectedStateSnapshot;
             var restoreTargetFileName = selectedSnapshot?.FileName ?? Path.GetFileName(restoreTargetArchivePath);
 
-            _shellState = _shellState with
-            {
-                UiFeedbackState = _shellState.UiFeedbackState with
-                {
-                    StatusText = "Exporting safe rollback snapshot..."
-                }
-            };
+            SetSourceStatusText("Exporting safe rollback snapshot...");
 
             var result = await _dependencies.LocalStateSnapshotService.ExportSafeAsync(_shellState.LocalDocumentState.BackendRootPath);
             await RefreshStateSnapshotsAsyncInternal(restoreTargetArchivePath);
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    LastStateSnapshotText = result.ArchivePath
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ApplySnapshotExportResult(_sourceState, result.ArchivePath);
 
             return BuildResult(
                 succeeded: true,
@@ -1016,42 +797,16 @@ public sealed class DesktopControlPlaneSession
         bool updateQqSelection = false,
         bool updateWechatSelection = false)
     {
-        var nextState = _shellState.RecentActivityState with
-        {
-            PinSelectedQqActivity = pinSelectedQqActivity ?? _shellState.RecentActivityState.PinSelectedQqActivity,
-            PinSelectedWechatActivity = pinSelectedWechatActivity ?? _shellState.RecentActivityState.PinSelectedWechatActivity,
-            ShowOnlyQqFailures = showOnlyQqFailures ?? _shellState.RecentActivityState.ShowOnlyQqFailures,
-            ShowOnlyWechatFailures = showOnlyWechatFailures ?? _shellState.RecentActivityState.ShowOnlyWechatFailures,
-            SelectedQqRecentActivity = updateQqSelection ? selectedQqRecentActivity : _shellState.RecentActivityState.SelectedQqRecentActivity,
-            SelectedWechatRecentActivity = updateWechatSelection ? selectedWechatRecentActivity : _shellState.RecentActivityState.SelectedWechatRecentActivity
-        };
-
-        if (showOnlyQqFailures.HasValue)
-        {
-            nextState = nextState with
-            {
-                SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    nextState.QqRecentActivities,
-                    nextState.SelectedQqRecentActivity,
-                    nextState.ShowOnlyQqFailures)
-            };
-        }
-
-        if (showOnlyWechatFailures.HasValue)
-        {
-            nextState = nextState with
-            {
-                SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    nextState.WechatRecentActivities,
-                    nextState.SelectedWechatRecentActivity,
-                    nextState.ShowOnlyWechatFailures)
-            };
-        }
-
-        _shellState = _shellState with
-        {
-            RecentActivityState = nextState
-        };
+        _sourceState = DesktopActivityWorkflow.ApplyActivitySelection(
+            _sourceState,
+            pinSelectedQqActivity,
+            pinSelectedWechatActivity,
+            showOnlyQqFailures,
+            showOnlyWechatFailures,
+            selectedQqRecentActivity,
+            selectedWechatRecentActivity,
+            updateQqSelection,
+            updateWechatSelection);
 
         PersistActivityStateIfPossible();
         RecalculateDerivedState();
@@ -1066,14 +821,7 @@ public sealed class DesktopControlPlaneSession
 
     public DesktopShellState UpdateSelectedStateSnapshot(LocalStateSnapshotDescriptor? snapshot)
     {
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                SelectedStateSnapshot = snapshot,
-                SelectedStateSnapshotPreview = null
-            }
-        };
+        _sourceState = DesktopSnapshotWorkflow.UpdateSelectedSnapshot(_sourceState, snapshot);
         ApplySelectedStateSnapshotPresentationCore();
         return _shellState;
     }
@@ -1084,13 +832,7 @@ public sealed class DesktopControlPlaneSession
 
         if (selectedSnapshot is null || !IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    SelectedStateSnapshotPreview = null
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ClearSelectedSnapshotPreview(_sourceState);
             ApplySelectedStateSnapshotPresentationCore();
             return BuildResult(true, _shellState.UiFeedbackState.StatusText);
         }
@@ -1113,13 +855,7 @@ public sealed class DesktopControlPlaneSession
                 return BuildResult(true, _shellState.UiFeedbackState.StatusText);
             }
 
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    SelectedStateSnapshotPreview = preview
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ApplySelectedSnapshotPreview(_sourceState, preview);
             ApplySelectedStateSnapshotPresentationCore();
         }
         catch (Exception ex)
@@ -1129,13 +865,7 @@ public sealed class DesktopControlPlaneSession
                     selectedSnapshot.ArchivePath,
                     StringComparison.OrdinalIgnoreCase))
             {
-                _shellState = _shellState with
-                {
-                    SnapshotState = _shellState.SnapshotState with
-                    {
-                        SelectedStateSnapshotPreview = null
-                    }
-                };
+                _sourceState = DesktopSnapshotWorkflow.ClearSelectedSnapshotPreview(_sourceState);
                 ApplySelectedStateSnapshotPresentationCore(
                     diffTextOverride: $"Diff preview unavailable: {ex.Message}",
                     adviceTextOverride: "Review the snapshot details carefully before restoring.");
@@ -1155,15 +885,7 @@ public sealed class DesktopControlPlaneSession
                 _shellState.LocalDocumentState.BackendRootPath,
                 latestSnapshot.ArchivePath);
         var result = await _dependencies.LocalStateSnapshotService.RestoreLatestAsync(_shellState.LocalDocumentState.BackendRootPath);
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                LastStateRestoreText = result.ArchivePath,
-                LastStateRestoreResult = result,
-                LastStateRestorePreview = preview
-            }
-        };
+        _sourceState = DesktopSnapshotWorkflow.ApplyRestoreResult(_sourceState, result.ArchivePath, result, preview);
         await LoadConfigAsync();
         ApplyRestorePresentationCore();
         return BuildResult(true, _shellState.UiFeedbackState.StatusText, [$"已从 {result.ArchivePath} 恢复本地状态快照，共恢复 {result.RestoredEntries.Count} 项。"]);
@@ -1182,15 +904,7 @@ public sealed class DesktopControlPlaneSession
         var result = await _dependencies.LocalStateSnapshotService.RestoreAsync(
             _shellState.LocalDocumentState.BackendRootPath,
             archivePath);
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                LastStateRestoreText = result.ArchivePath,
-                LastStateRestoreResult = result,
-                LastStateRestorePreview = preview
-            }
-        };
+        _sourceState = DesktopSnapshotWorkflow.ApplyRestoreResult(_sourceState, result.ArchivePath, result, preview);
         await LoadConfigAsync();
         ApplyRestorePresentationCore();
         return BuildResult(true, _shellState.UiFeedbackState.StatusText, [$"已从 {result.ArchivePath} 恢复选中状态快照，共恢复 {result.RestoredEntries.Count} 项。"]);
@@ -1201,17 +915,11 @@ public sealed class DesktopControlPlaneSession
         await _dependencies.LocalStateSnapshotService.DeleteAsync(archivePath);
         await RefreshStateSnapshotsAsyncInternal(selectArchivePath: null);
 
-        if (string.Equals(_shellState.SnapshotState.LastStateRestoreText, archivePath, StringComparison.OrdinalIgnoreCase))
+        var previousRestoreText = _sourceState.SnapshotSourceState.LastStateRestoreText;
+        _sourceState = DesktopSnapshotWorkflow.ClearRestoreResultIfMatchesArchive(_sourceState, archivePath);
+
+        if (!string.Equals(previousRestoreText, _shellState.SnapshotState.LastStateRestoreText, StringComparison.Ordinal))
         {
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    LastStateRestoreText = "尚未恢复状态快照",
-                    LastStateRestoreResult = null,
-                    LastStateRestorePreview = null
-                }
-            };
             ApplyRestorePresentationCore();
         }
 
@@ -1220,7 +928,7 @@ public sealed class DesktopControlPlaneSession
 
     private async Task<BackendControlConfigResponse> SaveConfigThroughControlApiAsync(BotConfig config)
     {
-        return await BackendControlPlaneFacade.SaveConfigAsync(
+        var apiResult = await BackendControlPlaneFacade.SaveConfigAsync(
             prepareAsync: async () => { await LoadLocalEnvDocumentAsync(suppressErrors: true); },
             config,
             trySaveConfigAsync: (submittedConfig, cancellationToken) => _dependencies.BackendControlApiService.TrySaveConfigAsync(submittedConfig, cancellationToken),
@@ -1228,22 +936,19 @@ public sealed class DesktopControlPlaneSession
             tryGetStatusAsync: (cancellationToken) => _dependencies.BackendControlApiService.TryGetStatusAsync(cancellationToken),
             isImmediateFailure: IsImmediateControlApiFailure,
             tryRecoverControlApiAsync: () => TryRecoverControlApiAsyncInternal("save-config"));
+
+        EnsureCompatibleControlApiConfigResponse(apiResult);
+        return apiResult;
     }
 
     private async Task<DesktopCommandResult> TryRecoverControlApiAsyncInternal(string reason)
     {
-        if (_shellState.RuntimeShellState.ControlApiRecoveryInProgress || !IsBackendRootValid())
+        if (_sourceState.RuntimeSourceState.ControlApiRecoveryInProgress || !IsBackendRootValid())
         {
             return BuildResult(true, _shellState.UiFeedbackState.StatusText);
         }
 
-        _shellState = _shellState with
-        {
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                ControlApiRecoveryInProgress = true
-            }
-        };
+        _sourceState = DesktopRuntimeWorkflow.SetRecoveryInProgress(_sourceState, true);
 
         try
         {
@@ -1275,13 +980,7 @@ public sealed class DesktopControlPlaneSession
         }
         finally
         {
-            _shellState = _shellState with
-            {
-                RuntimeShellState = _shellState.RuntimeShellState with
-                {
-                    ControlApiRecoveryInProgress = false
-                }
-            };
+            _sourceState = DesktopRuntimeWorkflow.SetRecoveryInProgress(_sourceState, false);
         }
     }
 
@@ -1295,7 +994,7 @@ public sealed class DesktopControlPlaneSession
 
         try
         {
-            var document = await _dependencies.LocalConfigFallbackReader.LoadAsync(_shellState.LocalDocumentState.BackendRootPath);
+            var document = await _dependencies.LocalConfigFallbackReader.LoadAsync(_sourceState.LocalDocumentSourceState.BackendRootPath);
             ApplyControlApiAccessToken(document);
             return document;
         }
@@ -1330,25 +1029,7 @@ public sealed class DesktopControlPlaneSession
                 _shellState.RecentActivityState.PinSelectedWechatActivity,
                 _shellState.RecentActivityState.SelectedWechatRecentActivity));
 
-        _shellState = _shellState with
-        {
-            RecentActivityState = _shellState.RecentActivityState with
-            {
-                QqRecentActivities = projection.QqActivity.Items.ToArray(),
-                WechatRecentActivities = projection.WechatActivity.Items.ToArray(),
-                LastQqRequestEventKey = projection.QqActivity.LastRequestEventKey,
-                LastQqFailureEventKey = projection.QqActivity.LastFailureEventKey,
-                SelectedQqRecentActivity = projection.QqActivity.SelectedItem,
-                LastWechatRequestEventKey = projection.WechatActivity.LastRequestEventKey,
-                LastWechatFailureEventKey = projection.WechatActivity.LastFailureEventKey,
-                SelectedWechatRecentActivity = projection.WechatActivity.SelectedItem
-            },
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                IsProcessRunning = projection.SnapshotState.RuntimeActive == true,
-                RuntimeSnapshot = projection.SnapshotState
-            }
-        };
+        _sourceState = DesktopRuntimeWorkflow.ApplyRuntimeProjection(_sourceState, projection);
 
         RecalculateDerivedState();
 
@@ -1368,7 +1049,7 @@ public sealed class DesktopControlPlaneSession
             return;
         }
 
-        ApplyActivityStateCore(_dependencies.ActivityStateStore.Load(_shellState.LocalDocumentState.BackendRootPath));
+        ApplyActivityStateCore(_dependencies.ActivityStateStore.Load(_sourceState.LocalDocumentSourceState.BackendRootPath));
     }
 
     private void PersistActivityStateIfPossible()
@@ -1379,16 +1060,16 @@ public sealed class DesktopControlPlaneSession
         }
 
         var state = _dependencies.ActivityStatePolicy.CreateSnapshot(
-            _shellState.RecentActivityState.QqRecentActivities,
-            _shellState.RecentActivityState.WechatRecentActivities,
-            _shellState.RecentActivityState.SelectedQqRecentActivity,
-            _shellState.RecentActivityState.SelectedWechatRecentActivity,
-            _shellState.RecentActivityState.PinSelectedQqActivity,
-            _shellState.RecentActivityState.PinSelectedWechatActivity,
-            _shellState.RecentActivityState.ShowOnlyQqFailures,
-            _shellState.RecentActivityState.ShowOnlyWechatFailures);
+            _sourceState.RecentActivityState.QqRecentActivities,
+            _sourceState.RecentActivityState.WechatRecentActivities,
+            _sourceState.RecentActivityState.SelectedQqRecentActivity,
+            _sourceState.RecentActivityState.SelectedWechatRecentActivity,
+            _sourceState.RecentActivityState.PinSelectedQqActivity,
+            _sourceState.RecentActivityState.PinSelectedWechatActivity,
+            _sourceState.RecentActivityState.ShowOnlyQqFailures,
+            _sourceState.RecentActivityState.ShowOnlyWechatFailures);
 
-        _dependencies.ActivityStateStore.Save(_shellState.LocalDocumentState.BackendRootPath, state);
+        _dependencies.ActivityStateStore.Save(_sourceState.LocalDocumentSourceState.BackendRootPath, state);
     }
 
     private void ApplyActivityStateCore(DesktopActivityState? state)
@@ -1400,68 +1081,31 @@ public sealed class DesktopControlPlaneSession
         _restoringActivityState = true;
         try
         {
-            _shellState = _shellState with
-            {
-                RecentActivityState = _shellState.RecentActivityState with
-                {
-                    QqRecentActivities = projection.QqRecentActivities,
-                    WechatRecentActivities = projection.WechatRecentActivities,
-                    PinSelectedQqActivity = projection.PinSelectedQqActivity,
-                    PinSelectedWechatActivity = projection.PinSelectedWechatActivity,
-                    ShowOnlyQqFailures = projection.ShowOnlyQqFailures,
-                    ShowOnlyWechatFailures = projection.ShowOnlyWechatFailures,
-                    SelectedQqRecentActivity = projection.SelectedQqRecentActivity,
-                    SelectedWechatRecentActivity = projection.SelectedWechatRecentActivity
-                }
-            };
+            _sourceState = DesktopActivityWorkflow.ApplyRestoredActivityState(_sourceState, projection);
         }
         finally
         {
             _restoringActivityState = false;
         }
 
-        _shellState = _shellState with
-        {
-            RecentActivityState = _shellState.RecentActivityState with
-            {
-                SelectedQqRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    _shellState.RecentActivityState.QqRecentActivities,
-                    _shellState.RecentActivityState.SelectedQqRecentActivity,
-                    _shellState.RecentActivityState.ShowOnlyQqFailures),
-                SelectedWechatRecentActivity = BackendRecentActivityCoordinator.ResolveSelectionAfterFilterChange(
-                    _shellState.RecentActivityState.WechatRecentActivities,
-                    _shellState.RecentActivityState.SelectedWechatRecentActivity,
-                    _shellState.RecentActivityState.ShowOnlyWechatFailures)
-            }
-        };
+        _sourceState = DesktopActivityWorkflow.ApplyActivitySelection(
+            _sourceState,
+            showOnlyQqFailures: _sourceState.RecentActivityState.ShowOnlyQqFailures,
+            showOnlyWechatFailures: _sourceState.RecentActivityState.ShowOnlyWechatFailures);
 
         RecalculateDerivedState();
     }
 
     private void ResetControlApiFailureState()
     {
-        _shellState = _shellState with
-        {
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                ControlApiPollState = new BackendControlApiPollState(),
-                ControlApiRecoveryInProgress = false
-            }
-        };
+        _sourceState = DesktopRuntimeWorkflow.ResetControlApiFailureState(_sourceState);
     }
 
     private async Task RefreshStateSnapshotsAsyncInternal(string? selectArchivePath)
     {
         if (!IsBackendRootValid())
         {
-            _shellState = _shellState with
-            {
-                SnapshotState = _shellState.SnapshotState with
-                {
-                    StateSnapshots = [],
-                    SelectedStateSnapshot = null
-                }
-            };
+            _sourceState = DesktopSnapshotWorkflow.ClearSnapshotSelection(_sourceState);
             ApplySelectedStateSnapshotPresentationCore();
             ApplyLocalDocumentProjection();
             return;
@@ -1476,112 +1120,26 @@ public sealed class DesktopControlPlaneSession
             (snapshot) => string.Equals(snapshot.ArchivePath, selectedArchivePath, StringComparison.OrdinalIgnoreCase))
             ?? snapshots.FirstOrDefault();
 
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                StateSnapshots = snapshots,
-                SelectedStateSnapshot = selectedSnapshot,
-                SelectedStateSnapshotPreview = null
-            }
-        };
+        _sourceState = DesktopSnapshotWorkflow.ApplySnapshotList(_sourceState, snapshots, selectedSnapshot);
         ApplySelectedStateSnapshotPresentationCore();
         ApplyLocalDocumentProjection();
     }
 
     private void RecalculateDerivedState()
     {
-        ApplyLocalDocumentProjection();
-        var runtimeSnapshot = _shellState.RuntimeShellState.RuntimeSnapshot;
-        var latestTurnOverview = BackendLatestTurnOverviewBuilder.Build(runtimeSnapshot);
-        var healthReport = DesktopHealthReportBuilder.Build(
-            _shellState.ConfigEditorState.Config,
-            runtimeSnapshot,
-            _dependencies.BackendControlApiService.LastFailure,
-            IsBackendRootValid(),
-            _shellState.ConfigEditorState.HasUnsavedChanges,
-            _shellState.RuntimeShellState.AutoStartEnabled);
-        var guideFlow = DesktopGuideFlowBuilder.Build(
-            new DesktopGuideFlowContext
-            {
-                IsBackendRootValid = IsBackendRootValid(),
-                HasUnsavedChanges = _shellState.ConfigEditorState.HasUnsavedChanges,
-                CanStartBackend = _shellState.RuntimeShellState.CanStartBackend,
-                IsProcessRunning = _shellState.RuntimeShellState.IsProcessRunning,
-                IsQqRuntimeReady = runtimeSnapshot.RuntimeReady == true,
-                AutoStartEnabled = _shellState.RuntimeShellState.AutoStartEnabled,
-                HealthLatestIssueText = healthReport.LatestIssue,
-                HealthLatestIssueActionLabel = healthReport.LatestIssueActionLabel,
-                HealthLatestIssueActionKey = healthReport.LatestIssueActionKey,
-                HealthChecks = healthReport.Checks,
-                QqRecentActivities = _shellState.RecentActivityState.QqRecentActivities,
-                WechatRecentActivities = _shellState.RecentActivityState.WechatRecentActivities
-            });
-
-        _shellState = _shellState with
-        {
-            RuntimeShellState = _shellState.RuntimeShellState with
-            {
-                RuntimeSnapshot = runtimeSnapshot,
-                LatestTurnOverview = latestTurnOverview,
-                HealthReport = healthReport,
-                GuideFlow = guideFlow
-            }
-        };
+        ProjectShellState();
     }
 
     private void ApplySelectedStateSnapshotPresentationCore(
         string? diffTextOverride = null,
         string? adviceTextOverride = null)
     {
-        var presentation = LocalStateSnapshotPresentationBuilder.BuildSelectionPresentation(
-            _shellState.SnapshotState.SelectedStateSnapshot,
-            _shellState.SnapshotState.SelectedStateSnapshotPreview,
-            diffTextOverride,
-            adviceTextOverride);
-
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                SelectedStateSnapshotImpactText = presentation.ImpactText,
-                SelectedStateSnapshotDiffText = presentation.DiffText,
-                SelectedStateSnapshotAdviceText = presentation.AdviceText,
-                SelectedStateSnapshotSafetyHeadlineText = presentation.SafetyHeadlineText,
-                SelectedStateSnapshotSafetyRecommendationText = presentation.SafetyRecommendationText,
-                SelectedStateSnapshotRollbackHintText = presentation.RollbackHintText
-            }
-        };
+        ProjectShellState(diffTextOverride, adviceTextOverride);
     }
 
     private void ApplyRestorePresentationCore()
     {
-        var presentation = LocalStateSnapshotPresentationBuilder.BuildRestorePresentation(
-            _shellState.SnapshotState.LastStateRestoreResult,
-            _shellState.SnapshotState.LastStateRestorePreview,
-            BuildRestorePresentationContext());
-
-        _shellState = _shellState with
-        {
-            SnapshotState = _shellState.SnapshotState with
-            {
-                LastStateRestoreSummaryText = presentation.SummaryText,
-                LastStateRestoreIssueText = presentation.IssueText,
-                LastStateRestoreTargetsText = presentation.TargetsText,
-                LastStateRestoreSessionsText = presentation.SessionsText,
-                LastStateRestoreLatestActivityText = presentation.LatestActivityText,
-                LastStateRestoreAdviceText = presentation.AdviceText,
-                LastStateRestoreControlPlaneText = presentation.ControlPlaneText,
-                LastStateRestoreRuntimeText = presentation.RuntimeText,
-                LastStateRestoreNextStepText = presentation.NextStepText,
-                LastStateRestorePrimaryActionLabel = presentation.PrimaryAction.Label,
-                LastStateRestorePrimaryActionKey = presentation.PrimaryAction.Key,
-                LastStateRestoreSecondaryActionLabel = presentation.SecondaryAction.Label,
-                LastStateRestoreSecondaryActionKey = presentation.SecondaryAction.Key,
-                LastStateRestoreTertiaryActionLabel = presentation.TertiaryAction.Label,
-                LastStateRestoreTertiaryActionKey = presentation.TertiaryAction.Key
-            }
-        };
+        ProjectShellState();
     }
 
     private LocalStateSnapshotRestoreRuntimeContext BuildRestorePresentationContext()
@@ -1600,44 +1158,32 @@ public sealed class DesktopControlPlaneSession
 
     private void ApplyLocalDocumentProjection()
     {
-        var backendRootPath = _shellState.LocalDocumentState.BackendRootPath ?? string.Empty;
-        var document = _shellState.LocalDocumentState.ConfigDocument.Document;
-        var isBackendRootValid = PathDiscoveryService.IsBackendRoot(backendRootPath);
-        var envFilePath = Path.Combine(backendRootPath, ".env");
-        var sessionStorePath = Path.Combine(backendRootPath, "data", "sessions.json");
-        var imageCachePath = Path.Combine(backendRootPath, "data", "image-cache");
-        var activityStatePath = ActivityStateStoragePolicy.ResolveStateFilePath(backendRootPath);
-        var stateSnapshotFolderPath = Path.Combine(backendRootPath, "artifacts", "state-snapshots");
-        var controlApiHost = ResolveLocalExtraValue(document, "QQ_AI_BOT_CONTROL_API_HOST", "127.0.0.1");
-        var controlApiPort = ResolveLocalExtraValue(document, "QQ_AI_BOT_CONTROL_API_PORT", "3199");
-
+        var viewState = DesktopShellProjector.ProjectViewState(
+            _sourceState,
+            new DesktopShellProjectionContext
+            {
+                ControlApiFailure = _dependencies.BackendControlApiService.LastFailure,
+                ActivityStateStoragePolicy = ActivityStateStoragePolicy
+            });
         _shellState = _shellState with
         {
-            LocalDocumentState = _shellState.LocalDocumentState with
-            {
-                IsBackendRootValid = isBackendRootValid,
-                EnvFilePath = envFilePath,
-                BackendRootStateText = isBackendRootValid
-                    ? (_shellState.LocalDocumentState.BackendRootDetected
-                        ? "已自动检测到 backend 根目录"
-                        : "backend 根目录有效")
-                    : "backend 根目录无效",
-                SessionStorePathText = sessionStorePath,
-                SessionStoreStateText = isBackendRootValid
-                    ? (File.Exists(sessionStorePath)
-                        ? "会话历史文件已存在"
-                        : "首次保存会话后会创建历史文件")
-                    : "后端目录有效后才能显示会话路径",
-                ImageCachePathText = imageCachePath,
-                ImageCacheStateText = BuildImageCacheStateText(isBackendRootValid, imageCachePath),
-                ActivityStatePathText = activityStatePath,
-                StateSnapshotFolderPathText = stateSnapshotFolderPath,
-                ControlApiEndpointText = $"http://{controlApiHost}:{controlApiPort}",
-                ControlApiTokenStateText = BuildControlApiTokenStateText(
-                    _shellState.ConfigEditorState.ControlApiToken,
-                    _dependencies.BackendControlApiService.LastFailure)
-            }
+            LocalDocumentState = viewState.LocalDocumentState
         };
+    }
+
+    private void ProjectShellState(
+        string? selectedSnapshotDiffTextOverride = null,
+        string? selectedSnapshotAdviceTextOverride = null)
+    {
+        _shellState = DesktopShellProjector.Project(
+            _sourceState,
+            new DesktopShellProjectionContext
+            {
+                ControlApiFailure = _dependencies.BackendControlApiService.LastFailure,
+                ActivityStateStoragePolicy = ActivityStateStoragePolicy,
+                SelectedSnapshotDiffTextOverride = selectedSnapshotDiffTextOverride,
+                SelectedSnapshotAdviceTextOverride = selectedSnapshotAdviceTextOverride
+            });
     }
 
     private static string BuildImageCacheStateText(bool isBackendRootValid, string imageCachePath)
@@ -1683,12 +1229,23 @@ public sealed class DesktopControlPlaneSession
 
     private bool IsBackendRootValid()
     {
-        return PathDiscoveryService.IsBackendRoot(_shellState.LocalDocumentState.BackendRootPath);
+        return PathDiscoveryService.IsBackendRoot(_sourceState.LocalDocumentSourceState.BackendRootPath);
     }
 
-    private string EnvFilePath()
+    private string RuntimeConfigPath()
     {
-        return Path.Combine(_shellState.LocalDocumentState.BackendRootPath, ".env");
+        return Path.Combine(_sourceState.LocalDocumentSourceState.BackendRootPath, "data", "runtime-settings.json");
+    }
+
+    private string BootstrapEnvFilePath()
+    {
+        return Path.Combine(_sourceState.LocalDocumentSourceState.BackendRootPath, ".env");
+    }
+
+    private string ResolveLocalFallbackConfigPath()
+    {
+        var runtimeConfigPath = RuntimeConfigPath();
+        return File.Exists(runtimeConfigPath) ? runtimeConfigPath : BootstrapEnvFilePath();
     }
 
     private void ApplyControlApiAccessToken(EnvDocument? document)
@@ -1701,13 +1258,6 @@ public sealed class DesktopControlPlaneSession
         }
 
         _dependencies.BackendControlApiService.SetAccessToken(null);
-    }
-
-    private static string ResolveControlApiToken(EnvDocument document)
-    {
-        return document.ExtraValues.TryGetValue(ControlApiTokenEnvKey, out var accessToken)
-            ? accessToken
-            : string.Empty;
     }
 
     private static void CopyLocalExtraValues(EnvDocument? source, EnvDocument target)
@@ -1730,66 +1280,16 @@ public sealed class DesktopControlPlaneSession
         return failure.Kind is
             BackendControlApiFailureKind.Rejected or
             BackendControlApiFailureKind.Unauthorized or
-            BackendControlApiFailureKind.Unknown;
+            BackendControlApiFailureKind.Unknown or
+            BackendControlApiFailureKind.Incompatible;
     }
 
-    private static BotConfig BuildConfigCopy(BotConfig config)
+    private static void EnsureCompatibleControlApiConfigResponse(BackendControlConfigResponse configResponse)
     {
-        return new BotConfig
+        if (string.IsNullOrWhiteSpace(configResponse.ConfigPath))
         {
-            OpenAiApiKey = config.OpenAiApiKey,
-            OpenAiDefaultApiKey = config.OpenAiDefaultApiKey,
-            OpenAiDefaultModel = config.OpenAiDefaultModel,
-            OpenAiModel = config.OpenAiModel,
-            OpenAiBaseUrl = config.OpenAiBaseUrl,
-            OpenAiDefaultBaseUrl = config.OpenAiDefaultBaseUrl,
-            OpenAiDefaultReasoningEffort = config.OpenAiDefaultReasoningEffort,
-            OpenAiAdvancedReasoningEffort = config.OpenAiAdvancedReasoningEffort,
-            OpenAiDefaultTextVerbosity = config.OpenAiDefaultTextVerbosity,
-            OpenAiAdvancedTextVerbosity = config.OpenAiAdvancedTextVerbosity,
-            OpenAiDefaultEnableWebSearch = config.OpenAiDefaultEnableWebSearch,
-            OpenAiAdvancedEnableWebSearch = config.OpenAiAdvancedEnableWebSearch,
-            OpenAiDefaultEnableCodeInterpreter = config.OpenAiDefaultEnableCodeInterpreter,
-            OpenAiAdvancedEnableCodeInterpreter = config.OpenAiAdvancedEnableCodeInterpreter,
-            OpenAiAdvancedTriggerPrefixes = config.OpenAiAdvancedTriggerPrefixes,
-            DeepSeekFallbackEnabled = config.DeepSeekFallbackEnabled,
-            DeepSeekApiKey = config.DeepSeekApiKey,
-            DeepSeekModel = config.DeepSeekModel,
-            DeepSeekBaseUrl = config.DeepSeekBaseUrl,
-            NapCatWsUrl = config.NapCatWsUrl,
-            NapCatToken = config.NapCatToken,
-            WechatBridgeUrl = config.WechatBridgeUrl,
-            WechatBridgeToken = config.WechatBridgeToken,
-            WechatBotPrefix = config.WechatBotPrefix,
-            BotPrefix = config.BotPrefix,
-            BotSystemPrompt = config.BotSystemPrompt,
-            BotPersona = config.BotPersona,
-            MaxOutputChars = config.MaxOutputChars,
-            AllowedChatIds = config.AllowedChatIds,
-            AllowedUserIds = config.AllowedUserIds
-        };
-    }
-
-    private static BotConfig MergeSavedConfig(BotConfig submittedConfig, BotConfig savedConfig)
-    {
-        var mergedConfig = BuildConfigCopy(savedConfig);
-
-        if (string.IsNullOrWhiteSpace(savedConfig.BotSystemPrompt))
-        {
-            mergedConfig.BotSystemPrompt = submittedConfig.BotSystemPrompt;
+            throw new InvalidOperationException(BackendControlApiService.LegacyConfigContractMessage);
         }
-
-        return mergedConfig;
-    }
-
-    private static EnvDocument CloneEnvDocument(EnvDocument source, BotConfig? config = null)
-    {
-        var nextDocument = new EnvDocument
-        {
-            Config = BuildConfigCopy(config ?? source.Config)
-        };
-        CopyLocalExtraValues(source, nextDocument);
-        return nextDocument;
     }
 
     private static string BuildRestoreConfirmationMessage(
@@ -1838,14 +1338,8 @@ public sealed class DesktopControlPlaneSession
         DesktopUserFacingOperationError? error = null,
         string? suggestedHealthActionKey = null)
     {
-        ApplyLocalDocumentProjection();
-        _shellState = _shellState with
-        {
-            UiFeedbackState = _shellState.UiFeedbackState with
-            {
-                StatusText = statusText
-            }
-        };
+        SetSourceStatusText(statusText);
+        ProjectShellState();
 
         return new DesktopCommandResult
         {
@@ -1856,6 +1350,17 @@ public sealed class DesktopControlPlaneSession
             Notifications = notifications ?? [],
             Error = error,
             SuggestedHealthActionKey = suggestedHealthActionKey ?? error?.SuggestedActionKey
+        };
+    }
+
+    private void SetSourceStatusText(string statusText)
+    {
+        _sourceState = _sourceState with
+        {
+            UiFeedbackState = _sourceState.UiFeedbackState with
+            {
+                StatusText = statusText
+            }
         };
     }
 }

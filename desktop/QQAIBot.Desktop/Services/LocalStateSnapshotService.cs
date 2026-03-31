@@ -155,6 +155,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         var envPath = Path.Combine(backendRootPath, ".env");
         var dataPath = Path.Combine(backendRootPath, "data");
+        var runtimeConfigPath = Path.Combine(dataPath, "runtime-settings.json");
         var activityStatePath = _activityStateStoragePolicy.ResolveStateFilePath(backendRootPath);
         var sessionsPath = Path.Combine(dataPath, "sessions.json");
 
@@ -165,7 +166,8 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
             : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var lines = new List<string>
         {
-            await BuildFilePreviewLineAsync(envEntry, envPath, ".env"),
+            await BuildFilePreviewLineAsync(envEntry, envPath, "本机连接 .env"),
+            await BuildFilePreviewLineAsync(archive.GetEntry("app/data/runtime-settings.json"), runtimeConfigPath, "运行配置文件"),
             await BuildFilePreviewLineAsync(archive.GetEntry("desktop/activity-state.json"), activityStatePath, "桌面活动状态")
         };
         lines.AddRange(await BuildSessionPreviewLinesAsync(archive.GetEntry("app/data/sessions.json"), sessionsPath));
@@ -474,7 +476,7 @@ public sealed class LocalStateSnapshotService : ILocalStateSnapshotService
 
         if (hasDiff)
         {
-            recommendations.Add("建议：恢复前先导出当前状态，便于需要时回滚。");
+            recommendations.Add("建议：运行配置保存在 data/runtime-settings.json。恢复前先导出当前状态，便于需要时回滚。");
         }
 
         var includesSecrets = snapshotEnv.Any((pair) => IsSensitiveTrackedEnvKey(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value));

@@ -1751,9 +1751,9 @@
                                        TextWrapping="Wrap" />
                             <TextBlock Margin="0,12,0,0"
                                        Style="{StaticResource CaptionTextStyle}"
-                                       Text="配置文件" />
+                                       Text="本机连接 .env" />
                             <TextBlock Margin="0,4,0,0"
-                                       Text="{Binding EnvFilePath}"
+                                       Text="{Binding BootstrapEnvPath}"
                                        TextWrapping="Wrap" />
                             <TextBlock Margin="0,12,0,0"
                                        Style="{StaticResource CaptionTextStyle}"
@@ -2224,10 +2224,10 @@
 
                   <TextBlock Grid.Row="0"
                              Style="{StaticResource CaptionTextStyle}"
-                             Text="Env 文件" />
+                             Text="运行配置文件" />
                   <TextBlock Grid.Row="0"
                              Grid.Column="2"
-                             Text="{Binding EnvFilePath}"
+                             Text="{Binding RuntimeConfigPath}"
                              TextWrapping="Wrap" />
 
                   <TextBlock Grid.Row="2"

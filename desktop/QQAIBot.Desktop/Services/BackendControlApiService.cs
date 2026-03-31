@@ -11,6 +11,8 @@ namespace QQAIBot.Desktop.Services;
 public sealed class BackendControlApiService : IBackendControlApiService
 {
     private static readonly Uri BaseAddress = new("http://127.0.0.1:3199/");
+    public const string LegacyConfigContractMessage =
+        "Control API returned a legacy config contract without configPath. Restart the backend from the current workspace or updated app version.";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -112,6 +114,12 @@ public sealed class BackendControlApiService : IBackendControlApiService
                 return null;
             }
 
+            if (!IsCompatibleConfigResponse(config))
+            {
+                SetFailure(BackendControlApiFailureKind.Incompatible, LegacyConfigContractMessage);
+                return null;
+            }
+
             ClearFailure();
             return config;
         }
@@ -145,6 +153,12 @@ public sealed class BackendControlApiService : IBackendControlApiService
                 SetFailure(
                     BackendControlApiFailureKind.Unknown,
                     "Control API returned an empty save response.");
+                return null;
+            }
+
+            if (!IsCompatibleConfigResponse(saveResult))
+            {
+                SetFailure(BackendControlApiFailureKind.Incompatible, LegacyConfigContractMessage);
                 return null;
             }
 
@@ -283,6 +297,11 @@ public sealed class BackendControlApiService : IBackendControlApiService
         return response.StatusCode == System.Net.HttpStatusCode.Unauthorized
             ? BackendControlApiFailureKind.Unauthorized
             : BackendControlApiFailureKind.Rejected;
+    }
+
+    private static bool IsCompatibleConfigResponse(BackendControlConfigResponse response)
+    {
+        return !string.IsNullOrWhiteSpace(response.ConfigPath);
     }
 
     private static async Task<string> ReadApiErrorMessageAsync(

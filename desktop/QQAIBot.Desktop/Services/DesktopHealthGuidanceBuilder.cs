@@ -294,6 +294,10 @@ public static class DesktopHealthGuidanceBuilder
                     $"最新问题：control API 返回了意外结果。{DefaultIfBlank(controlApiFailure.Message, "请查看后端日志了解详情。")}",
                     hasBlockingSetupItems ? string.Empty : "重新加载配置",
                     hasBlockingSetupItems ? string.Empty : DesktopHealthActionKeys.ReloadConfig),
+                BackendControlApiFailureKind.Incompatible => new LatestIssueSummary(
+                    $"最新问题：当前连接到的本地 control API 版本过旧。{DefaultIfBlank(controlApiFailure.Message, "请重启当前工作区或最新安装版本的 backend。")}",
+                    hasBlockingSetupItems ? string.Empty : "打开 backend 目录",
+                    hasBlockingSetupItems ? string.Empty : DesktopHealthActionKeys.OpenBackendFolder),
                 _ => new LatestIssueSummary(
                     "最新问题：desktop 当前无法连接本地 control API。",
                     hasBlockingSetupItems ? string.Empty : "启动后端",

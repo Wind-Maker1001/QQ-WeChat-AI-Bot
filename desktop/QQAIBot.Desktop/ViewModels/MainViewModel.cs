@@ -129,7 +129,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _hasUnsavedChanges;
     private string _backendRootPath = string.Empty;
     private bool _isBackendRootValid;
-    private string _envFilePath = string.Empty;
+    private string _runtimeConfigPath = string.Empty;
+    private string _bootstrapEnvPath = string.Empty;
     private string _backendRootStateText = "backend 根目录无效";
     private string _sessionStorePathText = string.Empty;
     private string _sessionStoreStateText = "后端目录有效后才能显示会话路径";
@@ -375,7 +376,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public string EnvFilePath => _envFilePath;
+    public string RuntimeConfigPath => _runtimeConfigPath;
+
+    public string BootstrapEnvPath => _bootstrapEnvPath;
 
     public bool IsBackendRootValid => _isBackendRootValid;
 
@@ -1759,7 +1762,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _backendRootPath = localDocumentState.BackendRootPath;
         _backendRootDetected = localDocumentState.BackendRootDetected;
         _isBackendRootValid = localDocumentState.IsBackendRootValid;
-        _envFilePath = localDocumentState.EnvFilePath;
+        _runtimeConfigPath = localDocumentState.RuntimeConfigPath;
+        _bootstrapEnvPath = localDocumentState.BootstrapEnvPath;
         _backendRootStateText = localDocumentState.BackendRootStateText;
         _sessionStorePathText = localDocumentState.SessionStorePathText;
         _sessionStoreStateText = localDocumentState.SessionStoreStateText;

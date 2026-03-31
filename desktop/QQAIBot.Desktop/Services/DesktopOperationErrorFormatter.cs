@@ -9,11 +9,21 @@ public static class DesktopOperationErrorFormatter
         string fallbackStatusText,
         string technicalMessage,
         BackendControlApiFailure? controlApiFailure = null,
-        string? envPath = null,
+        string? configPath = null,
+        string? bootstrapEnvPath = null,
         bool localControlSettingsOperation = false,
         bool canStartBackend = false)
     {
         var detail = DefaultIfBlank(controlApiFailure?.Message, technicalMessage);
+
+        if ((controlApiFailure?.Kind ?? BackendControlApiFailureKind.None) == BackendControlApiFailureKind.None &&
+            detail.Contains("legacy config contract", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildIncompatibleError(
+                operationLabel,
+                fallbackStatusText,
+                detail);
+        }
 
         if (localControlSettingsOperation)
         {
@@ -29,7 +39,7 @@ public static class DesktopOperationErrorFormatter
                     technicalDetail: detail,
                     additionalContext:
                     [
-                        string.IsNullOrWhiteSpace(envPath) ? null : $"目标文件：{envPath}"
+                        string.IsNullOrWhiteSpace(bootstrapEnvPath) ? null : $"目标文件：{bootstrapEnvPath}"
                     ]),
                 SuggestedActionLabel = "查看本机令牌",
                 SuggestedActionKey = DesktopHealthActionKeys.FocusControlApiToken
@@ -44,19 +54,26 @@ public static class DesktopOperationErrorFormatter
                 operationLabel,
                 fallbackStatusText,
                 detail,
-                envPath),
+                bootstrapEnvPath),
             BackendControlApiFailureKind.Rejected => BuildRejectedError(
+                operationLabel,
+                fallbackStatusText,
+                detail,
+                configPath),
+            BackendControlApiFailureKind.Incompatible => BuildIncompatibleError(
                 operationLabel,
                 fallbackStatusText,
                 detail),
             BackendControlApiFailureKind.Unknown => BuildUnknownError(
                 operationLabel,
                 fallbackStatusText,
-                detail),
+                detail,
+                configPath),
             BackendControlApiFailureKind.Unreachable => BuildUnreachableError(
                 operationLabel,
                 fallbackStatusText,
                 detail,
+                configPath,
                 canStartBackend),
             _ => new DesktopUserFacingOperationError
             {
@@ -78,7 +95,7 @@ public static class DesktopOperationErrorFormatter
         string operationLabel,
         string fallbackStatusText,
         string detail,
-        string? envPath)
+        string? bootstrapEnvPath)
     {
         return new DesktopUserFacingOperationError
         {
@@ -92,7 +109,7 @@ public static class DesktopOperationErrorFormatter
                 technicalDetail: detail,
                 additionalContext:
                 [
-                    string.IsNullOrWhiteSpace(envPath) ? null : $"本地配置文件：{envPath}"
+                    string.IsNullOrWhiteSpace(bootstrapEnvPath) ? null : $"本机连接 .env：{bootstrapEnvPath}"
                 ]),
             SuggestedActionLabel = "查看本机令牌",
             SuggestedActionKey = DesktopHealthActionKeys.FocusControlApiToken
@@ -102,7 +119,8 @@ public static class DesktopOperationErrorFormatter
     private static DesktopUserFacingOperationError BuildRejectedError(
         string operationLabel,
         string fallbackStatusText,
-        string detail)
+        string detail,
+        string? configPath)
     {
         var guidance = ResolveRejectedGuidance(detail);
 
@@ -115,7 +133,11 @@ public static class DesktopOperationErrorFormatter
                 whyText: guidance.WhyText,
                 doNowText: $"先检查下面提到的字段，再重试。{guidance.NextStepText}",
                 improvementText: guidance.ImprovementText,
-                technicalDetail: detail),
+                technicalDetail: detail,
+                additionalContext:
+                [
+                    string.IsNullOrWhiteSpace(configPath) ? null : $"运行配置文件：{configPath}"
+                ]),
             SuggestedActionLabel = guidance.Label,
             SuggestedActionKey = guidance.Key
         };
@@ -124,7 +146,8 @@ public static class DesktopOperationErrorFormatter
     private static DesktopUserFacingOperationError BuildUnknownError(
         string operationLabel,
         string fallbackStatusText,
-        string detail)
+        string detail,
+        string? configPath)
     {
         return new DesktopUserFacingOperationError
         {
@@ -135,9 +158,33 @@ public static class DesktopOperationErrorFormatter
                 whyText: "Desktop 原本预期收到正常的控制面响应，但 backend 返回了不完整或意外的数据。",
                 doNowText: "先从这个窗口重新加载配置，然后再重试同一个动作。",
                 improvementText: "完成后，desktop 可以先重建一份干净的 runtime 视图，再继续操作。",
-                technicalDetail: detail),
+                technicalDetail: detail,
+                additionalContext:
+                [
+                    string.IsNullOrWhiteSpace(configPath) ? null : $"运行配置文件：{configPath}"
+                ]),
             SuggestedActionLabel = "重新加载配置",
             SuggestedActionKey = DesktopHealthActionKeys.ReloadConfig
+        };
+    }
+
+    private static DesktopUserFacingOperationError BuildIncompatibleError(
+        string operationLabel,
+        string fallbackStatusText,
+        string detail)
+    {
+        return new DesktopUserFacingOperationError
+        {
+            StatusText = $"{fallbackStatusText}：control API 版本不兼容",
+            DialogTitle = "本地 backend 版本过旧",
+            DialogMessage = BuildDialogMessage(
+                whatHappened: $"{operationLabel}已经到达本地 control API，但当前 backend 返回的是旧版配置协议。",
+                whyText: "这个 backend 仍然使用旧字段（例如 envPath），缺少当前 desktop 需要的 configPath 和新配置字段，所以保存后会丢失 DeepSeek 等较新的设置。",
+                doNowText: "先停止当前 backend，然后从当前工作区或最新安装版本重新启动；如果你不确定位置，先打开 backend 目录。",
+                improvementText: "完成后，这个窗口会和 backend 使用同一套新配置协议，保存后不会再把 DeepSeek 等字段回滚。",
+                technicalDetail: detail),
+            SuggestedActionLabel = "打开 backend 目录",
+            SuggestedActionKey = DesktopHealthActionKeys.OpenBackendFolder
         };
     }
 
@@ -145,6 +192,7 @@ public static class DesktopOperationErrorFormatter
         string operationLabel,
         string fallbackStatusText,
         string detail,
+        string? configPath,
         bool canStartBackend)
     {
         return new DesktopUserFacingOperationError
@@ -160,7 +208,11 @@ public static class DesktopOperationErrorFormatter
                     ? "先从这个窗口启动 backend，等状态刷新后再重试。"
                     : "等 backend 恢复后重新加载配置；如果它本来就该在线，那下一步请检查日志面板。",
                 improvementText: "完成后，desktop 就能刷新实时状态并继续控制 runtime。",
-                technicalDetail: detail),
+                technicalDetail: detail,
+                additionalContext:
+                [
+                    string.IsNullOrWhiteSpace(configPath) ? null : $"运行配置文件：{configPath}"
+                ]),
             SuggestedActionLabel = canStartBackend ? "启动后端" : "重新加载配置",
             SuggestedActionKey = canStartBackend ? DesktopHealthActionKeys.StartBackend : DesktopHealthActionKeys.ReloadConfig
         };
@@ -211,6 +263,16 @@ public static class DesktopOperationErrorFormatter
                 "当前保存的模型路由还缺少必需的 API 或模型值。",
                 "打开 API 密钥区域，补齐缺失的模型或密钥值后再保存。",
                 "必需值补齐后，runtime 才能调用配置好的模型路由。");
+        }
+
+        if (detail.Contains("DEEPSEEK_API_KEY", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RejectedGuidance(
+                "查看 DeepSeek API Key",
+                DesktopHealthActionKeys.FocusDeepSeekApiKey,
+                "当前保存的 DeepSeek 回退设置缺少必需的 API key。",
+                "如果要启用 DeepSeek fallback，请先填写 DEEPSEEK_API_KEY，然后重新保存。",
+                "DeepSeek fallback 的必需字段补齐后，保存的回退设置才能真正生效。");
         }
 
         if (detail.Contains("QQ_AI_BOT_CONTROL_API_TOKEN", StringComparison.OrdinalIgnoreCase))

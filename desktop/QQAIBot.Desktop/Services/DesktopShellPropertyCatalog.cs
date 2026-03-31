@@ -168,7 +168,8 @@ public static class DesktopShellPropertyCatalog
 
     public static readonly string[] LocalDocumentPropertyNames =
     [
-        "EnvFilePath",
+        "RuntimeConfigPath",
+        "BootstrapEnvPath",
         "IsBackendRootValid",
         "BackendRootStateText"
     ];

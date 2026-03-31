@@ -15,6 +15,21 @@ public sealed record DesktopConfigEditorState
     public string LastSavedAtText { get; init; } = string.Empty;
 }
 
+public sealed record DesktopRuntimeSourceState
+{
+    public BackendRuntimeSnapshotViewState RuntimeSnapshot { get; init; } = new();
+
+    public BackendControlApiPollState ControlApiPollState { get; init; } = new();
+
+    public bool IsProcessRunning { get; init; }
+
+    public bool AutoStartEnabled { get; init; }
+
+    public bool CanStartBackend { get; init; }
+
+    public bool ControlApiRecoveryInProgress { get; init; }
+}
+
 public sealed record DesktopRuntimeSnapshotState
 {
     public BackendRuntimeSnapshotViewState RuntimeSnapshot { get; init; } = new();
@@ -61,6 +76,23 @@ public sealed record DesktopRecentActivityState
     public BackendRecentActivityItem? SelectedQqRecentActivity { get; init; }
 
     public BackendRecentActivityItem? SelectedWechatRecentActivity { get; init; }
+}
+
+public sealed record DesktopSnapshotSourceState
+{
+    public IReadOnlyList<LocalStateSnapshotDescriptor> StateSnapshots { get; init; } = [];
+
+    public LocalStateSnapshotDescriptor? SelectedStateSnapshot { get; init; }
+
+    public LocalStateSnapshotPreviewResult? SelectedStateSnapshotPreview { get; init; }
+
+    public LocalStateSnapshotRestoreResult? LastStateRestoreResult { get; init; }
+
+    public LocalStateSnapshotPreviewResult? LastStateRestorePreview { get; init; }
+
+    public string LastStateSnapshotText { get; init; } = "尚未导出状态快照";
+
+    public string LastStateRestoreText { get; init; } = "尚未恢复状态快照";
 }
 
 public sealed record DesktopSnapshotState
@@ -127,6 +159,15 @@ public sealed record DesktopConfigDocumentState
     public EnvDocument Document { get; init; } = new();
 }
 
+public sealed record DesktopLocalDocumentSourceState
+{
+    public string BackendRootPath { get; init; } = string.Empty;
+
+    public bool BackendRootDetected { get; init; }
+
+    public DesktopConfigDocumentState ConfigDocument { get; init; } = new();
+}
+
 public sealed record DesktopLocalDocumentState
 {
     public string BackendRootPath { get; init; } = string.Empty;
@@ -135,7 +176,9 @@ public sealed record DesktopLocalDocumentState
 
     public bool IsBackendRootValid { get; init; }
 
-    public string EnvFilePath { get; init; } = string.Empty;
+    public string RuntimeConfigPath { get; init; } = string.Empty;
+
+    public string BootstrapEnvPath { get; init; } = string.Empty;
 
     public string BackendRootStateText { get; init; } = string.Empty;
 
@@ -163,6 +206,30 @@ public sealed record DesktopUiFeedbackState
     public string StatusText { get; init; } = string.Empty;
 
     public string LogText { get; init; } = string.Empty;
+}
+
+public sealed record DesktopShellSourceState
+{
+    public DesktopConfigEditorState ConfigEditorState { get; init; } = new();
+
+    public DesktopRuntimeSourceState RuntimeSourceState { get; init; } = new();
+
+    public DesktopRecentActivityState RecentActivityState { get; init; } = new();
+
+    public DesktopSnapshotSourceState SnapshotSourceState { get; init; } = new();
+
+    public DesktopLocalDocumentSourceState LocalDocumentSourceState { get; init; } = new();
+
+    public DesktopUiFeedbackState UiFeedbackState { get; init; } = new();
+}
+
+public sealed record DesktopShellViewState
+{
+    public DesktopRuntimeSnapshotState RuntimeShellState { get; init; } = new();
+
+    public DesktopSnapshotState SnapshotState { get; init; } = new();
+
+    public DesktopLocalDocumentState LocalDocumentState { get; init; } = new();
 }
 
 public sealed record DesktopShellState
@@ -204,6 +271,17 @@ public sealed record DesktopConfirmationPrompt
     public string Message { get; init; } = string.Empty;
 
     public string ArchivePath { get; init; } = string.Empty;
+}
+
+public sealed record DesktopShellProjectionContext
+{
+    public BackendControlApiFailure ControlApiFailure { get; init; } = new();
+
+    public DesktopActivityStateStoragePolicy ActivityStateStoragePolicy { get; init; } = new();
+
+    public string? SelectedSnapshotDiffTextOverride { get; init; }
+
+    public string? SelectedSnapshotAdviceTextOverride { get; init; }
 }
 
 public sealed record DesktopSessionDependencies

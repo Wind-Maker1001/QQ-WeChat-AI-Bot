@@ -27,7 +27,7 @@ TaskCompletionSource uiThreadStopped = new(TaskCreationOptions.RunContinuationsA
 
 KillStaleDesktopTestProcesses();
 
-await RunTestAsync("LocalEnvConfigFallbackReader reads ALLOWED_GROUP_IDS without mutating env files", TestEnvConfigSnapshotStoreReadsLegacyAllowedGroupIdsWithoutMutationAsync);
+await RunTestAsync("LocalEnvConfigFallbackReader ignores runtime config keys from env-only installs and keeps local extras", TestEnvConfigSnapshotStoreReadsLegacyAllowedGroupIdsWithoutMutationAsync);
 await RunTestAsync("LocalEnvConfigFallbackReader load does not create env files when missing", TestEnvConfigSnapshotStoreLoadDoesNotCreateMissingEnvAsync);
 await RunTestAsync("LocalEnvBootstrapConfigStore updates local-only control plane values", TestLocalEnvBootstrapConfigStoreAsync);
 await RunTestAsync("LocalPathOperationsService clears cache directories without removing the root", TestLocalPathOperationsServiceAsync);
@@ -39,7 +39,7 @@ await RunTestAsync("LocalStateSnapshotService deletes a selected archive and upd
 await RunTestAsync("LocalStateSnapshotService previews current-vs-snapshot differences", TestLocalStateSnapshotPreviewAsync);
 await RunTestAsync("LocalStateSnapshotPresentationBuilder explains snapshot safety and restore follow-up actions", TestLocalStateSnapshotPresentationBuilderAsync);
 await RunTestAsync("TestEnvConfigSnapshotWriter saves ALLOWED_CHAT_IDS only", TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync);
-await RunTestAsync("TestEnvConfigSnapshotWriter + fallback reader round-trip OpenAI reasoning, verbosity, and tool flags", TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync);
+await RunTestAsync("LocalEnvConfigFallbackReader prefers runtime settings and keeps local control-plane extras", TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync);
 await RunTestAsync("PathDiscoveryService identifies backend root", TestPathDiscoveryServiceBackendRootAsync);
 await RunTestAsync("DesktopActivityStatePolicy normalizes selection and retention semantics", TestDesktopActivityStatePolicySemanticsAsync);
 await RunTestAsync("LocalActivityStateStore round-trips and normalizes persisted activity state", TestLocalActivityStateStoreRoundTripAsync);
@@ -66,6 +66,13 @@ await RunTestAsync("BackendControlApiRecoveryCoordinator handles recovered, star
 await RunTestAsync("BackendControlPlaneCoordinator handles load and save recovery paths", TestBackendControlPlaneCoordinatorAsync);
 await RunTestAsync("BackendRuntimeControlCoordinator handles start and stop branches", TestBackendRuntimeControlCoordinatorAsync);
 await RunTestAsync("BackendControlPlaneFacade composes load, save, start, and stop entry points", TestBackendControlPlaneFacadeAsync);
+await RunTestAsync("DesktopConfigWorkflow updates editor state without re-growing the session center", DesktopConfigWorkflowTests.TestEditorProjectionAsync);
+await RunTestAsync("DesktopRuntimeWorkflow applies runtime projection and resets control API failure state", DesktopRuntimeWorkflowTests.TestRuntimeProjectionAsync);
+await RunTestAsync("DesktopSnapshotWorkflow tracks restore state transitions directly", DesktopSnapshotWorkflowTests.TestStateTransitionsAsync);
+await RunTestAsync("DesktopSnapshotWorkflow builds restore and delete confirmations directly", DesktopSnapshotWorkflowTests.TestConfirmationMessagesAsync);
+await RunTestAsync("DesktopActivityWorkflow applies filter-driven selection and clear-history transitions", DesktopActivityWorkflowTests.TestSelectionAndClearAsync);
+await RunTestAsync("DesktopShellProjector derives local document state from source state", DesktopShellProjectorTests.TestProjectsLocalDocumentStateAsync);
+await RunTestAsync("DesktopControlPlaneSession facade delegates snapshot targeting and confirmation building", DesktopControlPlaneSessionFacadeTests.TestSnapshotTargetingAsync);
 await RunTestAsync("DesktopControlPlaneSession selects local-token recovery guidance after restore token mismatch", TestDesktopControlPlaneSessionRestoreTokenGuidanceAsync);
 await RunTestAsync("DesktopControlPlaneSession selects NapCat review guidance when QQ readiness is blocked after restore", TestDesktopControlPlaneSessionRestoreNapCatGuidanceAsync);
 await RunTestAsync("DesktopControlPlaneSession targets selected snapshot for preview restore and delete", TestDesktopControlPlaneSessionSnapshotTargetingAsync);
@@ -80,6 +87,7 @@ await RunTestAsync("DesktopOperationErrorFormatter translates common control-pla
 await RunTestAsync("DesktopShellPropertyCatalog exposes a unique shell notification directory", TestDesktopShellPropertyCatalogAsync);
 await RunTestAsync("BackendControlApiService classifies 401 responses as unauthorized", TestBackendControlApiServiceUnauthorizedAsync);
 await RunTestAsync("BackendControlApiService exposes rejected config errors separately from transport failures", TestBackendControlApiServiceRejectedSaveAsync);
+await RunTestAsync("BackendControlApiService rejects legacy config contracts without configPath", TestBackendControlApiServiceLegacyContractAsync);
 await RunTestAsync("BackendControlApiService treats empty successful config responses as unknown failures", TestBackendControlApiServiceEmptyConfigResponseAsync);
 await RunTestAsync("BackendControlApiService treats empty successful save responses as unknown failures", TestBackendControlApiServiceEmptySaveResponseAsync);
 await RunTestAsync("BackendControlApiService treats empty successful status/start/stop responses as unknown failures", TestBackendControlApiServiceEmptyRuntimeResponsesAsync);
@@ -100,10 +108,13 @@ await RunTestAsync("MainViewModel preserves default editor state when startup au
 await RunTestAsync("MainViewModel auto-recovers control API before showing outage warning", TestMainViewModelAutoRecoversControlApiBeforeWarningAsync);
 await RunTestAsync("DesktopControlPlaneSession rejects unknown control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnknownConfigFailureBeforeFallbackAsync);
 await RunTestAsync("DesktopControlPlaneSession rejects unauthorized control API config failures before file fallback", TestDesktopControlPlaneSessionRejectsUnauthorizedConfigFailureBeforeFallbackAsync);
+await RunTestAsync("DesktopControlPlaneSession rejects incompatible control API config contracts before file fallback", TestDesktopControlPlaneSessionRejectsIncompatibleConfigContractBeforeFallbackAsync);
 await RunTestAsync("MainViewModel loads through recovered control API before file fallback", TestMainViewModelLoadsThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel saves through recovered control API instead of env fallback", TestMainViewModelSavesThroughRecoveredControlApiAsync);
 await RunTestAsync("MainViewModel keeps edited BOT_SYSTEM_PROMPT when save response omits it", TestMainViewModelPreservesEditedBotSystemPromptWhenSaveResponseOmitsItAsync);
 await RunTestAsync("MainViewModel surfaces rejected control API saves without env fallback or recovery", TestMainViewModelSurfacesRejectedControlApiSaveAsync);
+await RunTestAsync("MainViewModel preserves DeepSeek edits when saving through the control API", TestMainViewModelPreservesDeepSeekEditsOnSaveAsync);
+await RunTestAsync("MainViewModel surfaces incompatible control API saves without reverting DeepSeek edits", TestMainViewModelSurfacesIncompatibleControlApiSaveWithoutRevertingDeepSeekEditsAsync);
 await RunTestAsync("MainViewModel publishes resident-mode notifications when startup is toggled", TestMainViewModelPublishesResidentModeNotificationsAsync);
 await RunTestAsync("MainViewModel exposes completed homepage guide states when runtime and startup are ready", TestMainViewModelGuideCompletionStatesAsync);
 await RunTestAsync("MainViewModel restores local activity state for recent events and pin/filter preferences", TestMainViewModelRestoresLocalActivityStateAsync);
@@ -162,7 +173,8 @@ async Task TestEnvConfigSnapshotStoreReadsLegacyAllowedGroupIdsWithoutMutationAs
             [
                 "OPENAI_API_KEY=test-key",
                 "ALLOWED_GROUP_IDS=chat-a,chat-b",
-                "ALLOWED_USER_IDS=user-a"
+                "ALLOWED_USER_IDS=user-a",
+                "QQ_AI_BOT_CONTROL_API_TOKEN=local-token"
             ]) + Environment.NewLine;
     await File.WriteAllTextAsync(
         envPath,
@@ -173,7 +185,9 @@ async Task TestEnvConfigSnapshotStoreReadsLegacyAllowedGroupIdsWithoutMutationAs
     var document = await service.LoadAsync(rootPath);
     var loadedText = await File.ReadAllTextAsync(envPath, Encoding.UTF8);
 
-    AssertEqual("chat-a,chat-b", document.Config.AllowedChatIds, "AllowedChatIds should load from legacy key.");
+    AssertEqual(string.Empty, document.Config.AllowedChatIds, "Env-only runtime config keys should no longer hydrate config fields.");
+    AssertEqual(string.Empty, document.Config.OpenAiApiKey, "Env-only runtime config keys should be ignored.");
+    AssertEqual("local-token", document.ExtraValues["QQ_AI_BOT_CONTROL_API_TOKEN"], "Local control-plane extras should still load from .env.");
     AssertEqual(originalText, loadedText, "LoadAsync should not mutate the env file when reading legacy keys.");
 }
 
@@ -413,7 +427,8 @@ async Task TestLocalStateSnapshotPreviewAsync()
 
     var preview = await service.PreviewAsync(rootPath, exportResult.ArchivePath);
 
-    AssertContains(string.Join(Environment.NewLine, preview.Lines), ".env：与当前状态不同", "Snapshot preview should report env differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "本机连接 .env：与当前状态不同", "Snapshot preview should report env differences.");
+    AssertContains(string.Join(Environment.NewLine, preview.Lines), "运行配置文件", "Snapshot preview should identify the runtime settings file.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "OPENAI_API_KEY", "Snapshot preview should list changed tracked env keys.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "********1234", "Snapshot preview should mask snapshot secret values.");
     AssertContains(string.Join(Environment.NewLine, preview.Lines), "********9999", "Snapshot preview should mask current secret values.");
@@ -443,7 +458,7 @@ Task TestLocalStateSnapshotPresentationBuilderAsync()
         ArchivePath = snapshot.ArchivePath,
         Lines =
         [
-            ".env：与当前状态不同",
+            "本机连接 .env：与当前状态不同",
             "sessions.json 会话数：当前 3 -> 快照 2",
             "sessions.json 最近活动：当前 2026-03-27 11:00:00 UTC -> 快照 2026-03-26 09:00:00 UTC",
             ".env 跟踪键变更：QQ_AI_BOT_CONTROL_API_TOKEN, NAPCAT_WS_URL"
@@ -589,46 +604,56 @@ async Task TestEnvConfigSnapshotStoreSavesAllowedChatIdsOnlyAsync()
 async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
 {
     var rootPath = await CreateTempDirectoryAsync("desktop-env-openai-controls-");
-    var writer = new TestEnvConfigSnapshotWriter();
     var reader = new LocalEnvConfigFallbackReader();
-    var document = new EnvDocument
-    {
-        Config = new BotConfig
-        {
-            OpenAiApiKey = "advanced-key",
-            OpenAiDefaultApiKey = "default-key",
-            BotSystemPrompt = "Base prompt line 1\nBase prompt line 2",
-            OpenAiDefaultReasoningEffort = "medium",
-            OpenAiAdvancedReasoningEffort = "high",
-            OpenAiDefaultTextVerbosity = "low",
-            OpenAiAdvancedTextVerbosity = "high",
-            OpenAiDefaultEnableWebSearch = "false",
-            OpenAiAdvancedEnableWebSearch = "true",
-            OpenAiDefaultEnableCodeInterpreter = "false",
-            OpenAiAdvancedEnableCodeInterpreter = "true",
-            DeepSeekFallbackEnabled = "true",
-            DeepSeekApiKey = "deepseek-key",
-            DeepSeekModel = "deepseek-chat",
-            DeepSeekBaseUrl = "https://api.deepseek.com/v1"
-        }
-    };
-
-    await writer.SaveAsync(rootPath, document);
-
-    var envText = await File.ReadAllTextAsync(Path.Combine(rootPath, ".env"), Encoding.UTF8);
-    AssertContains(envText, "OPENAI_DEFAULT_REASONING_EFFORT=medium", "Saved env should contain default reasoning effort.");
-    AssertContains(envText, "OPENAI_ADVANCED_REASONING_EFFORT=high", "Saved env should contain advanced reasoning effort.");
-    AssertContains(envText, "OPENAI_DEFAULT_TEXT_VERBOSITY=low", "Saved env should contain default text verbosity.");
-    AssertContains(envText, "OPENAI_ADVANCED_TEXT_VERBOSITY=high", "Saved env should contain advanced text verbosity.");
-    AssertContains(envText, "OPENAI_DEFAULT_ENABLE_WEB_SEARCH=false", "Saved env should contain default web search toggle.");
-    AssertContains(envText, "OPENAI_ADVANCED_ENABLE_WEB_SEARCH=true", "Saved env should contain advanced web search toggle.");
-    AssertContains(envText, "OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER=false", "Saved env should contain default code interpreter toggle.");
-    AssertContains(envText, "OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER=true", "Saved env should contain advanced code interpreter toggle.");
-    AssertContains(envText, "DEEPSEEK_FALLBACK_ENABLED=true", "Saved env should contain DeepSeek fallback toggle.");
-    AssertContains(envText, "DEEPSEEK_API_KEY=deepseek-key", "Saved env should contain DeepSeek API key.");
-    AssertContains(envText, "DEEPSEEK_MODEL=deepseek-chat", "Saved env should contain DeepSeek model.");
-    AssertContains(envText, "DEEPSEEK_BASE_URL=https://api.deepseek.com/v1", "Saved env should contain DeepSeek base URL.");
-    AssertContains(envText, "BOT_SYSTEM_PROMPT=Base prompt line 1\\nBase prompt line 2", "Saved env should contain bot system prompt.");
+    Directory.CreateDirectory(Path.Combine(rootPath, "data"));
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, "data", "runtime-settings.json"),
+        JsonSerializer.Serialize(
+            new
+            {
+                version = 2,
+                savedAt = "2026-03-31T00:00:00.000Z",
+                settings = new
+                {
+                    openAiApiKey = "advanced-key",
+                    openAiDefaultApiKey = "default-key",
+                    botSystemPrompt = "Base prompt line 1\nBase prompt line 2",
+                    openAiDefaultReasoningEffort = "medium",
+                    openAiAdvancedReasoningEffort = "high",
+                    openAiDefaultTextVerbosity = "low",
+                    openAiAdvancedTextVerbosity = "high",
+                    openAiDefaultEnableWebSearch = "false",
+                    openAiAdvancedEnableWebSearch = "true",
+                    openAiDefaultEnableCodeInterpreter = "false",
+                    openAiAdvancedEnableCodeInterpreter = "true",
+                    deepSeekFallbackEnabled = "true",
+                    deepSeekApiKey = "deepseek-key",
+                    deepSeekModel = "deepseek-chat",
+                    deepSeekBaseUrl = "https://api.deepseek.com/v1"
+                },
+                apiStyles = new
+                {
+                    @default = "responses",
+                    advanced = "responses"
+                }
+            },
+            new JsonSerializerOptions
+            {
+                WriteIndented = true
+            }) + Environment.NewLine,
+        Encoding.UTF8);
+    await File.WriteAllTextAsync(
+        Path.Combine(rootPath, ".env"),
+        string.Join(
+            Environment.NewLine,
+            [
+                "OPENAI_DEFAULT_REASONING_EFFORT=low",
+                "OPENAI_ADVANCED_ENABLE_WEB_SEARCH=false",
+                "QQ_AI_BOT_CONTROL_API_TOKEN=desktop-token",
+                "QQ_AI_BOT_CONTROL_API_HOST=127.0.0.9",
+                "QQ_AI_BOT_CONTROL_API_PORT=3201"
+            ]) + Environment.NewLine,
+        Encoding.UTF8);
 
     var loadedDocument = await reader.LoadAsync(rootPath);
     AssertEqual("Base prompt line 1\nBase prompt line 2", loadedDocument.Config.BotSystemPrompt, "Bot system prompt should round-trip.");
@@ -644,6 +669,9 @@ async Task TestEnvConfigSnapshotStoreRoundTripsOpenAiRouteControlsAsync()
     AssertEqual("deepseek-key", loadedDocument.Config.DeepSeekApiKey, "DeepSeek API key should round-trip.");
     AssertEqual("deepseek-chat", loadedDocument.Config.DeepSeekModel, "DeepSeek model should round-trip.");
     AssertEqual("https://api.deepseek.com/v1", loadedDocument.Config.DeepSeekBaseUrl, "DeepSeek base URL should round-trip.");
+    AssertEqual("desktop-token", loadedDocument.ExtraValues["QQ_AI_BOT_CONTROL_API_TOKEN"], "Local control-plane token should still load from .env.");
+    AssertEqual("127.0.0.9", loadedDocument.ExtraValues["QQ_AI_BOT_CONTROL_API_HOST"], "Local control-plane host should still load from .env.");
+    AssertEqual("3201", loadedDocument.ExtraValues["QQ_AI_BOT_CONTROL_API_PORT"], "Local control-plane port should still load from .env.");
 }
 
 Task TestPathDiscoveryServiceBackendRootAsync()
@@ -901,7 +929,8 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                                 deepSeekBaseUrl = "https://api.deepseek.com/v1",
                                 allowedChatIds = "chat-a,chat-b",
                                 allowedUserIds = "user-a",
-                                envPath = "D:\\temp\\.env",
+                                configPath = "D:\\temp\\data\\runtime-settings.json",
+                                bootstrapEnvPath = "D:\\temp\\.env",
                                 restartRequired = false
                             });
                         break;
@@ -987,7 +1016,8 @@ async Task TestBackendControlApiServiceCamelCaseContractAsync()
                                 deepSeekBaseUrl = "https://api.deepseek.com/v1",
                                 allowedChatIds = "chat-x,chat-y",
                                 allowedUserIds = "user-a",
-                                envPath = "D:\\temp\\.env",
+                                configPath = "D:\\temp\\data\\runtime-settings.json",
+                                bootstrapEnvPath = "D:\\temp\\.env",
                                 restartRequired = false,
                                 savedAt = "2026-03-23T00:00:00.000Z"
                             });
@@ -2350,7 +2380,7 @@ async Task TestBackendControlPlaneCoordinatorAsync()
         tryGetStatusAsync: (_cancellationToken) =>
         {
             statusCallCount += 1;
-            return Task.FromResult(statusCallCount >= 2 ? recoveredStatus : null);
+            return Task.FromResult(statusCallCount >= 1 ? recoveredStatus : null);
         },
         isImmediateFailure: static failure => failure.Kind is BackendControlApiFailureKind.Rejected or BackendControlApiFailureKind.Unauthorized or BackendControlApiFailureKind.Unknown,
         tryRecoverControlApiAsync: () =>
@@ -2918,14 +2948,16 @@ async Task TestDesktopControlPlaneSessionLocalDocumentProjectionAsync()
     var invalidRootPath = Path.Combine(context.RootPath, "missing-backend");
     var invalidState = session.UpdateBackendRoot(invalidRootPath, false);
     AssertFalse(invalidState.LocalDocumentState.IsBackendRootValid, "Missing backend root should project as invalid.");
-    AssertEqual(Path.Combine(invalidRootPath, ".env"), invalidState.LocalDocumentState.EnvFilePath, "Invalid backend root should still project the env file path.");
+    AssertEqual(Path.Combine(invalidRootPath, "data", "runtime-settings.json"), invalidState.LocalDocumentState.RuntimeConfigPath, "Invalid backend root should still project the runtime config path.");
+    AssertEqual(Path.Combine(invalidRootPath, ".env"), invalidState.LocalDocumentState.BootstrapEnvPath, "Invalid backend root should still project the bootstrap env path.");
     AssertEqual("backend 根目录无效", invalidState.LocalDocumentState.BackendRootStateText, "Invalid backend root should project the invalid-state text.");
     AssertEqual("后端目录有效后才能显示会话路径", invalidState.LocalDocumentState.SessionStoreStateText, "Invalid backend root should suppress session-store status.");
     AssertEqual("后端目录有效后才能显示缓存路径", invalidState.LocalDocumentState.ImageCacheStateText, "Invalid backend root should suppress image-cache status.");
 
     var validState = session.UpdateBackendRoot(context.RootPath, true);
     AssertTrue(validState.LocalDocumentState.IsBackendRootValid, "Test backend root should project as valid.");
-    AssertEqual(Path.Combine(context.RootPath, ".env"), validState.LocalDocumentState.EnvFilePath, "Valid backend root should project the env file path.");
+    AssertEqual(Path.Combine(context.RootPath, "data", "runtime-settings.json"), validState.LocalDocumentState.RuntimeConfigPath, "Valid backend root should project the runtime config path.");
+    AssertEqual(Path.Combine(context.RootPath, ".env"), validState.LocalDocumentState.BootstrapEnvPath, "Valid backend root should project the bootstrap env path.");
     AssertEqual("已自动检测到 backend 根目录", validState.LocalDocumentState.BackendRootStateText, "Detected backend root should project the detected-state text.");
     AssertEqual(Path.Combine(context.RootPath, "data", "sessions.json"), validState.LocalDocumentState.SessionStorePathText, "Valid backend root should project the session store path.");
     AssertEqual("会话历史文件已存在", validState.LocalDocumentState.SessionStoreStateText, "Existing sessions.json should project as present.");
@@ -3075,7 +3107,7 @@ Task TestDesktopOperationErrorFormatterAsync()
             Kind = BackendControlApiFailureKind.Unauthorized,
             Message = "Control API authentication failed."
         },
-        envPath: @"D:\runtime\.env");
+        bootstrapEnvPath: @"D:\runtime\.env");
 
     AssertContains(unauthorized.StatusText, "本地控制令牌不一致", "Unauthorized guidance should explain the local control token mismatch.");
     AssertEqual("需要本地控制令牌", unauthorized.DialogTitle, "Unauthorized guidance should use a focused dialog title.");
@@ -3100,11 +3132,25 @@ Task TestDesktopOperationErrorFormatterAsync()
     AssertEqual("查看微信配置", rejected.SuggestedActionLabel, "Rejected guidance should suggest the most relevant field to edit.");
     AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, rejected.SuggestedActionKey, "Rejected guidance should route to the WeChat config field.");
 
+    var deepSeekRejected = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Save config",
+        fallbackStatusText: "Save failed",
+        technicalMessage: "Missing runtime config: DEEPSEEK_API_KEY",
+        controlApiFailure: new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Rejected,
+            Message = "Missing runtime config: DEEPSEEK_API_KEY"
+        });
+
+    AssertContains(deepSeekRejected.DialogMessage, "DEEPSEEK_API_KEY", "DeepSeek rejected guidance should preserve the specific validation detail.");
+    AssertEqual("查看 DeepSeek API Key", deepSeekRejected.SuggestedActionLabel, "DeepSeek rejected guidance should suggest the DeepSeek API key field.");
+    AssertEqual(DesktopHealthActionKeys.FocusDeepSeekApiKey, deepSeekRejected.SuggestedActionKey, "DeepSeek rejected guidance should route to the DeepSeek API key field.");
+
     var localSettingsError = DesktopOperationErrorFormatter.Build(
         operationLabel: "Save local control settings",
         fallbackStatusText: "Local control-plane save failed",
         technicalMessage: "Access to the path is denied.",
-        envPath: @"D:\runtime\.env",
+        bootstrapEnvPath: @"D:\runtime\.env",
         localControlSettingsOperation: true);
 
     AssertEqual("Local control-plane save failed", localSettingsError.StatusText, "Local settings guidance should preserve the existing status text.");
@@ -3129,6 +3175,21 @@ Task TestDesktopOperationErrorFormatterAsync()
     AssertContains(unreachable.DialogMessage, "先从这个窗口启动 backend", "Unreachable guidance should explicitly tell the user to start the backend when that action is available.");
     AssertEqual("启动后端", unreachable.SuggestedActionLabel, "Unreachable guidance should route to backend start when the desktop can still launch it.");
     AssertEqual(DesktopHealthActionKeys.StartBackend, unreachable.SuggestedActionKey, "Unreachable guidance should expose the backend start action.");
+
+    var incompatible = DesktopOperationErrorFormatter.Build(
+        operationLabel: "Save config",
+        fallbackStatusText: "Save failed",
+        technicalMessage: BackendControlApiService.LegacyConfigContractMessage,
+        controlApiFailure: new BackendControlApiFailure
+        {
+            Kind = BackendControlApiFailureKind.Incompatible,
+            Message = BackendControlApiService.LegacyConfigContractMessage
+        });
+
+    AssertContains(incompatible.StatusText, "版本不兼容", "Incompatible guidance should explain the contract mismatch.");
+    AssertContains(incompatible.DialogMessage, "旧版配置协议", "Incompatible guidance should explain the stale backend contract.");
+    AssertEqual("打开 backend 目录", incompatible.SuggestedActionLabel, "Incompatible guidance should offer a backend-folder action.");
+    AssertEqual(DesktopHealthActionKeys.OpenBackendFolder, incompatible.SuggestedActionKey, "Incompatible guidance should route to the backend folder action.");
 
     return Task.CompletedTask;
 }
@@ -3275,6 +3336,52 @@ async Task TestBackendControlApiServiceRejectedSaveAsync()
     AssertEqual(null, saveResult, "Rejected save should return null.");
     AssertEqual(BackendControlApiFailureKind.Rejected, service.LastFailure.Kind, "Rejected save should set failure kind.");
     AssertContains(service.LastFailure.Message, "WECHAT_BRIDGE_URL", "Rejected save should preserve backend error text.");
+
+    listener.Stop();
+    await serverTask;
+}
+
+async Task TestBackendControlApiServiceLegacyContractAsync()
+{
+    var port = GetFreeTcpPort();
+    var prefix = $"http://127.0.0.1:{port}/";
+    using var listener = new HttpListener();
+    listener.Prefixes.Add(prefix);
+    listener.Start();
+
+    var serverTask = Task.Run(async () =>
+    {
+        for (var index = 0; index < 2; index++)
+        {
+            var context = await listener.GetContextAsync();
+            var response = context.Response;
+
+            try
+            {
+                await response.OutputStream.WriteAsync(
+                    Encoding.UTF8.GetBytes("{\"openAiApiKey\":\"test-key\",\"envPath\":\"D:\\\\temp\\\\.env\",\"restartRequired\":false}"));
+            }
+            finally
+            {
+                response.Close();
+            }
+        }
+    });
+
+    using var service = new BackendControlApiService(new Uri(prefix), TimeSpan.FromSeconds(2));
+
+    var config = await service.TryGetConfigAsync();
+    AssertEqual(null, config, "Legacy config responses should be rejected.");
+    AssertEqual(BackendControlApiFailureKind.Incompatible, service.LastFailure.Kind, "Legacy config responses should be classified as incompatible.");
+    AssertContains(service.LastFailure.Message, "legacy config contract", "Legacy config responses should preserve the compatibility failure message.");
+
+    var saveResult = await service.TrySaveConfigAsync(new BotConfig
+    {
+        OpenAiApiKey = "test-key"
+    });
+    AssertEqual(null, saveResult, "Legacy save responses should be rejected.");
+    AssertEqual(BackendControlApiFailureKind.Incompatible, service.LastFailure.Kind, "Legacy save responses should be classified as incompatible.");
+    AssertContains(service.LastFailure.Message, "legacy config contract", "Legacy save responses should preserve the compatibility failure message.");
 
     listener.Stop();
     await serverTask;
@@ -3721,7 +3828,7 @@ async Task TestDesktopCrossProcessSingleInstanceActivationAsync()
 
     try
     {
-        await WaitForSignalAsync(signalFilePath, "window-loaded");
+        await WaitForSignalAsync(signalFilePath, "window-loaded", timeoutMs: 30000);
 
         using var activateProcess = StartDesktopProcess(
             desktopExePath,
@@ -3729,8 +3836,8 @@ async Task TestDesktopCrossProcessSingleInstanceActivationAsync()
             [],
             signalFilePath,
             scopeSuffix);
-        await WaitForProcessExitAsync(activateProcess, "secondary desktop activation process");
-        await WaitForSignalAsync(signalFilePath, "restore-from-external-activation");
+        await WaitForProcessExitAsync(activateProcess, "secondary desktop activation process", timeoutMs: 30000);
+        await WaitForSignalAsync(signalFilePath, "restore-from-external-activation", timeoutMs: 30000);
 
         using var ensureRuntimeProcess = StartDesktopProcess(
             desktopExePath,
@@ -3738,8 +3845,8 @@ async Task TestDesktopCrossProcessSingleInstanceActivationAsync()
             ["--ensure-runtime"],
             signalFilePath,
             scopeSuffix);
-        await WaitForProcessExitAsync(ensureRuntimeProcess, "secondary desktop ensure-runtime process");
-        await WaitForSignalAsync(signalFilePath, "ensure-runtime-from-external-activation");
+        await WaitForProcessExitAsync(ensureRuntimeProcess, "secondary desktop ensure-runtime process", timeoutMs: 30000);
+        await WaitForSignalAsync(signalFilePath, "ensure-runtime-from-external-activation", timeoutMs: 30000);
     }
     finally
     {
@@ -3855,6 +3962,12 @@ async Task TestMainWindowSmokeAutomationAsync()
                     ?? throw new InvalidOperationException("EffectiveBotInstructionsTextBox not found.");
                 var allowedChatIdsTextBox = window.FindName("AllowedChatIdsTextBox") as TextBox
                     ?? throw new InvalidOperationException("AllowedChatIdsTextBox not found.");
+                var deepSeekFallbackEnabledCheckBox = window.FindName("DeepSeekFallbackEnabledCheckBox") as CheckBox
+                    ?? throw new InvalidOperationException("DeepSeekFallbackEnabledCheckBox not found.");
+                var deepSeekModelTextBox = window.FindName("DeepSeekModelTextBox") as TextBox
+                    ?? throw new InvalidOperationException("DeepSeekModelTextBox not found.");
+                var deepSeekBaseUrlTextBox = window.FindName("DeepSeekBaseUrlTextBox") as TextBox
+                    ?? throw new InvalidOperationException("DeepSeekBaseUrlTextBox not found.");
                 var defaultWebSearchCheckBox = window.FindName("OpenAiDefaultEnableWebSearchCheckBox") as CheckBox
                     ?? throw new InvalidOperationException("OpenAiDefaultEnableWebSearchCheckBox not found.");
                 var advancedWebSearchCheckBox = window.FindName("OpenAiAdvancedEnableWebSearchCheckBox") as CheckBox
@@ -4154,6 +4267,9 @@ async Task TestMainWindowSmokeAutomationAsync()
                 defaultBotInstructionsTextBox.Text = "Base prompt line 1\r\nBase prompt line 2";
                 botPersonaTextBox.Text = "冷静、专业。";
                 allowedChatIdsTextBox.Text = "chat-x,chat-y";
+                deepSeekFallbackEnabledCheckBox.IsChecked = false;
+                deepSeekModelTextBox.Text = "deepseek-reasoner";
+                deepSeekBaseUrlTextBox.Text = "https://example.deepseek-proxy/v1";
                 defaultWebSearchCheckBox.IsChecked = true;
                 advancedWebSearchCheckBox.IsChecked = false;
                 defaultCodeInterpreterCheckBox.IsChecked = true;
@@ -4173,6 +4289,9 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("Base prompt line 1\r\nBase prompt line 2", fakeBackend.LastSavedConfig.BotSystemPrompt, "Save should use edited BOT_SYSTEM_PROMPT.");
                 AssertEqual("冷静、专业。", fakeBackend.LastSavedConfig.BotPersona, "Save should use edited BOT_PERSONA.");
                 AssertEqual("chat-x,chat-y", fakeBackend.LastSavedConfig.AllowedChatIds, "Save should use edited AllowedChatIds.");
+                AssertEqual("false", fakeBackend.LastSavedConfig.DeepSeekFallbackEnabled, "Save should use the edited DeepSeek fallback toggle.");
+                AssertEqual("deepseek-reasoner", fakeBackend.LastSavedConfig.DeepSeekModel, "Save should use the edited DeepSeek model.");
+                AssertEqual("https://example.deepseek-proxy/v1", fakeBackend.LastSavedConfig.DeepSeekBaseUrl, "Save should use the edited DeepSeek base URL.");
                 AssertEqual("true", fakeBackend.LastSavedConfig.OpenAiDefaultEnableWebSearch, "Save should use edited default web search toggle.");
                 AssertEqual("false", fakeBackend.LastSavedConfig.OpenAiAdvancedEnableWebSearch, "Save should use edited advanced web search toggle.");
                 AssertEqual("true", fakeBackend.LastSavedConfig.OpenAiDefaultEnableCodeInterpreter, "Save should use edited default code interpreter toggle.");
@@ -4440,6 +4559,37 @@ async Task TestDesktopControlPlaneSessionRejectsUnauthorizedConfigFailureBeforeF
     }
 }
 
+async Task TestDesktopControlPlaneSessionRejectsIncompatibleConfigContractBeforeFallbackAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-incompatible-config-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeBotProcess = context.FakeBotProcess;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Config!.ConfigPath = string.Empty;
+    fakeBackend.Config!.BootstrapEnvPath = string.Empty;
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        var session = CreateDesktopControlPlaneSessionForTests(context);
+
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => session.LoadAuthoritativeConfigAsync(),
+            "Incompatible config contracts should throw before local fallback is considered.");
+
+        AssertEqual(0, fakeLocalFallbackReader.LoadCallCount, "Incompatible config contracts should not touch the local fallback reader.");
+        AssertEqual(0, fakeBotProcess.StartCallCount, "Incompatible config contracts should not trigger control API recovery.");
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
 async Task TestMainViewModelLoadsThroughRecoveredControlApiAsync()
 {
     var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-load-control-api-");
@@ -4652,6 +4802,118 @@ async Task TestMainViewModelSurfacesRejectedControlApiSaveAsync()
                 AssertEqual(0, fakeLocalFallbackReader.SaveCallCount, "Rejected save should not fall back to env file writes.");
                 AssertFalse(string.IsNullOrWhiteSpace(saveResult.StatusText), "Rejected save should surface a non-empty status text.");
                 AssertEqual(DesktopHealthActionKeys.FocusWechatUrl, saveResult.SuggestedHealthActionKey, "Rejected save should direct the user to the offending WeChat field.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelPreservesDeepSeekEditsOnSaveAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-save-deepseek-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                viewModel.DeepSeekFallbackEnabled = "false";
+                viewModel.DeepSeekModel = "deepseek-reasoner";
+                viewModel.DeepSeekBaseUrl = "https://example.deepseek-proxy/v1";
+
+                viewModel.SaveCommand.Execute(null);
+
+                await WaitForAsync(
+                    () => fakeBackend.SaveConfigCallCount == 1 && !viewModel.HasUnsavedChanges,
+                    "save edited deepseek settings");
+
+                AssertNotNull(fakeBackend.LastSavedConfig, "Save should capture edited config payload.");
+                AssertEqual("false", fakeBackend.LastSavedConfig!.DeepSeekFallbackEnabled, "Save payload should include the DeepSeek fallback toggle.");
+                AssertEqual("deepseek-reasoner", fakeBackend.LastSavedConfig.DeepSeekModel, "Save payload should include the edited DeepSeek model.");
+                AssertEqual("https://example.deepseek-proxy/v1", fakeBackend.LastSavedConfig.DeepSeekBaseUrl, "Save payload should include the edited DeepSeek base URL.");
+                AssertEqual("deepseek-reasoner", viewModel.DeepSeekModel, "ViewModel should keep the saved DeepSeek model.");
+                AssertEqual("https://example.deepseek-proxy/v1", viewModel.DeepSeekBaseUrl, "ViewModel should keep the saved DeepSeek base URL.");
+            }
+            finally
+            {
+                await viewModel.DisposeAsync();
+            }
+        });
+    }
+    finally
+    {
+        Directory.SetCurrentDirectory(originalCurrentDirectory);
+    }
+}
+
+async Task TestMainViewModelSurfacesIncompatibleControlApiSaveWithoutRevertingDeepSeekEditsAsync()
+{
+    var context = await CreateDesktopUiTestContextAsync("desktop-viewmodel-save-incompatible-");
+    var rootPath = context.RootPath;
+    var fakeBackend = context.FakeBackend;
+    var fakeLocalFallbackReader = context.FakeLocalFallbackReader;
+    var fakeAutoStart = context.FakeAutoStart;
+    var fakeBotProcess = context.FakeBotProcess;
+    var fakeActivityStateStore = context.FakeActivityStateStore;
+    var originalCurrentDirectory = Directory.GetCurrentDirectory();
+
+    fakeBackend.Config!.ConfigPath = string.Empty;
+    fakeBackend.Config!.BootstrapEnvPath = string.Empty;
+
+    try
+    {
+        Directory.SetCurrentDirectory(rootPath);
+
+        await RunOnStaThreadAsync(async () =>
+        {
+            var viewModel = new MainViewModel(
+                fakeAutoStart,
+                fakeLocalFallbackReader,
+                fakeBackend,
+                fakeBotProcess,
+                fakeActivityStateStore);
+
+            try
+            {
+                var session = CreateDesktopControlPlaneSessionForTests(context);
+                var config = session.BuildCurrentShellState().ConfigEditorState.Config;
+                config.DeepSeekFallbackEnabled = "false";
+                config.DeepSeekModel = "deepseek-reasoner";
+                config.DeepSeekBaseUrl = "https://example.deepseek-proxy/v1";
+
+                var saveResult = await session.SaveConfigAsync(config, showUiErrors: false);
+
+                AssertFalse(saveResult.Succeeded, "Incompatible save should report failure.");
+                AssertEqual(1, fakeBackend.SaveConfigCallCount, "Incompatible save should still send one save attempt.");
+                AssertEqual(0, fakeBotProcess.StartCallCount, "Incompatible save should not start local backend recovery.");
+                AssertContains(saveResult.StatusText, "版本不兼容", "Incompatible save should surface the compatibility status text.");
+                AssertEqual(DesktopHealthActionKeys.OpenBackendFolder, saveResult.SuggestedHealthActionKey, "Incompatible save should route to opening the backend folder.");
+                AssertEqual("deepseek-reasoner", fakeBackend.LastSavedConfig?.DeepSeekModel ?? string.Empty, "Submitted save payload should still contain the edited DeepSeek model.");
+                AssertEqual("https://example.deepseek-proxy/v1", fakeBackend.LastSavedConfig?.DeepSeekBaseUrl ?? string.Empty, "Submitted save payload should still contain the edited DeepSeek base URL.");
             }
             finally
             {
@@ -4949,7 +5211,7 @@ async Task TestMainViewModelRestoreGuidancePrioritizesLocalTokenFixAsync()
         ArchivePath = @"D:\snapshots\runtime-state-token-test.zip",
         Lines =
         [
-            ".env：与当前状态不同",
+            "本机连接 .env：与当前状态不同",
             ".env 跟踪键变更：QQ_AI_BOT_CONTROL_API_TOKEN",
             "QQ_AI_BOT_CONTROL_API_TOKEN: ********1111 -> ********2222",
             "data/：与当前状态一致",
@@ -5286,6 +5548,8 @@ async Task TestMainWindowHealthActionsAsync()
                     ?? throw new InvalidOperationException("ResidentModeDetailTextBlock not found.");
                 var controlApiTokenTextBox = window.FindName("ControlApiTokenTextBox") as TextBox
                     ?? throw new InvalidOperationException("ControlApiTokenTextBox not found.");
+                var deepSeekApiKeyTextBox = window.FindName("DeepSeekApiKeyTextBox") as TextBox
+                    ?? throw new InvalidOperationException("DeepSeekApiKeyTextBox not found.");
                 var saveLocalControlPlaneButton = window.FindName("SaveLocalControlPlaneButton") as Button
                     ?? throw new InvalidOperationException("SaveLocalControlPlaneButton not found.");
                 var openSessionStoreFolderButton = window.FindName("OpenSessionStoreFolderButton") as Button
@@ -5339,6 +5603,12 @@ async Task TestMainWindowHealthActionsAsync()
                 await WaitForAsync(
                     () => window.GetLastHealthActionTargetNameForTests() == "NapCatTokenTextBox",
                     "health action napcat token focus");
+
+                viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.FocusDeepSeekApiKey);
+                await WaitForAsync(
+                    () => window.GetLastHealthActionTargetNameForTests() == "DeepSeekApiKeyTextBox",
+                    "health action deepseek api key focus");
+                AssertEqual(deepSeekApiKeyTextBox, FocusManager.GetFocusedElement(window), "DeepSeek health action should focus the DeepSeek API key textbox.");
 
                 viewModel.RunHealthActionCommand.Execute(DesktopHealthActionKeys.ShowLogs);
                 await WaitForAsync(
@@ -5971,7 +6241,8 @@ static async Task<DesktopUiTestContext> CreateDesktopUiTestContextAsync(string p
             WechatBotPrefix = "/ai",
             AllowedChatIds = "chat-a,chat-b",
             AllowedUserIds = "user-a",
-            EnvPath = Path.Combine(rootPath, ".env"),
+            ConfigPath = Path.Combine(rootPath, "data", "runtime-settings.json"),
+            BootstrapEnvPath = Path.Combine(rootPath, ".env"),
             RestartRequired = false
         }
     };
@@ -6604,7 +6875,7 @@ sealed class FakeLocalStateSnapshotService : ILocalStateSnapshotService
         ArchivePath = @"D:\snapshots\runtime-state-test.zip",
         Lines =
         [
-            ".env：与当前状态不同",
+            "本机连接 .env：与当前状态不同",
             ".env 跟踪键变更：OPENAI_API_KEY, NAPCAT_TOKEN",
             "OPENAI_API_KEY: ********9999 -> ********1234",
             "NAPCAT_TOKEN: ********5678 -> ********5678",
@@ -6875,7 +7146,8 @@ sealed class FakeBackendControlApiService : IBackendControlApiService
             MaxOutputChars = config.MaxOutputChars,
             AllowedChatIds = config.AllowedChatIds,
             AllowedUserIds = config.AllowedUserIds,
-            EnvPath = Config?.EnvPath ?? string.Empty,
+            ConfigPath = Config?.ConfigPath ?? string.Empty,
+            BootstrapEnvPath = Config?.BootstrapEnvPath ?? string.Empty,
             RestartRequired = false
         };
 

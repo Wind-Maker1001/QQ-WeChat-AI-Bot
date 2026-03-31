@@ -120,6 +120,11 @@ public static class LocalStateSnapshotPresentationBuilder
             impactParts.Add(".env");
         }
 
+        if (SnapshotIncludesEntry(snapshot, "app/data/runtime-settings.json"))
+        {
+            impactParts.Add("运行配置文件（data/runtime-settings.json）");
+        }
+
         if (SnapshotIncludesPrefix(snapshot, "app/data/"))
         {
             impactParts.Add("data/");
@@ -218,6 +223,11 @@ public static class LocalStateSnapshotPresentationBuilder
         if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)))
         {
             restoredTargets.Add(".env");
+        }
+
+        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/data/runtime-settings.json", StringComparison.Ordinal)))
+        {
+            restoredTargets.Add("运行配置文件");
         }
 
         if (restoreResult.RestoredEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)))
@@ -320,6 +330,11 @@ public static class LocalStateSnapshotPresentationBuilder
         if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/.env", StringComparison.Ordinal)))
         {
             restoredTargets.Add(".env");
+        }
+
+        if (restoreResult.RestoredEntries.Any(static entry => string.Equals(entry, "app/data/runtime-settings.json", StringComparison.Ordinal)))
+        {
+            restoredTargets.Add("运行配置文件");
         }
 
         if (restoreResult.RestoredEntries.Any(static entry => entry.StartsWith("app/data/", StringComparison.Ordinal)))

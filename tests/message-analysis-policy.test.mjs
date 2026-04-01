@@ -80,6 +80,10 @@ test('message analysis upgrades to advanced when only the advanced route can sat
 
   assert.equal(intent.routeHint, 'advanced');
   assert.equal(intent.capabilityUpgradeApplied, true);
+  assert.deepEqual(intent.requestedTools, {
+    requested: [],
+    required: []
+  });
   assert.equal(intent.requestedCapabilities.reasoningEffort, 'high');
   assert.equal(intent.requestedCapabilities.enableWebSearch, false);
   assert.equal(intent.requestedCapabilities.enableCodeInterpreter, false);

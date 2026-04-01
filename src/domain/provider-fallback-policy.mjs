@@ -5,7 +5,7 @@ import {
   EXECUTION_STAGE_DIRECT
 } from './execution-projection.mjs';
 import { createConversationDelta } from './llm-reply-outcome.mjs';
-import { API_STYLE_RESPONSES, buildEnabledToolKinds } from './llm-request-policy.mjs';
+import { buildEnabledToolKinds } from './llm-request-policy.mjs';
 
 const TRANSIENT_ERROR_CODES = new Set([
   'ECONNABORTED',
@@ -69,22 +69,10 @@ export function isTransientProviderError(error) {
   return error?.cause ? isTransientProviderError(error.cause) : false;
 }
 
-function isImplicitGpt5ResponsesDefault(routePolicy) {
-  const normalizedModel =
-    typeof routePolicy?.model === 'string' ? routePolicy.model.trim().toLowerCase() : '';
-
-  return (
-    routePolicy?.apiStyle === API_STYLE_RESPONSES &&
-    normalizedModel.startsWith('gpt-5') &&
-    routePolicy?.reasoningEffort === 'high' &&
-    routePolicy?.textVerbosity === 'high'
-  );
-}
-
 export function createProviderFallbackDecision({
-  routePolicy,
   request,
-  effectiveRequest,
+  primaryToolSupport,
+  fallbackToolSupport,
   deepseekProvider,
   primaryError
 }) {
@@ -109,33 +97,37 @@ export function createProviderFallbackDecision({
     };
   }
 
-  if (effectiveRequest.enableWebSearch === true || effectiveRequest.enableCodeInterpreter === true) {
+  if (primaryToolSupport?.hasSuppressedRequiredTools === true) {
     return {
       shouldFallback: false,
-      reason: 'responses-tools-required'
-    };
-  }
-
-  const hasExplicitReasoningOverride =
-    typeof request?.reasoningEffortOverride === 'string' && request.reasoningEffortOverride.trim();
-  const hasExplicitVerbosityOverride =
-    typeof request?.textVerbosityOverride === 'string' && request.textVerbosityOverride.trim();
-
-  if (hasExplicitReasoningOverride || hasExplicitVerbosityOverride) {
-    return {
-      shouldFallback: false,
-      reason: 'explicit-request-overrides'
+      reason: 'required-tools-already-suppressed'
     };
   }
 
   if (
-    routePolicy.apiStyle === API_STYLE_RESPONSES &&
-    !isImplicitGpt5ResponsesDefault(routePolicy) &&
-    (routePolicy.reasoningEffort || routePolicy.textVerbosity)
+    Array.isArray(primaryToolSupport?.requestedTools?.required) &&
+    primaryToolSupport.requestedTools.required.length > 0
   ) {
+    const fallbackRequiredToolsSupported = primaryToolSupport.requestedTools.required.every((requiredToolKind) =>
+      fallbackToolSupport?.effectiveTools?.includes(requiredToolKind)
+    );
+
+    if (!fallbackRequiredToolsSupported) {
+      return {
+        shouldFallback: false,
+        reason: 'fallback-cannot-preserve-required-tools'
+      };
+    }
+  }
+
+  const hasHostedTools =
+    Array.isArray(primaryToolSupport?.effectiveHostedTools) &&
+    primaryToolSupport.effectiveHostedTools.length > 0;
+
+  if (hasHostedTools) {
     return {
       shouldFallback: false,
-      reason: 'route-policy-requires-responses-shaping'
+      reason: 'hosted-tools-required'
     };
   }
 
@@ -147,7 +139,9 @@ export function createProviderFallbackDecision({
 
 export function buildProviderFallbackReply({
   primaryRoutePolicy,
-  fallbackReply
+  fallbackReply,
+  fallbackToolSupport,
+  requestedTools = { requested: [], required: [] }
 }) {
   return {
     ...fallbackReply,
@@ -166,6 +160,13 @@ export function buildProviderFallbackReply({
       enableWebSearch: primaryRoutePolicy.enableWebSearch,
       enableCodeInterpreter: primaryRoutePolicy.enableCodeInterpreter
     }),
+    requestedTools,
+    effectiveTools: Array.isArray(fallbackToolSupport?.effectiveTools)
+      ? fallbackToolSupport.effectiveTools
+      : [],
+    suppressedTools: Array.isArray(fallbackToolSupport?.suppressedTools)
+      ? fallbackToolSupport.suppressedTools
+      : [],
     conversationDelta: createConversationDelta({
       ...fallbackReply.conversationDelta,
       previousResponseId: null,

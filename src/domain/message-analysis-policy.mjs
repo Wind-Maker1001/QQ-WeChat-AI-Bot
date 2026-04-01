@@ -1,4 +1,12 @@
 import { normalizeApiStyle } from './llm-request-policy.mjs';
+import {
+  TOOL_KIND_CODE_INTERPRETER,
+  TOOL_KIND_LOCAL_RUNTIME_STATE,
+  TOOL_KIND_LOCAL_SNAPSHOT_INSPECT,
+  TOOL_KIND_WEB_SEARCH,
+  createToolSelection,
+  deriveCompatibilityCapabilities
+} from './tool-registry.mjs';
 
 export const DEFAULT_ADVANCED_TRIGGER_PREFIXES = [
   '/5.4',
@@ -26,6 +34,21 @@ const WEB_SEARCH_PATTERNS = [
 const CODE_INTERPRETER_PATTERNS = [
   /\b(csv|excel|spreadsheet|dataset|data set|table|statistics|statistical|regression|simulate|simulation|plot|chart|calculate|computation|python)\b/i,
   /(?:csv|excel|表格|数据集|数据分析|统计|回归|拟合|仿真|模拟|绘图|图表|计算)/
+];
+
+const LOCAL_RUNTIME_STATE_PATTERNS = [
+  /\b(current runtime|runtime status|control api|worker status|route config|available tools this turn|callable tools this turn|can you browse this turn|can you run code this turn)\b/i,
+  /(?:当前(?:这轮|对话|回合)?|本轮|这轮).{0,16}(?:工具|能力|联网|搜索|运行代码|代码解释器|路由|配置|runtime|control api|worker)/
+];
+
+const LOCAL_SNAPSHOT_PATTERNS = [
+  /\b(snapshot|snapshots|restore impact|restore advice|snapshot diff|state archive)\b/i,
+  /(?:快照|状态快照|恢复影响|恢复建议|快照差异|归档)/
+];
+
+const STRONG_WEB_SEARCH_PATTERNS = [
+  /\b(latest|official|documentation|docs|release notes|look up|search|news)\b/i,
+  /(?:最新|官方|官网|文档|资料|搜索|搜一下|新闻)/
 ];
 
 function hasAnyPattern(text, patterns) {
@@ -94,6 +117,22 @@ export function shouldUseCodeInterpreter(text) {
   return hasAnyPattern(text.trim(), CODE_INTERPRETER_PATTERNS);
 }
 
+export function shouldUseLocalRuntimeState(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return false;
+  }
+
+  return hasAnyPattern(text.trim(), LOCAL_RUNTIME_STATE_PATTERNS);
+}
+
+export function shouldUseLocalSnapshotInspect(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return false;
+  }
+
+  return hasAnyPattern(text.trim(), LOCAL_SNAPSHOT_PATTERNS);
+}
+
 export function normalizeTriggerPrefixes(prefixes) {
   if (!Array.isArray(prefixes)) {
     return [];
@@ -114,11 +153,19 @@ export function createMessageIntentSignals({
   trigger = {},
   capabilityReasons = [],
   requestedCapabilities = {},
+  requestedTools = {},
   capabilityUpgradeApplied = false
 } = {}) {
   const normalizedCapabilityReasons = Array.isArray(capabilityReasons)
     ? capabilityReasons.filter((reason) => typeof reason === 'string' && reason)
     : [];
+  const normalizedRequestedTools = createToolSelection(requestedTools);
+  const compatibilityCapabilities = deriveCompatibilityCapabilities({
+    requestedTools: normalizedRequestedTools,
+    reasoningEffort: requestedCapabilities.reasoningEffort,
+    textVerbosity: requestedCapabilities.textVerbosity,
+    needsResponsesCapabilities: requestedCapabilities.needsResponsesCapabilities === true
+  });
 
   return {
     userText: typeof userText === 'string' ? userText : '',
@@ -138,28 +185,20 @@ export function createMessageIntentSignals({
           },
     capabilityReasons: normalizedCapabilityReasons,
     capabilityUpgradeApplied: capabilityUpgradeApplied === true,
+    requestedTools: normalizedRequestedTools,
     requestedCapabilities: {
+      ...compatibilityCapabilities,
       reasoningEffort:
         typeof requestedCapabilities.reasoningEffort === 'string'
           ? requestedCapabilities.reasoningEffort
-          : '',
+          : compatibilityCapabilities.reasoningEffort,
       textVerbosity:
         typeof requestedCapabilities.textVerbosity === 'string'
           ? requestedCapabilities.textVerbosity
-          : '',
-      enableWebSearch:
-        requestedCapabilities.enableWebSearch === true
-          ? true
-          : requestedCapabilities.enableWebSearch === false
-            ? false
-            : undefined,
-      enableCodeInterpreter:
-        requestedCapabilities.enableCodeInterpreter === true
-          ? true
-          : requestedCapabilities.enableCodeInterpreter === false
-            ? false
-            : undefined,
-      needsResponsesCapabilities: requestedCapabilities.needsResponsesCapabilities === true
+          : compatibilityCapabilities.textVerbosity,
+      needsResponsesCapabilities:
+        requestedCapabilities.needsResponsesCapabilities === true ||
+        compatibilityCapabilities.needsResponsesCapabilities
     }
   };
 }
@@ -178,6 +217,8 @@ export function analyzeMessageIntent({
   let matchedPrefix = '';
   let capabilityUpgradeApplied = false;
   const capabilityReasons = [];
+  const requestedToolKinds = [];
+  const requiredToolKinds = [];
 
   if (hasImages) {
     routeHint = 'advanced';
@@ -195,7 +236,12 @@ export function analyzeMessageIntent({
   }
 
   const needsComplexThinking = shouldBoostThinking(normalizedText);
-  const needsWebSearch = shouldUseWebSearch(normalizedText);
+  const needsLocalRuntimeState = shouldUseLocalRuntimeState(normalizedText);
+  const needsLocalSnapshotInspect = shouldUseLocalSnapshotInspect(normalizedText);
+  const strongWebSearchSignal = hasAnyPattern(normalizedText, STRONG_WEB_SEARCH_PATTERNS);
+  const needsWebSearch =
+    shouldUseWebSearch(normalizedText) &&
+    (!(needsLocalRuntimeState || needsLocalSnapshotInspect) || strongWebSearchSignal);
   const needsCodeInterpreter = shouldUseCodeInterpreter(normalizedText);
 
   if (needsComplexThinking) {
@@ -204,22 +250,36 @@ export function analyzeMessageIntent({
 
   if (needsWebSearch) {
     capabilityReasons.push('web_search');
+    requestedToolKinds.push(TOOL_KIND_WEB_SEARCH);
   }
 
   if (needsCodeInterpreter) {
     capabilityReasons.push('code_interpreter');
+    requestedToolKinds.push(TOOL_KIND_CODE_INTERPRETER);
+  }
+
+  if (needsLocalRuntimeState) {
+    capabilityReasons.push('local_runtime_state');
+    requestedToolKinds.push(TOOL_KIND_LOCAL_RUNTIME_STATE);
+    requiredToolKinds.push(TOOL_KIND_LOCAL_RUNTIME_STATE);
+  }
+
+  if (needsLocalSnapshotInspect) {
+    capabilityReasons.push('local_snapshot_inspect');
+    requestedToolKinds.push(TOOL_KIND_LOCAL_SNAPSHOT_INSPECT);
+    requiredToolKinds.push(TOOL_KIND_LOCAL_SNAPSHOT_INSPECT);
   }
 
   const requestedReasoningEffort =
-    routeHint === 'default' && (needsComplexThinking || needsWebSearch || needsCodeInterpreter)
+    routeHint === 'default' &&
+    (needsComplexThinking || needsWebSearch || needsCodeInterpreter)
       ? 'high'
       : '';
   const requestedTextVerbosity =
-    routeHint === 'default' && (needsComplexThinking || needsWebSearch || needsCodeInterpreter)
+    routeHint === 'default' &&
+    (needsComplexThinking || needsWebSearch || needsCodeInterpreter)
       ? 'high'
       : '';
-  let requestedEnableWebSearch = needsWebSearch ? true : undefined;
-  let requestedEnableCodeInterpreter = needsCodeInterpreter ? true : undefined;
 
   const defaultSupportsResponses =
     normalizeApiStyle(defaultRoute?.apiStyle, {
@@ -233,12 +293,16 @@ export function analyzeMessageIntent({
       model: advancedRoute?.model,
       baseURL: advancedRoute?.baseURL
     }) === 'responses';
-  const needsResponsesCapabilities = Boolean(
-    requestedReasoningEffort ||
-      requestedTextVerbosity ||
-      requestedEnableWebSearch === true ||
-      requestedEnableCodeInterpreter === true
-  );
+
+  const requestedTools = createToolSelection({
+    requested: requestedToolKinds,
+    required: requiredToolKinds
+  });
+  const needsResponsesCapabilities = deriveCompatibilityCapabilities({
+    requestedTools,
+    reasoningEffort: requestedReasoningEffort,
+    textVerbosity: requestedTextVerbosity
+  }).needsResponsesCapabilities;
 
   if (
     routeHint === 'default' &&
@@ -248,14 +312,6 @@ export function analyzeMessageIntent({
   ) {
     routeHint = 'advanced';
     capabilityUpgradeApplied = true;
-
-    if (!needsWebSearch) {
-      requestedEnableWebSearch = false;
-    }
-
-    if (!needsCodeInterpreter) {
-      requestedEnableCodeInterpreter = false;
-    }
   }
 
   return createMessageIntentSignals({
@@ -269,11 +325,10 @@ export function analyzeMessageIntent({
     },
     capabilityReasons,
     capabilityUpgradeApplied,
+    requestedTools,
     requestedCapabilities: {
       reasoningEffort: requestedReasoningEffort,
       textVerbosity: requestedTextVerbosity,
-      enableWebSearch: requestedEnableWebSearch,
-      enableCodeInterpreter: requestedEnableCodeInterpreter,
       needsResponsesCapabilities
     }
   });

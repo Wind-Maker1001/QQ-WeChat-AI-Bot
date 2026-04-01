@@ -21,37 +21,39 @@ test('provider fallback policy classifies transport failures as transient', () =
 
 test('provider fallback decision only allows plain text transient fallback requests', () => {
   const allowed = createProviderFallbackDecision({
-    routePolicy: {
-      apiStyle: 'responses',
-      model: 'gpt-5.4',
-      reasoningEffort: 'high',
-      textVerbosity: 'high'
-    },
     request: {
       userText: 'hello',
       imageInputs: []
     },
-    effectiveRequest: {
-      enableWebSearch: false,
-      enableCodeInterpreter: false
+    primaryToolSupport: {
+      requestedTools: {
+        requested: [],
+        required: []
+      },
+      effectiveHostedTools: [],
+      hasSuppressedRequiredTools: false
+    },
+    fallbackToolSupport: {
+      effectiveTools: []
     },
     deepseekProvider: {},
     primaryError: { status: 502 }
   });
   const blocked = createProviderFallbackDecision({
-    routePolicy: {
-      apiStyle: 'responses',
-      model: 'gpt-5.4',
-      reasoningEffort: 'high',
-      textVerbosity: 'high'
-    },
     request: {
       userText: 'hello',
       imageInputs: []
     },
-    effectiveRequest: {
-      enableWebSearch: true,
-      enableCodeInterpreter: false
+    primaryToolSupport: {
+      requestedTools: {
+        requested: ['web_search'],
+        required: ['web_search']
+      },
+      effectiveHostedTools: ['web_search'],
+      hasSuppressedRequiredTools: false
+    },
+    fallbackToolSupport: {
+      effectiveTools: []
     },
     deepseekProvider: {},
     primaryError: { status: 502 }
@@ -63,7 +65,7 @@ test('provider fallback decision only allows plain text transient fallback reque
   });
   assert.deepEqual(blocked, {
     shouldFallback: false,
-    reason: 'responses-tools-required'
+    reason: 'fallback-cannot-preserve-required-tools'
   });
 });
 

@@ -1,3 +1,9 @@
+import {
+  TOOL_KIND_CODE_INTERPRETER,
+  TOOL_KIND_WEB_SEARCH,
+  buildRouteToolPolicy
+} from './tool-registry.mjs';
+
 export const API_STYLE_RESPONSES = 'responses';
 export const API_STYLE_CHAT_COMPLETIONS = 'chat_completions';
 
@@ -114,6 +120,7 @@ export function resolveRouteRequestPolicy({
   textVerbosity,
   enableWebSearch,
   enableCodeInterpreter,
+  toolPolicy,
   fallback
 }) {
   const resolvedModel = model || fallback?.model || '';
@@ -123,6 +130,29 @@ export function resolveRouteRequestPolicy({
     model: resolvedModel,
     baseURL: resolvedBaseURL
   });
+
+  const explicitToolPolicy =
+    toolPolicy && typeof toolPolicy === 'object'
+      ? toolPolicy
+      : {
+          enabledTools: [
+            ...(normalizeBooleanFlag(enableWebSearch ?? false, false) ? [TOOL_KIND_WEB_SEARCH] : []),
+            ...(normalizeBooleanFlag(enableCodeInterpreter ?? false, false) ? [TOOL_KIND_CODE_INTERPRETER] : [])
+          ]
+        };
+  const fallbackToolPolicy = fallback?.toolPolicy && typeof fallback.toolPolicy === 'object'
+    ? fallback.toolPolicy
+    : {
+        enabledTools: [
+          ...(normalizeBooleanFlag(fallback?.enableWebSearch ?? false, false) ? [TOOL_KIND_WEB_SEARCH] : []),
+          ...(normalizeBooleanFlag(fallback?.enableCodeInterpreter ?? false, false) ? [TOOL_KIND_CODE_INTERPRETER] : [])
+        ]
+      };
+  const resolvedToolPolicy = buildRouteToolPolicy(
+    explicitToolPolicy.enabledTools.length > 0 ? explicitToolPolicy : fallbackToolPolicy
+  );
+  const resolvedEnableWebSearch = resolvedToolPolicy.enabledTools.includes(TOOL_KIND_WEB_SEARCH);
+  const resolvedEnableCodeInterpreter = resolvedToolPolicy.enabledTools.includes(TOOL_KIND_CODE_INTERPRETER);
 
   return {
     routeName,
@@ -140,11 +170,9 @@ export function resolveRouteRequestPolicy({
       resolvedModel,
       resolvedApiStyle
     ),
-    enableWebSearch: normalizeBooleanFlag(enableWebSearch ?? fallback?.enableWebSearch ?? false, false),
-    enableCodeInterpreter: normalizeBooleanFlag(
-      enableCodeInterpreter ?? fallback?.enableCodeInterpreter ?? false,
-      false
-    )
+    enableWebSearch: resolvedEnableWebSearch,
+    enableCodeInterpreter: resolvedEnableCodeInterpreter,
+    toolPolicy: resolvedToolPolicy
   };
 }
 

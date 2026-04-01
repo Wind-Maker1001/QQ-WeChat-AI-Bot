@@ -1,4 +1,5 @@
 import { analyzeMessageIntent } from './message-analysis-policy.mjs';
+import { createToolSelection } from './tool-registry.mjs';
 
 export {
   DEFAULT_ADVANCED_TRIGGER_PREFIXES,
@@ -69,6 +70,21 @@ function normalizeRouteDecisionRequestedCapabilities(requestedCapabilities) {
   };
 }
 
+function normalizeRouteDecisionRequestedTools(requestedTools, requestedCapabilities = {}) {
+  const explicitSelection = createToolSelection(requestedTools);
+
+  if (explicitSelection.requested.length > 0 || explicitSelection.required.length > 0) {
+    return explicitSelection;
+  }
+
+  return createToolSelection({
+    requested: [
+      ...(requestedCapabilities?.enableWebSearch === true ? ['web_search'] : []),
+      ...(requestedCapabilities?.enableCodeInterpreter === true ? ['code_interpreter'] : [])
+    ]
+  });
+}
+
 function categorizeReasonTags(reasonTags) {
   const normalizedReasonTags = Array.isArray(reasonTags)
     ? reasonTags.filter((tag) => typeof tag === 'string' && tag)
@@ -120,7 +136,8 @@ export function createRouteDecision({
   trigger = {},
   decisionMetadata = {},
   reasonGroups = {},
-  requestedCapabilities = {}
+  requestedCapabilities = {},
+  requestedTools = {}
 } = {}) {
   const normalizedTrigger = normalizeRouteDecisionTrigger(trigger, { imageCount });
   const normalizedDecisionMetadata =
@@ -163,6 +180,8 @@ export function createRouteDecision({
 
   const normalizedRequestedCapabilities =
     normalizeRouteDecisionRequestedCapabilities(requestedCapabilities);
+  const normalizedRequestedTools =
+    normalizeRouteDecisionRequestedTools(requestedTools, normalizedRequestedCapabilities);
   const reasonTags = flattenReasonGroups(normalizedReasonGroups);
   const normalizedReasonTags = reasonTags.length > 0 ? reasonTags : ['default'];
 
@@ -189,7 +208,8 @@ export function createRouteDecision({
         Array.isArray(normalizedReasonGroups.upgradeReasons) &&
         normalizedReasonGroups.upgradeReasons.includes('capability_upgrade')
     },
-    requestedCapabilities: normalizedRequestedCapabilities
+    requestedCapabilities: normalizedRequestedCapabilities,
+    requestedTools: normalizedRequestedTools
   };
 }
 
@@ -264,6 +284,7 @@ export function buildRouteDecisionSummary(routeInfo) {
     reasonTags: getRouteDecisionReasonTags(routeInfo),
     reasonGroups: getRouteDecisionReasonGroups(routeInfo),
     requestedCapabilities: getRouteDecisionRequestedCapabilities(routeInfo),
+    requestedTools: getRouteDecisionRequestedTools(routeInfo),
     routeReason: formatRouteDecisionReason(routeInfo),
     matchedPrefix: getRouteDecisionMatchedPrefix(routeInfo)
   };
@@ -281,6 +302,13 @@ export function getRouteDecisionMatchedPrefix(routeInfo) {
 
 export function getRouteDecisionRequestedCapabilities(routeInfo) {
   return normalizeRouteDecisionRequestedCapabilities(routeInfo?.requestedCapabilities);
+}
+
+export function getRouteDecisionRequestedTools(routeInfo) {
+  return normalizeRouteDecisionRequestedTools(
+    routeInfo?.requestedTools,
+    routeInfo?.requestedCapabilities
+  );
 }
 
 export function resolveRouteDecision({
@@ -316,6 +344,7 @@ export function resolveRouteDecision({
       capabilityReasons: intentSignals.capabilityReasons,
       upgradeReasons: intentSignals.capabilityUpgradeApplied ? ['capability_upgrade'] : []
     },
-    requestedCapabilities: intentSignals.requestedCapabilities
+    requestedCapabilities: intentSignals.requestedCapabilities,
+    requestedTools: intentSignals.requestedTools
   });
 }

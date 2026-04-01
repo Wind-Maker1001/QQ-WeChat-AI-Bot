@@ -1,3 +1,5 @@
+import { buildRouteToolPolicy } from './tool-registry.mjs';
+
 export class RuntimeConfigValidationError extends Error {
   constructor(message) {
     super(message);
@@ -6,6 +8,17 @@ export class RuntimeConfigValidationError extends Error {
 }
 
 function cloneRouteConfig(route = {}) {
+  const toolPolicy = buildRouteToolPolicy(
+    route?.toolPolicy && typeof route.toolPolicy === 'object'
+      ? route.toolPolicy
+      : {
+          enabledTools: [
+            ...(route?.enableWebSearch === true ? ['web_search'] : []),
+            ...(route?.enableCodeInterpreter === true ? ['code_interpreter'] : [])
+          ]
+        }
+  );
+
   return Object.freeze({
     apiKey: typeof route.apiKey === 'string' ? route.apiKey : '',
     model: typeof route.model === 'string' ? route.model : '',
@@ -14,7 +27,8 @@ function cloneRouteConfig(route = {}) {
     reasoningEffort: typeof route.reasoningEffort === 'string' ? route.reasoningEffort : '',
     textVerbosity: typeof route.textVerbosity === 'string' ? route.textVerbosity : '',
     enableWebSearch: route.enableWebSearch === true,
-    enableCodeInterpreter: route.enableCodeInterpreter === true
+    enableCodeInterpreter: route.enableCodeInterpreter === true,
+    toolPolicy
   });
 }
 

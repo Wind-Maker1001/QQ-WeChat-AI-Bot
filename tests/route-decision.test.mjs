@@ -7,6 +7,7 @@ import {
   formatRouteDecisionReason,
   getRouteDecisionReasonGroups,
   getRouteDecisionRequestedCapabilities,
+  getRouteDecisionRequestedTools,
   getRouteDecisionTrigger
 } from '../src/domain/route-decision.mjs';
 
@@ -32,6 +33,10 @@ test('createRouteDecision normalizes structured reason groups and requested capa
       textVerbosity: 'high',
       enableWebSearch: true,
       enableCodeInterpreter: false
+    },
+    requestedTools: {
+      requested: ['web_search'],
+      required: []
     }
   });
 
@@ -53,6 +58,10 @@ test('createRouteDecision normalizes structured reason groups and requested capa
     enableWebSearch: true,
     enableCodeInterpreter: false,
     needsResponsesCapabilities: true
+  });
+  assert.deepEqual(getRouteDecisionRequestedTools(decision), {
+    requested: ['web_search'],
+    required: []
   });
   assert.equal(formatRouteDecisionReason(decision), 'image+web_search+capability_upgrade');
 });
@@ -116,6 +125,10 @@ test('buildRouteDecisionSummary exposes normalized route metadata', () => {
       enableWebSearch: undefined,
       enableCodeInterpreter: undefined,
       needsResponsesCapabilities: true
+    },
+    requestedTools: {
+      requested: [],
+      required: []
     },
     routeReason: 'complex',
     matchedPrefix: ''

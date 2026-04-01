@@ -5,6 +5,7 @@ import { buildControlConfigFromEnvValues, normalizeControlConfigInput } from './
 import { readEnvFileValues } from './env-file-store.mjs';
 import { loadRuntimeConfig } from './load-runtime-config.mjs';
 import { validateRuntimeConfig } from '../../domain/runtime-config.mjs';
+import { buildRouteToolPolicy } from '../../domain/tool-registry.mjs';
 
 export const RUNTIME_SETTINGS_FILE_NAME = 'runtime-settings.json';
 export const RUNTIME_SETTINGS_VERSION = 2;
@@ -176,6 +177,41 @@ function normalizeApiStyles(apiStyles, bootstrapEnvValues = {}, legacyHiddenSett
   };
 }
 
+function normalizeToolPolicies(toolPolicies, settings = {}, bootstrapEnvValues = {}) {
+  const source = toolPolicies && typeof toolPolicies === 'object' ? toolPolicies : {};
+  const defaultEnabledTools =
+    source.default && typeof source.default === 'object'
+      ? source.default.enabledTools
+      : [
+          ...((settings?.openAiDefaultEnableWebSearch ?? bootstrapEnvValues.OPENAI_DEFAULT_ENABLE_WEB_SEARCH) === 'true'
+            ? ['web_search']
+            : []),
+          ...((settings?.openAiDefaultEnableCodeInterpreter ?? bootstrapEnvValues.OPENAI_DEFAULT_ENABLE_CODE_INTERPRETER) === 'true'
+            ? ['code_interpreter']
+            : [])
+        ];
+  const advancedEnabledTools =
+    source.advanced && typeof source.advanced === 'object'
+      ? source.advanced.enabledTools
+      : [
+          ...((settings?.openAiAdvancedEnableWebSearch ?? bootstrapEnvValues.OPENAI_ADVANCED_ENABLE_WEB_SEARCH) === 'true'
+            ? ['web_search']
+            : []),
+          ...((settings?.openAiAdvancedEnableCodeInterpreter ?? bootstrapEnvValues.OPENAI_ADVANCED_ENABLE_CODE_INTERPRETER) === 'true'
+            ? ['code_interpreter']
+            : [])
+        ];
+
+  return {
+    default: buildRouteToolPolicy({
+      enabledTools: defaultEnabledTools
+    }),
+    advanced: buildRouteToolPolicy({
+      enabledTools: advancedEnabledTools
+    })
+  };
+}
+
 function createImportRuntimeConfig({ cwd = process.cwd(), bootstrapEnvValues = {} } = {}) {
   return loadRuntimeConfig({
     cwd,
@@ -249,19 +285,22 @@ export function buildRuntimeConfigFromSettingsSnapshot({ cwd = process.cwd(), sn
   return loadRuntimeConfig({
     cwd,
     env: buildRuntimeEnvValuesFromSettingsSnapshot(snapshot),
+    toolPolicies: snapshot?.toolPolicies,
     loadDotenv: false
   });
 }
 
 function normalizeRuntimeSettingsSnapshot(snapshot, bootstrapEnvValues, fallbackConfig = EMPTY_CONTROL_CONFIG) {
+  const normalizedSettings = normalizeControlConfigInput(snapshot?.settings, fallbackConfig);
   return {
     version: RUNTIME_SETTINGS_VERSION,
     savedAt:
       typeof snapshot?.savedAt === 'string' && snapshot.savedAt.trim()
         ? snapshot.savedAt.trim()
         : new Date().toISOString(),
-    settings: normalizeControlConfigInput(snapshot?.settings, fallbackConfig),
-    apiStyles: normalizeApiStyles(snapshot?.apiStyles, bootstrapEnvValues, snapshot?.hiddenSettings)
+    settings: normalizedSettings,
+    apiStyles: normalizeApiStyles(snapshot?.apiStyles, bootstrapEnvValues, snapshot?.hiddenSettings),
+    toolPolicies: normalizeToolPolicies(snapshot?.toolPolicies, normalizedSettings, bootstrapEnvValues)
   };
 }
 
@@ -369,7 +408,15 @@ export async function writeRuntimeSettings({
       config,
       normalizeControlConfigInput(baseSnapshot?.settings, EMPTY_CONTROL_CONFIG)
     ),
-    apiStyles: normalizeApiStyles(baseSnapshot?.apiStyles, currentState.bootstrapEnvValues)
+    apiStyles: normalizeApiStyles(baseSnapshot?.apiStyles, currentState.bootstrapEnvValues),
+    toolPolicies: normalizeToolPolicies(
+      baseSnapshot?.toolPolicies,
+      normalizeControlConfigInput(
+        config,
+        normalizeControlConfigInput(baseSnapshot?.settings, EMPTY_CONTROL_CONFIG)
+      ),
+      currentState.bootstrapEnvValues
+    )
   };
   const nextRuntimeConfig = buildRuntimeConfigFromSettingsSnapshot({
     cwd,

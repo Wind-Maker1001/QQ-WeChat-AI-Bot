@@ -33,6 +33,14 @@ test('ensureRuntimeSettings creates a v2 snapshot from env-only installs', async
     default: 'responses',
     advanced: 'chat_completions'
   });
+  assert.deepEqual(snapshot.toolPolicies, {
+    default: {
+      enabledTools: []
+    },
+    advanced: {
+      enabledTools: []
+    }
+  });
   assert.equal(snapshot.settings.openAiApiKey, 'shared-key');
   assert.equal(snapshot.settings.napCatToken, 'test-token');
 });
@@ -73,6 +81,14 @@ test('ensureRuntimeSettings migrates hiddenSettings v1 snapshots to apiStyles', 
   assert.deepEqual(snapshot.apiStyles, {
     default: 'chat_completions',
     advanced: 'responses'
+  });
+  assert.deepEqual(snapshot.toolPolicies, {
+    default: {
+      enabledTools: []
+    },
+    advanced: {
+      enabledTools: []
+    }
   });
   assert.equal('hiddenSettings' in snapshot, false);
   assert.equal(result.runtimeConfig.openai.defaultRoute.apiStyle, 'chat_completions');

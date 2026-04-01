@@ -9,6 +9,7 @@ import {
 } from '../llm/openai-provider.mjs';
 import { DEFAULT_ADVANCED_TRIGGER_PREFIXES } from '../../domain/route-decision.mjs';
 import { createRuntimeConfig } from '../../domain/runtime-config.mjs';
+import { buildRouteToolPolicy } from '../../domain/tool-registry.mjs';
 import { parseBoolean, parseCsvList, parsePositiveInt } from '../../utils.mjs';
 
 const DEFAULT_NAPCAT_WS_URL = 'ws://127.0.0.1:3001';
@@ -23,7 +24,8 @@ export function loadRuntimeConfig({
   cwd = process.cwd(),
   env = process.env,
   loadDotenv = env === process.env,
-  dotenvPath
+  dotenvPath,
+  toolPolicies = {}
 } = {}) {
   if (loadDotenv) {
     dotenv.config(dotenvPath ? { path: dotenvPath } : undefined);
@@ -65,6 +67,26 @@ export function loadRuntimeConfig({
   const advancedTriggerPrefixes = parseCsvList(
     env.OPENAI_ADVANCED_TRIGGER_PREFIXES || DEFAULT_ADVANCED_TRIGGER_PREFIXES.join(',')
   );
+  const defaultRouteToolPolicy = buildRouteToolPolicy(
+    toolPolicies?.default && typeof toolPolicies.default === 'object'
+      ? toolPolicies.default
+      : {
+          enabledTools: [
+            ...(defaultOpenAiEnableWebSearch ? ['web_search'] : []),
+            ...(defaultOpenAiEnableCodeInterpreter ? ['code_interpreter'] : [])
+          ]
+        }
+  );
+  const advancedRouteToolPolicy = buildRouteToolPolicy(
+    toolPolicies?.advanced && typeof toolPolicies.advanced === 'object'
+      ? toolPolicies.advanced
+      : {
+          enabledTools: [
+            ...(advancedOpenAiEnableWebSearch ? ['web_search'] : []),
+            ...(advancedOpenAiEnableCodeInterpreter ? ['code_interpreter'] : [])
+          ]
+        }
+  );
 
   return createRuntimeConfig({
     openai: {
@@ -76,7 +98,8 @@ export function loadRuntimeConfig({
         reasoningEffort: defaultOpenAiReasoningEffort,
         textVerbosity: defaultOpenAiTextVerbosity,
         enableWebSearch: defaultOpenAiEnableWebSearch,
-        enableCodeInterpreter: defaultOpenAiEnableCodeInterpreter
+        enableCodeInterpreter: defaultOpenAiEnableCodeInterpreter,
+        toolPolicy: defaultRouteToolPolicy
       },
       advancedRoute: {
         apiKey: advancedOpenAiApiKey,
@@ -86,7 +109,8 @@ export function loadRuntimeConfig({
         reasoningEffort: advancedOpenAiReasoningEffort,
         textVerbosity: advancedOpenAiTextVerbosity,
         enableWebSearch: advancedOpenAiEnableWebSearch,
-        enableCodeInterpreter: advancedOpenAiEnableCodeInterpreter
+        enableCodeInterpreter: advancedOpenAiEnableCodeInterpreter,
+        toolPolicy: advancedRouteToolPolicy
       },
       advancedTriggerPrefixes
     },

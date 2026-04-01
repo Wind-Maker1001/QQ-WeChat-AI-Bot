@@ -188,6 +188,79 @@ test('message turn strategy handles current-turn capability replies without call
   assert.equal(reply.conversationDelta.clearPreviousResponseId, true);
 });
 
+test('message turn strategy executes local tool replies before calling the router', async () => {
+  let generateReplyCallCount = 0;
+  const strategy = buildMessageTurnStrategy({
+    channelId: 'qq',
+    chatId: 'chat_1',
+    userId: 'user_1',
+    routeInfo: createRouteDecision({
+      route: 'default',
+      userText: 'Show the current runtime status.',
+      selectedRoute: {
+        model: 'gpt-5.4',
+        apiStyle: 'responses'
+      },
+      requestedTools: {
+        requested: ['local_runtime_state'],
+        required: ['local_runtime_state']
+      }
+    }),
+    routeState: createConversationState().routes.default,
+    conversationState: createConversationState(),
+    llmRouter: {
+      describeRequest() {
+        return {
+          route: 'default',
+          model: 'gpt-5.4',
+          configuredApiStyle: 'responses',
+          effectiveApiStyle: 'responses',
+          requestedTools: {
+            requested: ['local_runtime_state'],
+            required: ['local_runtime_state']
+          },
+          effectiveTools: ['local_runtime_state'],
+          effectiveLocalTools: ['local_runtime_state'],
+          suppressedTools: []
+        };
+      },
+      async tryExecuteLocalToolRequest() {
+        return {
+          text: 'Current route: default'
+        };
+      },
+      async generateReply() {
+        generateReplyCallCount += 1;
+        throw new Error('generateReply should not be called when a required local tool handled the turn.');
+      }
+    }
+  });
+
+  const reply = await executeMessageTurnStrategy({
+    strategy,
+    llmRouter: {
+      async tryExecuteLocalToolRequest() {
+        return {
+          text: 'Current route: default'
+        };
+      },
+      async generateReply() {
+        generateReplyCallCount += 1;
+        throw new Error('generateReply should not be called when a required local tool handled the turn.');
+      }
+    },
+    logger: {
+      info() {},
+      error() {}
+    }
+  });
+
+  assert.equal(generateReplyCallCount, 0);
+  assert.equal(reply.text, 'Current route: default');
+  assert.deepEqual(reply.effectiveTools, ['local_runtime_state']);
+  assert.equal(reply.executionKind, EXECUTION_KIND_LOCAL_CAPABILITY_REPLY);
+});
+
 test('message turn strategy derives direct failure projection for request failures', async () => {
   const strategy = buildMessageTurnStrategy({
     channelId: 'qq',

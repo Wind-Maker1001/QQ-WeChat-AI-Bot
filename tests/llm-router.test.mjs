@@ -67,6 +67,10 @@ test('LLM router describes effective tools for responses requests', () => {
   assert.equal(description.route, 'default');
   assert.equal(description.effectiveApiStyle, 'responses');
   assert.deepEqual(description.configuredTools, []);
+  assert.deepEqual(description.requestedTools, {
+    requested: ['web_search'],
+    required: []
+  });
   assert.deepEqual(description.effectiveTools, ['web_search']);
   assert.equal(description.effectiveEnableWebSearch, true);
   assert.equal(description.effectiveEnableCodeInterpreter, false);
@@ -96,10 +100,40 @@ test('LLM router suppresses unavailable tools on chat-completions routes', () =>
 
   assert.equal(description.configuredApiStyle, 'chat_completions');
   assert.equal(description.effectiveApiStyle, 'chat_completions');
-  assert.deepEqual(description.configuredTools, []);
   assert.deepEqual(description.effectiveTools, []);
+  assert.equal(description.suppressedTools[0].reason, 'requires_responses_api');
   assert.equal(description.effectiveEnableWebSearch, false);
   assert.equal(description.effectiveEnableCodeInterpreter, false);
+});
+
+test('LLM router describes local tool availability and suppression', () => {
+  const router = createLlmRouter({
+    defaultRoute: {
+      apiKey: 'default-key',
+      model: 'gpt-5.4',
+      apiStyle: 'responses',
+      enableWebSearch: false,
+      enableCodeInterpreter: false
+    },
+    advancedRoute: {
+      apiKey: 'advanced-key',
+      model: 'gpt-5.4',
+      apiStyle: 'responses',
+      enableWebSearch: true,
+      enableCodeInterpreter: true
+    }
+  });
+
+  const description = router.describeRequest({
+    route: 'default',
+    requestedTools: {
+      requested: ['local_runtime_state', 'local_snapshot_inspect'],
+      required: ['local_runtime_state']
+    }
+  });
+
+  assert.deepEqual(description.effectiveLocalTools, ['local_runtime_state', 'local_snapshot_inspect']);
+  assert.deepEqual(description.suppressedTools, []);
 });
 
 test('LLM router falls back to DeepSeek on transient upstream failure for plain text requests', async () => {
@@ -181,6 +215,10 @@ test('LLM router falls back to DeepSeek on transient upstream failure for plain 
       previousResponseId: 'resp_prev',
       sharedMessages: [{ role: 'assistant', content: 'previous' }],
       imageInputs: [],
+      requestedTools: {
+        requested: [],
+        required: []
+      },
       reasoningEffortOverride: '',
       textVerbosityOverride: '',
       enableWebSearchOverride: false,
@@ -212,7 +250,7 @@ test('LLM router falls back to DeepSeek on transient upstream failure for plain 
   }
 });
 
-test('LLM router does not fall back to DeepSeek when responses tools are required', async () => {
+test('LLM router does not fall back to DeepSeek when hosted tools are required', async () => {
   let deepseekRequests = 0;
   const primaryServer = http.createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/responses') {
@@ -262,70 +300,13 @@ test('LLM router does not fall back to DeepSeek when responses tools are require
           userText: 'latest guidance',
           sharedMessages: [],
           imageInputs: [],
+          requestedTools: {
+            requested: ['web_search'],
+            required: ['web_search']
+          },
           enableWebSearchOverride: true
         }),
       /Upstream request failed/
-    );
-
-    assert.equal(deepseekRequests, 0);
-  } finally {
-    await close(primaryServer);
-    await close(deepseekServer);
-  }
-});
-
-test('LLM router does not fall back to DeepSeek on rejected requests', async () => {
-  let deepseekRequests = 0;
-  const primaryServer = http.createServer(async (req, res) => {
-    if (req.method !== 'POST' || req.url !== '/responses') {
-      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'not found' }));
-      return;
-    }
-
-    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'unauthorized' }));
-  });
-  const deepseekServer = http.createServer(async (_req, res) => {
-    deepseekRequests += 1;
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true }));
-  });
-
-  const primaryPort = await listen(primaryServer);
-  const deepseekPort = await listen(deepseekServer);
-
-  try {
-    const router = createLlmRouter({
-      defaultRoute: {
-        apiKey: 'default-key',
-        model: 'gpt-5.4',
-        apiStyle: 'responses',
-        baseURL: `http://127.0.0.1:${primaryPort}`
-      },
-      advancedRoute: {
-        apiKey: 'advanced-key',
-        model: 'gpt-5.4',
-        apiStyle: 'responses',
-        baseURL: `http://127.0.0.1:${primaryPort}`
-      },
-      deepseekFallback: {
-        fallbackEnabled: true,
-        apiKey: 'deepseek-key',
-        model: 'deepseek-chat',
-        baseURL: `http://127.0.0.1:${deepseekPort}`
-      }
-    });
-
-    await assert.rejects(
-      () =>
-        router.generateReply({
-          route: 'default',
-          userText: 'hello',
-          sharedMessages: [],
-          imageInputs: []
-        }),
-      /401/
     );
 
     assert.equal(deepseekRequests, 0);

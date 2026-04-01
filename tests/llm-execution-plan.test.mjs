@@ -66,7 +66,11 @@ test('execution plan builds direct request with session context and images', () 
     reasoningEffortOverride: '',
     textVerbosityOverride: '',
     enableWebSearchOverride: undefined,
-    enableCodeInterpreterOverride: undefined
+    enableCodeInterpreterOverride: undefined,
+    requestedTools: {
+      requested: [],
+      required: []
+    }
   });
   assert.equal(executionPlan.deliberation, null);
 });
@@ -114,6 +118,10 @@ test('execution plan formalizes deliberation stage requests for complex text tur
   assert.equal(executionPlan.deliberation.plannerRequest.enableWebSearchOverride, false);
   assert.equal(executionPlan.deliberation.plannerRequest.enableCodeInterpreterOverride, false);
   assert.equal(executionPlan.deliberation.plannerRequest.storeOverride, false);
+  assert.deepEqual(executionPlan.deliberation.plannerRequest.requestedTools, {
+    requested: [],
+    required: []
+  });
   assert.deepEqual(executionPlan.deliberation.plannerRequest.imageInputs, []);
 
   assert.equal(executionPlan.deliberation.draftRequest.previousResponseId, null);
@@ -122,6 +130,10 @@ test('execution plan formalizes deliberation stage requests for complex text tur
   assert.equal(executionPlan.deliberation.draftRequest.enableWebSearchOverride, true);
   assert.equal(executionPlan.deliberation.draftRequest.enableCodeInterpreterOverride, false);
   assert.equal(executionPlan.deliberation.draftRequest.storeOverride, false);
+  assert.deepEqual(executionPlan.deliberation.draftRequest.requestedTools, {
+    requested: ['web_search'],
+    required: []
+  });
 
   assert.equal(executionPlan.deliberation.rewriteRequest.previousResponseId, null);
   assert.equal(executionPlan.deliberation.rewriteRequest.reasoningEffortOverride, 'high');
@@ -129,6 +141,10 @@ test('execution plan formalizes deliberation stage requests for complex text tur
   assert.equal(executionPlan.deliberation.rewriteRequest.enableWebSearchOverride, true);
   assert.equal(executionPlan.deliberation.rewriteRequest.enableCodeInterpreterOverride, false);
   assert.equal(executionPlan.deliberation.rewriteRequest.storeOverride, false);
+  assert.deepEqual(executionPlan.deliberation.rewriteRequest.requestedTools, {
+    requested: ['web_search'],
+    required: []
+  });
 });
 
 test('execution plan merges route histories and clears stale response ids when routes diverge', () => {

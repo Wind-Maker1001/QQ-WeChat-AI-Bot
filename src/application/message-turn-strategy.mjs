@@ -9,6 +9,7 @@ import {
 import { runDeliberationPipeline } from './deliberation-executor.mjs';
 import { tryBuildCurrentTurnCapabilityReply } from './current-turn-capability-reply.mjs';
 import { buildMessageTurnSpec } from './message-turn-spec.mjs';
+import { createToolSelection } from '../domain/tool-registry.mjs';
 
 function describeRequest(llmRouter, request) {
   if (typeof llmRouter?.describeRequest !== 'function') {
@@ -147,11 +148,18 @@ function buildLocalCapabilityReply({
       normalizedRequestDescriptor.configuredEnableCodeInterpreter === true,
     effectiveEnableCodeInterpreter:
       normalizedRequestDescriptor.effectiveEnableCodeInterpreter === true,
+    requestedTools:
+      normalizedRequestDescriptor.requestedTools && typeof normalizedRequestDescriptor.requestedTools === 'object'
+        ? normalizedRequestDescriptor.requestedTools
+        : createToolSelection(),
     configuredTools: Array.isArray(normalizedRequestDescriptor.configuredTools)
       ? normalizedRequestDescriptor.configuredTools
       : [],
     effectiveTools: Array.isArray(normalizedRequestDescriptor.effectiveTools)
       ? normalizedRequestDescriptor.effectiveTools
+      : [],
+    suppressedTools: Array.isArray(normalizedRequestDescriptor.suppressedTools)
+      ? normalizedRequestDescriptor.suppressedTools
       : []
   };
 }
@@ -215,6 +223,34 @@ export async function executeMessageTurnStrategy({
         }),
         strategy
       );
+    }
+
+    if (
+      Array.isArray(strategy.executionAssembly.direct.descriptor?.effectiveLocalTools) &&
+      strategy.executionAssembly.direct.descriptor.effectiveLocalTools.length > 0 &&
+      typeof llmRouter?.tryExecuteLocalToolRequest === 'function'
+    ) {
+      const localToolReply = await llmRouter.tryExecuteLocalToolRequest({
+        userText: strategy.turnSpec.userText,
+        routeInfo: strategy.turnSpec.routeInfo,
+        requestDescriptor: strategy.executionAssembly.direct.descriptor
+      });
+
+      if (localToolReply?.text) {
+        return attachExecutionMetadata(
+          buildLocalCapabilityReply({
+            turnSpec: strategy.turnSpec,
+            requestDescriptor: strategy.executionAssembly.direct.descriptor,
+            replyText: localToolReply.text
+          }),
+          {
+            ...strategy,
+            executionKind: 'local-capability-reply',
+            executionSummary: buildExecutionProjection('local-capability-reply').summary,
+            executionProjection: buildExecutionProjection('local-capability-reply')
+          }
+        );
+      }
     }
 
     if (strategy.executionAssembly.mode === 'deliberation') {

@@ -15,8 +15,10 @@ import { assertChannelPort } from '../domain/channel-port.mjs';
 import { buildConversationId } from '../domain/conversation-state.mjs';
 import {
   formatRouteDecisionReason,
-  getRouteDecisionRequestedCapabilities
+  getRouteDecisionRequestedCapabilities,
+  getRouteDecisionRequestedTools
 } from '../domain/route-decision.mjs';
+import { formatSuppressedTools } from '../domain/tool-registry.mjs';
 import { formatError, splitText, summarizeText } from '../utils.mjs';
 
 const IMAGE_REFERENCE_KEYWORDS = [
@@ -168,18 +170,10 @@ function formatToolList(toolKinds) {
 }
 
 function formatDecisionToolOverrides(routeInfo) {
-  const requestedCapabilities = getRouteDecisionRequestedCapabilities(routeInfo);
-  const toolKinds = [];
-
-  if (requestedCapabilities.enableWebSearch === true) {
-    toolKinds.push('web_search');
-  }
-
-  if (requestedCapabilities.enableCodeInterpreter === true) {
-    toolKinds.push('code_interpreter');
-  }
-
-  return toolKinds.length > 0 ? toolKinds.join('+') : 'none';
+  const requestedTools = getRouteDecisionRequestedTools(routeInfo);
+  return requestedTools.requested.length > 0
+    ? requestedTools.requested.join('+')
+    : 'none';
 }
 
 async function resolveImageInputs(imageRefs, channelPort) {
@@ -335,7 +329,7 @@ export async function orchestrateIncomingMessage({
       );
     } else {
       logger.info(
-        `[openai] Reply generated: channel=${channelPort.channelId}, route=${reply.route}, configured_api=${reply.configuredApiStyle || reply.apiStyle}, effective_api=${reply.effectiveApiStyle || reply.apiStyle}, model=${reply.model}, configured_reasoning=${reply.configuredReasoningEffort || 'none'}, effective_reasoning=${reply.effectiveReasoningEffort || 'none'}, configured_verbosity=${reply.configuredTextVerbosity || 'none'}, effective_verbosity=${reply.effectiveTextVerbosity || 'none'}, configured_tools=${formatToolList(reply.configuredTools)}, effective_tools=${formatToolList(reply.effectiveTools)}, images=${preparedImageInputs.length}, chat_id=${chatId}, user_id=${userId}, response_id=${reply.responseId || 'none'}`
+        `[openai] Reply generated: channel=${channelPort.channelId}, route=${reply.route}, configured_api=${reply.configuredApiStyle || reply.apiStyle}, effective_api=${reply.effectiveApiStyle || reply.apiStyle}, model=${reply.model}, configured_reasoning=${reply.configuredReasoningEffort || 'none'}, effective_reasoning=${reply.effectiveReasoningEffort || 'none'}, configured_verbosity=${reply.configuredTextVerbosity || 'none'}, effective_verbosity=${reply.effectiveTextVerbosity || 'none'}, configured_tools=${formatToolList(reply.configuredTools)}, requested_tools=${formatToolList(reply.requestedTools?.requested)}, effective_tools=${formatToolList(reply.effectiveTools)}, suppressed_tools="${formatSuppressedTools(reply.suppressedTools)}", images=${preparedImageInputs.length}, chat_id=${chatId}, user_id=${userId}, response_id=${reply.responseId || 'none'}`
       );
     }
 

@@ -72,6 +72,26 @@ function normalizeDecisionSummary(summary) {
               : false
         }
       : null;
+  const requestedTools =
+    summary.requestedTools && typeof summary.requestedTools === 'object'
+      ? {
+          requested: Array.isArray(summary.requestedTools.requested)
+            ? summary.requestedTools.requested.filter((tool) => typeof tool === 'string')
+            : [],
+          required: Array.isArray(summary.requestedTools.required)
+            ? summary.requestedTools.required.filter((tool) => typeof tool === 'string')
+            : []
+        }
+      : null;
+  const suppressedTools = Array.isArray(summary.suppressedTools)
+    ? summary.suppressedTools
+        .filter((suppressedTool) => suppressedTool && typeof suppressedTool === 'object')
+        .map((suppressedTool) => ({
+          toolKind:
+            typeof suppressedTool.toolKind === 'string' ? suppressedTool.toolKind : '',
+          reason: typeof suppressedTool.reason === 'string' ? suppressedTool.reason : ''
+        }))
+    : [];
 
   return {
     trigger,
@@ -80,6 +100,8 @@ function normalizeDecisionSummary(summary) {
       : [],
     reasonGroups,
     requestedCapabilities,
+    requestedTools,
+    suppressedTools,
     routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : '',
     matchedPrefix: typeof summary.matchedPrefix === 'string' ? summary.matchedPrefix : ''
   };
@@ -112,8 +134,28 @@ export function normalizeLlmRequestStatus(status) {
     configuredTools: Array.isArray(status.configuredTools)
       ? status.configuredTools.filter((tool) => typeof tool === 'string')
       : [],
+    requestedTools:
+      status.requestedTools && typeof status.requestedTools === 'object'
+        ? {
+            requested: Array.isArray(status.requestedTools.requested)
+              ? status.requestedTools.requested.filter((tool) => typeof tool === 'string')
+              : [],
+            required: Array.isArray(status.requestedTools.required)
+              ? status.requestedTools.required.filter((tool) => typeof tool === 'string')
+              : []
+          }
+        : null,
     effectiveTools: Array.isArray(status.effectiveTools)
       ? status.effectiveTools.filter((tool) => typeof tool === 'string')
+      : [],
+    suppressedTools: Array.isArray(status.suppressedTools)
+      ? status.suppressedTools
+          .filter((suppressedTool) => suppressedTool && typeof suppressedTool === 'object')
+          .map((suppressedTool) => ({
+            toolKind:
+              typeof suppressedTool.toolKind === 'string' ? suppressedTool.toolKind : '',
+            reason: typeof suppressedTool.reason === 'string' ? suppressedTool.reason : ''
+          }))
       : [],
     executionKind: typeof status.executionKind === 'string' ? status.executionKind : '',
     executionSummary: typeof status.executionSummary === 'string' ? status.executionSummary : '',
@@ -138,6 +180,26 @@ export function normalizeLlmFailureStatus(status) {
     routeReason: typeof status.routeReason === 'string' ? status.routeReason : '',
     matchedPrefix: typeof status.matchedPrefix === 'string' ? status.matchedPrefix : '',
     decisionSummary: normalizeDecisionSummary(status.decisionSummary),
+    requestedTools:
+      status.requestedTools && typeof status.requestedTools === 'object'
+        ? {
+            requested: Array.isArray(status.requestedTools.requested)
+              ? status.requestedTools.requested.filter((tool) => typeof tool === 'string')
+              : [],
+            required: Array.isArray(status.requestedTools.required)
+              ? status.requestedTools.required.filter((tool) => typeof tool === 'string')
+              : []
+          }
+        : null,
+    suppressedTools: Array.isArray(status.suppressedTools)
+      ? status.suppressedTools
+          .filter((suppressedTool) => suppressedTool && typeof suppressedTool === 'object')
+          .map((suppressedTool) => ({
+            toolKind:
+              typeof suppressedTool.toolKind === 'string' ? suppressedTool.toolKind : '',
+            reason: typeof suppressedTool.reason === 'string' ? suppressedTool.reason : ''
+          }))
+      : [],
     executionKind: typeof status.executionKind === 'string' ? status.executionKind : '',
     executionSummary: typeof status.executionSummary === 'string' ? status.executionSummary : '',
     executionProjection: normalizeExecutionProjection(status.executionProjection),

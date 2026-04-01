@@ -1,6 +1,8 @@
 import {
-  getRouteDecisionRequestedCapabilities
+  getRouteDecisionRequestedCapabilities,
+  getRouteDecisionRequestedTools
 } from '../domain/route-decision.mjs';
+import { createToolSelection } from '../domain/tool-registry.mjs';
 import {
   buildConversationSharedMessages,
   normalizeConversationMessages
@@ -16,9 +18,14 @@ function createGenerateReplyRequest({
   textVerbosityOverride,
   enableWebSearchOverride,
   enableCodeInterpreterOverride,
+  requestedToolsOverride,
   storeOverride
 }) {
   const requestedCapabilities = getRouteDecisionRequestedCapabilities(routeInfo);
+  const requestedTools =
+    requestedToolsOverride === undefined
+      ? getRouteDecisionRequestedTools(routeInfo)
+      : createToolSelection(requestedToolsOverride);
   const request = {
     route: routeInfo.route,
     userText: routeInfo.userText,
@@ -40,7 +47,8 @@ function createGenerateReplyRequest({
     enableCodeInterpreterOverride:
       enableCodeInterpreterOverride === undefined
         ? requestedCapabilities.enableCodeInterpreter
-        : enableCodeInterpreterOverride
+        : enableCodeInterpreterOverride,
+    requestedTools
   };
 
   if (typeof storeOverride === 'boolean') {
@@ -57,6 +65,7 @@ export function buildLlmExecutionPlan({
   preparedImageInputs = []
 }) {
   const requestedCapabilities = getRouteDecisionRequestedCapabilities(routeInfo);
+  const requestedTools = getRouteDecisionRequestedTools(routeInfo);
   const routeMessages = normalizeConversationMessages(routeState?.messages);
   const mergedConversationMessages = buildConversationSharedMessages(
     conversationState,
@@ -78,6 +87,7 @@ export function buildLlmExecutionPlan({
     userText: routeInfo.userText,
     imageInputs: preparedImageInputs,
     requestedCapabilities,
+    requestedTools,
     sessionContext: {
       previousResponseId,
       sharedMessages
@@ -87,7 +97,8 @@ export function buildLlmExecutionPlan({
       routeInfo,
       previousResponseId,
       sharedMessages,
-      imageInputs: preparedImageInputs
+      imageInputs: preparedImageInputs,
+      requestedToolsOverride: requestedTools
     }),
     deliberation: deliberationEnabled
       ? {
@@ -100,6 +111,7 @@ export function buildLlmExecutionPlan({
             textVerbosityOverride: 'low',
             enableWebSearchOverride: false,
             enableCodeInterpreterOverride: false,
+            requestedToolsOverride: createToolSelection(),
             storeOverride: false
           }),
           draftRequest: createGenerateReplyRequest({
@@ -111,6 +123,7 @@ export function buildLlmExecutionPlan({
             textVerbosityOverride: requestedCapabilities.textVerbosity || 'high',
             enableWebSearchOverride: requestedCapabilities.enableWebSearch,
             enableCodeInterpreterOverride: requestedCapabilities.enableCodeInterpreter,
+            requestedToolsOverride: requestedTools,
             storeOverride: false
           }),
           rewriteRequest: createGenerateReplyRequest({
@@ -122,6 +135,7 @@ export function buildLlmExecutionPlan({
             textVerbosityOverride: requestedCapabilities.textVerbosity || 'high',
             enableWebSearchOverride: requestedCapabilities.enableWebSearch,
             enableCodeInterpreterOverride: requestedCapabilities.enableCodeInterpreter,
+            requestedToolsOverride: requestedTools,
             storeOverride: false
           })
         }

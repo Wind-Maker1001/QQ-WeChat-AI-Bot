@@ -125,8 +125,8 @@ test('message orchestrator answers current-turn tool introspection locally witho
   assert.equal(generateReplyCallCount, 0);
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0].chatId, 'chat_1');
-  assert.match(sentMessages[0].text, /web_search（联网搜索）/);
-  assert.match(sentMessages[0].text, /code_interpreter（代码解释器）/);
+  assert.match(sentMessages[0].text, /web_search \(Web Search\)/);
+  assert.match(sentMessages[0].text, /code_interpreter \(Code Interpreter\)/);
   assert.equal(telemetryEntries.length, 1);
   assert.deepEqual(telemetryEntries[0].effectiveTools, ['web_search', 'code_interpreter']);
   assert.equal(telemetryEntries[0].executionKind, EXECUTION_KIND_LOCAL_CAPABILITY_REPLY);

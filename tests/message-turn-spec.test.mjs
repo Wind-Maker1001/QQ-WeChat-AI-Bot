@@ -108,6 +108,10 @@ test('turn spec builds reply telemetry around route decision and execution plan'
       enableCodeInterpreter: false,
       needsResponsesCapabilities: true
     },
+    requestedTools: {
+      requested: ['web_search'],
+      required: []
+    },
     routeReason: 'directive:/ai+complex+web_search',
     matchedPrefix: '/ai'
   });
@@ -285,6 +289,10 @@ test('turn spec failure telemetry falls back to route info when turn spec is una
       enableWebSearch: undefined,
       enableCodeInterpreter: undefined,
       needsResponsesCapabilities: false
+    },
+    requestedTools: {
+      requested: [],
+      required: []
     },
     routeReason: 'default',
     matchedPrefix: ''

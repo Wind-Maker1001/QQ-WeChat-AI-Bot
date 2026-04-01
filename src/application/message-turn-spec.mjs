@@ -7,7 +7,8 @@ import {
   getRouteDecisionReasonTags,
   getRouteDecisionMatchedPrefix,
   getRouteDecisionTrigger,
-  getRouteDecisionRequestedCapabilities
+  getRouteDecisionRequestedCapabilities,
+  getRouteDecisionRequestedTools
 } from '../domain/route-decision.mjs';
 import { formatError } from '../utils.mjs';
 
@@ -35,6 +36,7 @@ export function buildMessageTurnSpec({
     imageCount: Array.isArray(preparedImageInputs) ? preparedImageInputs.length : 0,
     preparedImageInputs,
     requestedCapabilities: getRouteDecisionRequestedCapabilities(routeInfo),
+    requestedTools: getRouteDecisionRequestedTools(routeInfo),
     executionPlan: buildLlmExecutionPlan({
       routeInfo,
       routeState,
@@ -62,8 +64,11 @@ export function buildTurnReplyTelemetry({
     effectiveReasoningEffort: reply.effectiveReasoningEffort || '',
     configuredTextVerbosity: reply.configuredTextVerbosity || '',
     effectiveTextVerbosity: reply.effectiveTextVerbosity || '',
+    requestedTools:
+      reply.requestedTools && typeof reply.requestedTools === 'object' ? reply.requestedTools : turnSpec.requestedTools,
     configuredTools: Array.isArray(reply.configuredTools) ? reply.configuredTools : [],
     effectiveTools: Array.isArray(reply.effectiveTools) ? reply.effectiveTools : [],
+    suppressedTools: Array.isArray(reply.suppressedTools) ? reply.suppressedTools : [],
     executionKind: typeof reply.executionKind === 'string' ? reply.executionKind : '',
     executionSummary: typeof reply.executionSummary === 'string' ? reply.executionSummary : '',
     executionProjection:
@@ -98,6 +103,7 @@ export function buildTurnFailureTelemetry({
     routeReason: formatRouteDecisionReason(effectiveRouteInfo),
     matchedPrefix: getRouteDecisionMatchedPrefix(effectiveRouteInfo),
     decisionSummary: buildRouteDecisionSummary(effectiveRouteInfo),
+    requestedTools: getRouteDecisionRequestedTools(effectiveRouteInfo),
     executionKind: typeof executionKind === 'string' ? executionKind : '',
     executionSummary: typeof executionSummary === 'string' ? executionSummary : '',
     executionProjection:

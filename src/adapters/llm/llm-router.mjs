@@ -1,3 +1,4 @@
+import { createToolExecutor } from '../../application/tool-executor.mjs';
 import {
   DEFAULT_ADVANCED_TRIGGER_PREFIXES,
   normalizeTriggerPrefixes
@@ -6,7 +7,16 @@ import {
   buildProviderFallbackReply,
   createProviderFallbackDecision
 } from '../../domain/provider-fallback-policy.mjs';
-import { resolveRouteDecision } from '../../domain/route-decision.mjs';
+import { createProviderToolSupport } from '../../domain/provider-capability-matrix.mjs';
+import {
+  TOOL_KIND_CODE_INTERPRETER,
+  TOOL_KIND_WEB_SEARCH,
+  createToolSelection
+} from '../../domain/tool-registry.mjs';
+import {
+  getRouteDecisionRequestedTools,
+  resolveRouteDecision
+} from '../../domain/route-decision.mjs';
 import {
   API_STYLE_RESPONSES,
   buildEnabledToolKinds,
@@ -21,6 +31,79 @@ import {
 
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
+
+function resolveRequestedTools({
+  requestedTools,
+  routePolicy,
+  enableWebSearchOverride,
+  enableCodeInterpreterOverride
+}) {
+  const explicitSelection = createToolSelection(requestedTools);
+
+  if (explicitSelection.requested.length > 0 || explicitSelection.required.length > 0) {
+    return explicitSelection;
+  }
+
+  const inferredToolKinds = [
+    ...((typeof enableWebSearchOverride === 'boolean'
+      ? enableWebSearchOverride
+      : routePolicy.enableWebSearch)
+      ? [TOOL_KIND_WEB_SEARCH]
+      : []),
+    ...((typeof enableCodeInterpreterOverride === 'boolean'
+      ? enableCodeInterpreterOverride
+      : routePolicy.enableCodeInterpreter)
+      ? [TOOL_KIND_CODE_INTERPRETER]
+      : [])
+  ];
+
+  return createToolSelection({
+    requested: inferredToolKinds
+  });
+}
+
+function buildToolSupport({
+  providerName,
+  apiStyle,
+  routePolicy,
+  request,
+  isFallback = false
+}) {
+  return createProviderToolSupport({
+    providerName,
+    apiStyle,
+    routeToolPolicy: routePolicy.toolPolicy,
+    requestedTools: request.requestedTools,
+    imageCount: Array.isArray(request.imageInputs) ? request.imageInputs.length : 0,
+    allowPlannerStage: request.storeOverride !== false,
+    isFallback,
+    snapshotInspectorAvailable: true
+  });
+}
+
+function attachToolMetadata({
+  reply,
+  routePolicy,
+  toolSupport,
+  effectiveRequest
+}) {
+  const effectiveTools = Array.isArray(toolSupport?.effectiveTools) ? toolSupport.effectiveTools : [];
+
+  return {
+    ...reply,
+    configuredTools: Array.isArray(reply.configuredTools)
+      ? reply.configuredTools
+      : routePolicy.toolPolicy.enabledTools,
+    requestedTools: toolSupport?.requestedTools ?? createToolSelection(),
+    effectiveTools,
+    suppressedTools: Array.isArray(toolSupport?.suppressedTools) ? toolSupport.suppressedTools : [],
+    configuredEnableWebSearch: routePolicy.toolPolicy.enabledTools.includes(TOOL_KIND_WEB_SEARCH),
+    effectiveEnableWebSearch: effectiveTools.includes(TOOL_KIND_WEB_SEARCH),
+    configuredEnableCodeInterpreter: routePolicy.toolPolicy.enabledTools.includes(TOOL_KIND_CODE_INTERPRETER),
+    effectiveEnableCodeInterpreter: effectiveTools.includes(TOOL_KIND_CODE_INTERPRETER),
+    effectiveApiStyle: effectiveRequest.apiStyle
+  };
+}
 
 export function createLlmRouter({
   defaultRoute,
@@ -38,7 +121,8 @@ export function createLlmRouter({
     reasoningEffort: defaultRoute?.reasoningEffort,
     textVerbosity: defaultRoute?.textVerbosity,
     enableWebSearch: defaultRoute?.enableWebSearch,
-    enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
+    enableCodeInterpreter: defaultRoute?.enableCodeInterpreter,
+    toolPolicy: defaultRoute?.toolPolicy
   });
   const advancedRoutePolicy = resolveRouteRequestPolicy({
     routeName: 'advanced',
@@ -49,6 +133,7 @@ export function createLlmRouter({
     textVerbosity: advancedRoute?.textVerbosity,
     enableWebSearch: advancedRoute?.enableWebSearch,
     enableCodeInterpreter: advancedRoute?.enableCodeInterpreter,
+    toolPolicy: advancedRoute?.toolPolicy,
     fallback: {
       model: DEFAULT_ADVANCED_MODEL,
       baseURL: advancedRoute?.baseURL ?? defaultRoute?.baseURL ?? null,
@@ -56,7 +141,8 @@ export function createLlmRouter({
       reasoningEffort: defaultRoute?.reasoningEffort,
       textVerbosity: defaultRoute?.textVerbosity,
       enableWebSearch: defaultRoute?.enableWebSearch,
-      enableCodeInterpreter: defaultRoute?.enableCodeInterpreter
+      enableCodeInterpreter: defaultRoute?.enableCodeInterpreter,
+      toolPolicy: defaultRoute?.toolPolicy
     }
   });
 
@@ -89,6 +175,7 @@ export function createLlmRouter({
     botSystemPrompt,
     botPersona
   });
+
   const deepseekProvider =
     deepseekFallback?.fallbackEnabled === true
       ? createOpenAIProvider({
@@ -103,13 +190,19 @@ export function createLlmRouter({
       : null;
 
   const normalizedAdvancedTriggerPrefixes = normalizeTriggerPrefixes(advancedTriggerPrefixes);
+  const toolExecutor = createToolExecutor({
+    cwd: process.cwd()
+  });
 
   function describeRequest({
     route = 'default',
+    requestedTools = createToolSelection(),
     reasoningEffortOverride,
     textVerbosityOverride,
     enableWebSearchOverride,
-    enableCodeInterpreterOverride
+    enableCodeInterpreterOverride,
+    imageInputs = [],
+    storeOverride
   } = {}) {
     const routePolicy = route === 'advanced' ? advancedRoutePolicy : defaultRoutePolicy;
     const effectiveRequest = resolveEffectiveRequestPolicy({
@@ -118,6 +211,22 @@ export function createLlmRouter({
       textVerbosityOverride,
       enableWebSearchOverride,
       enableCodeInterpreterOverride
+    });
+    const resolvedRequestedTools = resolveRequestedTools({
+      requestedTools,
+      routePolicy,
+      enableWebSearchOverride,
+      enableCodeInterpreterOverride
+    });
+    const toolSupport = buildToolSupport({
+      providerName: routePolicy.routeName,
+      apiStyle: effectiveRequest.apiStyle,
+      routePolicy,
+      request: {
+        requestedTools: resolvedRequestedTools,
+        imageInputs,
+        storeOverride
+      }
     });
     const supportsResponsesCapabilities = effectiveRequest.apiStyle === API_STYLE_RESPONSES;
 
@@ -135,28 +244,16 @@ export function createLlmRouter({
         routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.textVerbosity : '',
       effectiveTextVerbosity:
         supportsResponsesCapabilities ? effectiveRequest.textVerbosity : '',
-      configuredEnableWebSearch:
-        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.enableWebSearch : false,
-      effectiveEnableWebSearch:
-        supportsResponsesCapabilities ? effectiveRequest.enableWebSearch : false,
-      configuredEnableCodeInterpreter:
-        routePolicy.apiStyle === API_STYLE_RESPONSES ? routePolicy.enableCodeInterpreter : false,
-      effectiveEnableCodeInterpreter:
-        supportsResponsesCapabilities ? effectiveRequest.enableCodeInterpreter : false,
-      configuredTools:
-        routePolicy.apiStyle === API_STYLE_RESPONSES
-          ? buildEnabledToolKinds({
-              enableWebSearch: routePolicy.enableWebSearch,
-              enableCodeInterpreter: routePolicy.enableCodeInterpreter
-            })
-          : [],
-      effectiveTools:
-        supportsResponsesCapabilities
-          ? buildEnabledToolKinds({
-              enableWebSearch: effectiveRequest.enableWebSearch,
-              enableCodeInterpreter: effectiveRequest.enableCodeInterpreter
-            })
-          : []
+      configuredEnableWebSearch: routePolicy.toolPolicy.enabledTools.includes(TOOL_KIND_WEB_SEARCH),
+      effectiveEnableWebSearch: toolSupport.effectiveTools.includes(TOOL_KIND_WEB_SEARCH),
+      configuredEnableCodeInterpreter: routePolicy.toolPolicy.enabledTools.includes(TOOL_KIND_CODE_INTERPRETER),
+      effectiveEnableCodeInterpreter: toolSupport.effectiveTools.includes(TOOL_KIND_CODE_INTERPRETER),
+      configuredTools: routePolicy.toolPolicy.enabledTools,
+      requestedTools: resolvedRequestedTools,
+      effectiveTools: toolSupport.effectiveTools,
+      effectiveHostedTools: toolSupport.effectiveHostedTools,
+      effectiveLocalTools: toolSupport.effectiveLocalTools,
+      suppressedTools: toolSupport.suppressedTools
     };
   }
 
@@ -186,12 +283,25 @@ export function createLlmRouter({
     });
   }
 
+  async function tryExecuteLocalToolRequest({
+    userText = '',
+    routeInfo = null,
+    requestDescriptor = null
+  } = {}) {
+    return toolExecutor.tryExecuteLocalTools({
+      userText,
+      routeInfo,
+      requestDescriptor
+    });
+  }
+
   async function generateReply({
     route = 'default',
     userText,
     previousResponseId = null,
     sharedMessages = [],
     imageInputs = [],
+    requestedTools = createToolSelection(),
     reasoningEffortOverride,
     textVerbosityOverride,
     enableWebSearchOverride,
@@ -207,25 +317,57 @@ export function createLlmRouter({
       enableWebSearchOverride,
       enableCodeInterpreterOverride
     });
+    const resolvedRequestedTools = resolveRequestedTools({
+      requestedTools,
+      routePolicy,
+      enableWebSearchOverride,
+      enableCodeInterpreterOverride
+    });
     const request = {
       userText,
       previousResponseId,
       sharedMessages,
       imageInputs,
+      requestedTools: resolvedRequestedTools,
       reasoningEffortOverride,
       textVerbosityOverride,
       enableWebSearchOverride,
       enableCodeInterpreterOverride,
       storeOverride
     };
+    const toolSupport = buildToolSupport({
+      providerName: routePolicy.routeName,
+      apiStyle: effectiveRequest.apiStyle,
+      routePolicy,
+      request
+    });
 
     try {
-      return await provider.generateReply(request);
+      const hostedToolKinds = toolSupport.effectiveHostedTools;
+      const reply = await provider.generateReply({
+        ...request,
+        enableWebSearchOverride: hostedToolKinds.includes(TOOL_KIND_WEB_SEARCH),
+        enableCodeInterpreterOverride: hostedToolKinds.includes(TOOL_KIND_CODE_INTERPRETER)
+      });
+
+      return attachToolMetadata({
+        reply,
+        routePolicy,
+        toolSupport,
+        effectiveRequest
+      });
     } catch (error) {
-      const fallbackDecision = createProviderFallbackDecision({
+      const fallbackToolSupport = buildToolSupport({
+        providerName: deepseekProvider?.routeName || '',
+        apiStyle: deepseekProvider?.apiStyle || '',
         routePolicy,
         request,
-        effectiveRequest,
+        isFallback: true
+      });
+      const fallbackDecision = createProviderFallbackDecision({
+        request,
+        primaryToolSupport: toolSupport,
+        fallbackToolSupport,
         deepseekProvider,
         primaryError: error
       });
@@ -236,12 +378,16 @@ export function createLlmRouter({
 
       const fallbackReply = await deepseekProvider.generateReply({
         ...request,
-        previousResponseId: null
+        previousResponseId: null,
+        enableWebSearchOverride: false,
+        enableCodeInterpreterOverride: false
       });
 
       return buildProviderFallbackReply({
         primaryRoutePolicy: routePolicy,
-        fallbackReply
+        fallbackReply,
+        fallbackToolSupport,
+        requestedTools: request.requestedTools
       });
     }
   }
@@ -273,6 +419,7 @@ export function createLlmRouter({
     advancedTriggerPrefixes: normalizedAdvancedTriggerPrefixes,
     resolveRoute,
     describeRequest,
+    tryExecuteLocalToolRequest,
     generateReply
   };
 }

@@ -10,6 +10,10 @@ public sealed class BackendDecisionSummary
 
     public BackendRequestedCapabilities? RequestedCapabilities { get; set; }
 
+    public BackendRequestedTools? RequestedTools { get; set; }
+
+    public BackendSuppressedTool[] SuppressedTools { get; set; } = [];
+
     public string RouteReason { get; set; } = string.Empty;
 
     public string MatchedPrefix { get; set; } = string.Empty;

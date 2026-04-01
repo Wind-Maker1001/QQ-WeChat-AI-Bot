@@ -46,6 +46,7 @@ public static class BackendLatestTurnOverviewBuilder
                 ? $"摘要：这一轮停留在 {route} 路由上，并且没有发起 LLM 请求就直接本地回复了。"
                 : $"摘要：这一轮使用了 {route} / {model} / {apiStyle}。",
             Capabilities = BuildCapabilitySummary(
+                request.RequestedTools ?? request.DecisionSummary?.RequestedTools,
                 request.DecisionSummary?.RequestedCapabilities,
                 request.EffectiveTools,
                 request.ImageCount),
@@ -73,6 +74,7 @@ public static class BackendLatestTurnOverviewBuilder
             Headline = $"最新一轮：{channelLabel} 在 {capturedAt} 失败。",
             Summary = $"摘要：{route} 路由这次没有成功完成。",
             Capabilities = BuildCapabilitySummary(
+                failure.DecisionSummary?.RequestedTools,
                 failure.DecisionSummary?.RequestedCapabilities,
                 effectiveTools: null,
                 imageCount: null),
@@ -89,17 +91,21 @@ public static class BackendLatestTurnOverviewBuilder
     }
 
     private static string BuildCapabilitySummary(
+        BackendRequestedTools? requestedTools,
         BackendRequestedCapabilities? requestedCapabilities,
         string[]? effectiveTools,
         int? imageCount)
     {
-        var webEnabled = requestedCapabilities?.EnableWebSearch == true ||
-                         effectiveTools?.Contains("web_search", StringComparer.Ordinal) == true;
-        var codeEnabled = requestedCapabilities?.EnableCodeInterpreter == true ||
-                          effectiveTools?.Contains("code_interpreter", StringComparer.Ordinal) == true;
+        var resolvedTools = BackendToolCatalog.DeriveRequestedToolKinds(
+            requestedTools,
+            requestedCapabilities,
+            effectiveTools);
+        var webEnabled = BackendToolCatalog.ContainsTool(resolvedTools, "web_search");
+        var codeEnabled = BackendToolCatalog.ContainsTool(resolvedTools, "code_interpreter");
         var imageText = imageCount is int count ? count.ToString() : "unknown";
+        var toolsText = BackendToolCatalog.FormatToolList(resolvedTools);
 
-        return $"能力：联网 {(webEnabled ? "开" : "关")}，代码 {(codeEnabled ? "开" : "关")}，图片 {imageText}。";
+        return $"能力：工具 {toolsText}，联网 {(webEnabled ? "开" : "关")}，代码 {(codeEnabled ? "开" : "关")}，图片 {imageText}。";
     }
 
     private static string BuildReasonSummary(

@@ -73,3 +73,15 @@ test('change requirements accept policy boundary changes when direct tests are u
 
   assert.equal(result.failures.length, 0);
 });
+
+test('change requirements require direct tool-layer coverage for tool registry changes', () => {
+  const result = evaluateChangeRequirements([
+    'src/domain/tool-registry.mjs'
+  ]);
+
+  assert.equal(result.failures.some((failure) => failure.id === 'strategy-coverage'), true);
+  assert.equal(
+    result.failures.some((failure) => failure.id === 'architecture-boundaries-coverage'),
+    true
+  );
+});

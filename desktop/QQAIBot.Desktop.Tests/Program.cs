@@ -1173,6 +1173,27 @@ Task TestBackendLlmProjectionFormatterAsync()
     AssertContains(requestDetail, "recoveries=rewrite-fallback-to-draft", "Request detail should include recovery tags.");
     AssertContains(requestDetail, "configured_model=gpt-5.4", "Request detail should include configured-vs-actual model context.");
 
+    var requestedCapabilitiesDetail = BackendLlmProjectionFormatter.FormatRequestedCapabilities(
+        new BackendLlmRequestStatus
+        {
+            Route = "advanced",
+            EffectiveReasoningEffort = "high",
+            EffectiveTextVerbosity = "high",
+            DecisionSummary = new BackendDecisionSummary
+            {
+                RequestedCapabilities = new BackendRequestedCapabilities
+                {
+                    ReasoningEffort = "high",
+                    TextVerbosity = "high",
+                    EnableWebSearch = true,
+                    EnableCodeInterpreter = true,
+                    NeedsResponsesCapabilities = true
+                }
+            }
+        });
+
+    AssertContains(requestedCapabilitiesDetail, "tools=web_search (Web Search), code_interpreter (Code Interpreter)", "Requested capabilities formatting should derive registry labels from compatibility booleans when explicit requestedTools are absent.");
+
     var failureDetail = BackendLlmProjectionFormatter.FormatFailureDetail(
         new BackendLlmFailureStatus
         {
@@ -1346,6 +1367,7 @@ Task TestBackendLatestTurnOverviewBuilderAsync()
         });
 
     AssertEqual(DesktopHealthState.Warning, failureOverview.State, "Latest-turn overview should mark the card as warning when the newest event is a failure.");
+    AssertContains(failureOverview.Capabilities, "web_search (Web Search), code_interpreter (Code Interpreter)", "Latest-turn overview should surface registry-based tool labels.");
     AssertContains(failureOverview.Headline, "微信", "Latest-turn overview should identify the failing channel.");
     AssertContains(failureOverview.Headline, "失败", "Latest-turn overview should identify the failing channel.");
     AssertContains(failureOverview.Summary, "advanced 路由", "Latest-turn overview should keep route-level context visible.");
@@ -4187,7 +4209,7 @@ async Task TestMainWindowSmokeAutomationAsync()
                 AssertEqual("directive:/gpt", latestWechatDecisionTriggerTextBlock.Text, "Latest Wechat decision trigger should reflect structured inspection binding.");
                 AssertEqual("default", latestWechatDecisionCapabilityTextBlock.Text, "Latest Wechat decision capability should reflect structured inspection binding.");
                 AssertEqual("none", latestWechatDecisionUpgradeTextBlock.Text, "Latest Wechat decision upgrade should reflect structured inspection binding.");
-                AssertContains(latestWechatRequestedCapabilitiesTextBlock.Text, "code=on", "Latest Wechat requested capabilities should reflect structured inspection binding.");
+                AssertContains(latestWechatRequestedCapabilitiesTextBlock.Text, "code_interpreter (Code Interpreter)", "Latest Wechat requested capabilities should reflect structured inspection binding.");
                 AssertContains(latestQqFailureSummaryTextBlock.Text, "default /", "Latest QQ failure summary should reflect structured failure binding.");
                 AssertContains(latestQqFailureTimelineTextBlock.Text, "Failure |", "Latest QQ failure timeline should render the failure header.");
                 AssertEqual("default", latestQqFailureTriggerTextBlock.Text, "Latest QQ failure trigger should reflect structured failure binding.");

@@ -14,9 +14,8 @@ public static class BackendLlmProjectionFormatter
         var capturedAt = FormatCapturedAt(request.CapturedAt);
         var reasoning = string.IsNullOrWhiteSpace(request.EffectiveReasoningEffort) ? "none" : request.EffectiveReasoningEffort;
         var verbosity = string.IsNullOrWhiteSpace(request.EffectiveTextVerbosity) ? "none" : request.EffectiveTextVerbosity;
-        var tools = request.EffectiveTools is { Length: > 0 }
-            ? string.Join("+", request.EffectiveTools)
-            : "none";
+        var tools = BackendToolCatalog.FormatToolList(request.EffectiveTools);
+        var suppressedTools = BackendToolCatalog.FormatSuppressedTools(request.SuppressedTools);
         var decisionSummary = FormatDecisionSummary(request);
         var executionSummary = BackendExecutionProjectionFormatter.Format(
             request.ExecutionProjection,
@@ -24,7 +23,7 @@ public static class BackendLlmProjectionFormatter
             request.ExecutionSummary);
         var modelSummary = FormatModelSummary(request);
 
-        return $"At {capturedAt} | {decisionSummary} | {executionSummary} | {modelSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | images={request.ImageCount}";
+        return $"At {capturedAt} | {decisionSummary} | {executionSummary} | {modelSummary} | reasoning={reasoning} | verbosity={verbosity} | tools={tools} | suppressed={suppressedTools} | images={request.ImageCount}";
     }
 
     public static string FormatRequestDecisionTrigger(BackendLlmRequestStatus? request)
@@ -77,13 +76,21 @@ public static class BackendLlmProjectionFormatter
         }
 
         var requested = request.DecisionSummary?.RequestedCapabilities;
+        var requestedTools = BackendToolCatalog.DeriveRequestedToolKinds(
+            request.RequestedTools ?? request.DecisionSummary?.RequestedTools,
+            requested,
+            request.EffectiveTools);
+        var suppressedTools = request.SuppressedTools?.Length > 0
+            ? request.SuppressedTools
+            : request.DecisionSummary?.SuppressedTools
+                ?? [];
 
         if (requested is not null)
         {
-            return $"reasoning={DefaultIfBlank(requested.ReasoningEffort, "none")} | verbosity={DefaultIfBlank(requested.TextVerbosity, "none")} | web={(requested.EnableWebSearch ? "on" : "off")} | code={(requested.EnableCodeInterpreter ? "on" : "off")}";
+            return $"reasoning={DefaultIfBlank(requested.ReasoningEffort, "none")} | verbosity={DefaultIfBlank(requested.TextVerbosity, "none")} | tools={BackendToolCatalog.FormatToolList(requestedTools)} | suppressed={BackendToolCatalog.FormatSuppressedTools(suppressedTools)}";
         }
 
-        return $"reasoning={DefaultIfBlank(request.EffectiveReasoningEffort, "none")} | verbosity={DefaultIfBlank(request.EffectiveTextVerbosity, "none")} | web={(request.EffectiveTools?.Contains("web_search") == true ? "on" : "off")} | code={(request.EffectiveTools?.Contains("code_interpreter") == true ? "on" : "off")}";
+        return $"reasoning={DefaultIfBlank(request.EffectiveReasoningEffort, "none")} | verbosity={DefaultIfBlank(request.EffectiveTextVerbosity, "none")} | tools={BackendToolCatalog.FormatToolList(request.EffectiveTools)} | suppressed={BackendToolCatalog.FormatSuppressedTools(suppressedTools)}";
     }
 
     public static string FormatFailureDetail(BackendLlmFailureStatus? failure)

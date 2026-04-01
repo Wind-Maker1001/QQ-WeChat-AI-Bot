@@ -30,7 +30,11 @@ public sealed class BackendLlmRequestStatus
 
     public string[] ConfiguredTools { get; set; } = [];
 
+    public BackendRequestedTools? RequestedTools { get; set; }
+
     public string[] EffectiveTools { get; set; } = [];
+
+    public BackendSuppressedTool[] SuppressedTools { get; set; } = [];
 
     public string ExecutionKind { get; set; } = string.Empty;
 

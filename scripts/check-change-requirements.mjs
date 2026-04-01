@@ -9,7 +9,12 @@ const STRATEGY_CHANGED_PATTERNS = [
   'src/application/message-turn-spec.mjs',
   'src/application/llm-execution-plan.mjs',
   'src/application/deliberation-executor.mjs',
+  'src/application/current-turn-capability-reply.mjs',
+  'src/application/tool-executor.mjs',
   'src/domain/message-analysis-policy.mjs',
+  'src/domain/tool-registry.mjs',
+  'src/domain/provider-capability-matrix.mjs',
+  'src/domain/tool-execution-contract.mjs',
   'src/domain/provider-fallback-policy.mjs',
   'src/domain/route-decision.mjs',
   'src/domain/llm-request-policy.mjs',
@@ -21,6 +26,10 @@ const STRATEGY_CHANGED_PATTERNS = [
 
 const STRATEGY_COVERAGE_PATTERNS = [
   'tests/message-analysis-policy.test.mjs',
+  'tests/tool-registry.test.mjs',
+  'tests/tool-selection-policy.test.mjs',
+  'tests/provider-capability-matrix.test.mjs',
+  'tests/tool-executor.test.mjs',
   'tests/provider-fallback-policy.test.mjs',
   'tests/llm-request-policy.test.mjs',
   'tests/route-decision.test.mjs',
@@ -102,6 +111,7 @@ const CHANGE_RULES = [
 
 const ALLOWED_POLICY_IMPORTERS = new Map([
   ['message-analysis-policy.mjs', new Set(['src/domain/route-decision.mjs', 'src/adapters/llm/llm-router.mjs'])],
+  ['provider-capability-matrix.mjs', new Set(['src/adapters/llm/llm-router.mjs'])],
   ['provider-fallback-policy.mjs', new Set(['src/adapters/llm/llm-router.mjs'])],
   ['supervisor-contract-normalizer.mjs', new Set(['src/index.mjs'])]
 ]);
@@ -275,6 +285,10 @@ export function evaluateChangeRequirements(changedFiles) {
   const shouldCheckPolicyEntries = normalizedChangedFiles.some((filePath) =>
     [
       'src/domain/message-analysis-policy.mjs',
+      'src/domain/tool-registry.mjs',
+      'src/domain/provider-capability-matrix.mjs',
+      'src/domain/tool-execution-contract.mjs',
+      'src/application/tool-executor.mjs',
       'src/domain/provider-fallback-policy.mjs',
       'src/app/supervisor-contract-normalizer.mjs',
       'src/adapters/llm/llm-router.mjs',

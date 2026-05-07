@@ -2,7 +2,7 @@
 
 一个运行在 Windows 本机上的 QQ 群聊 AI 机器人项目。
 
-它现在不是单一 Node 脚本，而是完整的本地控制架构：
+完整的本地控制架构：
 
 - `desktop/QQAIBot.Desktop`
   WPF 桌面控制台，支持单实例、托盘常驻、开机启动、配置编辑
@@ -19,14 +19,12 @@
 - `/ai` 前缀触发和 `@机器人` 触发
 - 默认模型 / 高级模型路由
 - 图片输入、回复取图、图片上下文延续
-- supervisor + worker 运行模型
-- 本地 control API
 - 配置热重载
-- `.env` watcher
 - 桌面端托盘常驻
 - 单实例桌面端
 - 当前用户级开机启动
 - worker 自动恢复通知
+- 微信端接入能力（soooon)
 
 ## 架构概览
 
@@ -286,7 +284,7 @@ data/sessions.json
 
 ## 仓库说明
 
-建议不要提交这些内容：
+请不要提交这些内容：
 
 - `.env`
 - `node_modules`
@@ -306,8 +304,6 @@ data/sessions.json
 - 还没有做安装器 / Windows Service 包装
 
 ## 后续优先级
-
-如果继续产品化，建议优先做：
 
 1. 安装包 / 发布脚本
 2. Windows Service 或任务计划
